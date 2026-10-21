@@ -1,11 +1,11 @@
-import { FACTION_NAMES, FACTION_RGB, WHITE } from '../content/factions';
+import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
 import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
-import { MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, UNIT_FEEDING, UPGRADE_COST, type MatchSetup, type NestPower } from '../sim/index';
+import { DAMAGE_VS, MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, UPGRADE_COST, type MatchSetup, type NestPower } from '../sim/index';
 import { hasPower } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { LocalSession } from './session';
@@ -31,7 +31,11 @@ export class GameView {
   aim: NestPower | null = null;
   /** world position under the cursor, for previews and key casts */
   cursor: [number, number] | null = null;
-  /** paint-select brush shown at the cursor while S is held */
+  /** world units per ~1 css px, for HUD pick radii */
+  get zoomForPick(): number {
+    return this.s.camera.zoom / this.s.renderer.dpr;
+  }
+  /** paint-select brush shown at the cursor while Space is held */
   brush: { x: number; y: number; r: number } | null = null;
   result: MatchResult | null = null;
   resultTime = 0;
@@ -84,6 +88,7 @@ export class GameView {
 
   render(time: number): void {
     this.frame++;
+    this.hitSparks();
     drawWorld(this.s.renderer, this.world, {
       alpha: this.session.alpha,
       time,
@@ -97,6 +102,26 @@ export class GameView {
     if (this.brush) {
       const b = this.brush;
       this.s.renderer.shape(true, b.x, b.y, b.r, 0, 1, 0, 1.5 / b.r, WHITE, 120);
+    }
+  }
+
+  /** Sparks where counters land, glints where shots bounce off. Sampled, client-only. */
+  private hitSparks(): void {
+    const w = this.world;
+    if (w.beamCount === 0 || this.session.paused) return;
+    const { particles, camera } = this.s;
+    for (let n = 0; n < 8; n++) {
+      const k = Math.floor(Math.random() * w.beamCount);
+      const a = w.beams[k * 2], t = w.beams[k * 2 + 1];
+      if (a < 0) continue;
+      const [sx, sy] = camera.toScreen(w.x[t], w.y[t]);
+      if (sx < 0 || sy < 0 || sx > camera.viewW || sy > camera.viewH) continue;
+      const eff = DAMAGE_VS[w.kind[a]][w.kind[t]];
+      if (eff >= 1.3 && Math.random() < 0.5) {
+        particles.burst(w.x[t], w.y[t], mixRgb(FACTION_RGB[w.owner[a]], WHITE, 0.5), 2, 70, 1.6, 0.22);
+      } else if (eff <= 0.75 && Math.random() < 0.2) {
+        particles.burst(w.x[t], w.y[t], [170, 176, 196], 1, 50, 1.2, 0.15);
+      }
     }
   }
 
@@ -353,7 +378,7 @@ export class GameView {
 
   private power(power: NestPower, cost: number): boolean {
     if (!this.canUse(power)) {
-      this.s.toast(`Hold a ${NEST_NAMES[{ fortify: 1, barrage: 2, blink: 3, lockdown: 4 }[power]]} to use this`, '#9aa4c7');
+      this.s.toast(`Hold a ${NEST_NAMES[POWER_NEST[power]]} to use this`, '#9aa4c7');
       return false;
     }
     if (this.world.factions[this.human].energy < cost) {
@@ -421,6 +446,34 @@ export class GameView {
       if (n && n.level < MAX_LEVEL) return { nest: n, cost: UPGRADE_COST[n.level] - n.feedProgress - n.feedIncoming };
     }
     return null;
+  }
+
+  /**
+   * Unit mix the counter wheel should explain: an enemy group under the
+   * cursor if there is one, else your selection.
+   */
+  focusMix(pickRadius: number): { enemy: boolean; counts: number[] } | null {
+    const w = this.world;
+    const cur = this.cursor;
+    if (cur) {
+      const counts = [0, 0, 0, 0];
+      let n = 0;
+      const r2 = (pickRadius * 2) ** 2;
+      for (let i = 0; i < w.n; i++) {
+        if (!w.alive[i] || w.owner[i] === NEUTRAL || !w.hostile(w.owner[i], this.human)) continue;
+        if ((w.x[i] - cur[0]) ** 2 + (w.y[i] - cur[1]) ** 2 > r2) continue;
+        counts[w.kind[i]]++;
+        n++;
+      }
+      if (n >= 3) return { enemy: true, counts };
+    }
+    if (!this.selection.units.size) return null;
+    const counts = [0, 0, 0, 0];
+    for (const u of this.selection.units) {
+      const s = w.uidToSlot.get(u);
+      if (s !== undefined) counts[w.kind[s]]++;
+    }
+    return { enemy: false, counts };
   }
 
   homePoint(): [number, number] {

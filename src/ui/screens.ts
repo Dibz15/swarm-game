@@ -30,7 +30,7 @@ export const CONTROLS_HTML = `
     <dt>Double-click / Z</dt><dd>Select all your dots</dd>
     <dt>Right-click</dt><dd>Send dots / set the rally point of selected nests</dd>
     <dt>Q / E</dt><dd>Surge / Nova on the selected dots</dd>
-    <dt>R / F / G / T</dt><dd>Nest powers: Fortify, Barrage, Blink, Lockdown (at the cursor). They appear when you hold a Forge, Spire, Swift or Bastion</dd>
+    <dt>R / F / G / T</dt><dd>Nest powers: Fortify, Barrage, Blink, Lockdown (at the cursor). They appear when you hold a Forge, Spire, Den or Bastion</dd>
     <dt>U</dt><dd>Upgrade the selected nest (feeds it nearby dots)</dd>
     <dt>Ctrl+1–5, 1–5</dt><dd>Save / recall control groups</dd>
     <dt>WASD / arrows</dt><dd>Pan · wheel zooms · middle-drag pans · 0 fits the map · C centers on selection · H goes home</dd>
@@ -73,13 +73,13 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
           <div>
             <h3>Nests</h3>
             <ul class="nests">
-              <li><i class="n-hex"></i><b>Hive</b> Dots: stronger in packs</li>
-              <li><i class="n-sq"></i><b>Forge</b> Tanks: draw enemy fire · power <b>Fortify</b></li>
-              <li><i class="n-tri"></i><b>Spire</b> Lancers: long range, splash · power <b>Barrage</b></li>
-              <li><i class="n-dia"></i><b>Swift</b> Swifts: capture 3× faster · power <b>Blink</b></li>
+              <li><i class="n-hex"></i><b>Hive</b> Swarmers: stronger in packs</li>
+              <li><i class="n-sq"></i><b>Forge</b> Shields: draw enemy fire · power <b>Fortify</b></li>
+              <li><i class="n-dia"></i><b>Spire</b> Spears: long range, splash · power <b>Barrage</b></li>
+              <li><i class="n-tri"></i><b>Den</b> Raiders: capture 3× faster · power <b>Blink</b></li>
               <li><i class="n-oct"></i><b>Bastion</b> turret, shields allies · power <b>Lockdown</b></li>
             </ul>
-            <p><b>Lancers beat Tanks, Tanks beat Dots, Dots beat Lancers.</b> Mix your army, and take the nests that counter what you're facing.</p>
+            <p><b>Spears pierce Shields. Shields stop Swarmers. Swarmers overrun Spears.</b> Mix your army, and take the nests that counter what you're facing. The counter wheel in the corner reminds you when you select dots.</p>
             <p><b>Upgrade</b> a nest by feeding it dots (U). That makes it spawn faster. Spend your army now, or grow your production.</p>
             <p><b>Energy</b> builds up over time, and faster from kills and captures. <b>Surge</b> (30) makes your selected dots faster, stronger and tougher for 6 seconds. <b>Nova</b> (60) sacrifices some of your dots to blast everything around them.</p>
           </div>

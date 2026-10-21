@@ -1,5 +1,5 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { BASTION, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
+import { BASTION, DAMAGE_VS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
 import type { World } from '../sim/world';
 import type { Renderer } from './renderer';
 
@@ -14,7 +14,8 @@ export interface SceneOpts {
   human: number;
 }
 
-const NEST_SHAPE = [1, 2, 3, 4, 5];
+/** Nest outline echoes its unit: Hive hex, Forge block, Spire needle, Den arrowhead, Bastion octagon. */
+const NEST_SHAPE = [1, 2, 4, 3, 5];
 const NEST_SPIN = [0.22, 0.1, -0.28, 0.7, 0.12];
 const UNOWNED: RGB = [70, 76, 96];
 const SELECT_MIX = 0.5;
@@ -129,9 +130,21 @@ function drawBeams(r: Renderer, w: World, o: SceneOpts): void {
     }
     const x2 = w.px[t] + (w.x[t] - w.px[t]) * a;
     const y2 = w.py[t] + (w.y[t] - w.py[t]) * a;
-    const c = FACTION_RGB[owner] ?? UNOWNED;
+    let c = FACTION_RGB[owner] ?? UNOWNED;
     const lancer = s >= 0 && w.kind[s] === Kind.Lancer;
-    const alpha = s < 0 || lancer ? 200 + Math.round(55 * hash01(k, flick)) : Math.round(50 + 170 * hash01(k, flick));
+    let alpha = s < 0 || lancer ? 200 + Math.round(55 * hash01(k, flick)) : Math.round(50 + 170 * hash01(k, flick));
+    // Counters read in the fight: strong hits are thick and hot, weak ones thin and dim.
+    if (s >= 0) {
+      const eff = DAMAGE_VS[w.kind[s]][w.kind[t]];
+      if (eff >= 1.3) {
+        width *= 1.6;
+        c = mixRgb(c, WHITE, 0.35);
+        alpha = Math.max(alpha, 190);
+      } else if (eff <= 0.75) {
+        width *= 0.6;
+        alpha = Math.round(alpha * 0.4);
+      }
+    }
     r.beam(x1, y1, x2, y2, c[0], c[1], c[2], alpha, width);
   }
 }

@@ -10,6 +10,11 @@ export const NEUTRAL_TEAM = 100;
 export const FACTION_UNIT_CAP = 1000;
 export const CELL = 32;
 
+/**
+ * Unit kinds. Players see them by their metaphor names (UNIT_STATS.name):
+ * Dot = Swarmer, Tank = Shield, Lancer = Spear, Swift = Raider.
+ * "Spears pierce Shields, Shields stop Swarmers, Swarmers overrun Spears."
+ */
 export const Kind = { Dot: 0, Tank: 1, Lancer: 2, Swift: 3 } as const;
 
 export interface UnitStats {
@@ -28,10 +33,10 @@ export interface UnitStats {
 }
 
 export const UNIT_STATS: readonly UnitStats[] = [
-  { name: 'Dot', hp: 10, dps: 4, range: 22, speed: 40, size: 4.4, interval: 1.4, sep: 6.5, weight: 1 },
-  { name: 'Tank', hp: 34, dps: 4.5, range: 20, speed: 28, size: 6.6, interval: 3.4, sep: 9, weight: 3 },
-  { name: 'Lancer', hp: 8, dps: 4.4, range: 52, speed: 32, size: 4.2, interval: 2.2, sep: 6.5, weight: 1.4 },
-  { name: 'Swift', hp: 6, dps: 3.2, range: 18, speed: 72, size: 3.6, interval: 0.9, sep: 5.5, weight: 0.65 },
+  { name: 'Swarmer', hp: 10, dps: 4, range: 22, speed: 40, size: 4.4, interval: 1.4, sep: 6.5, weight: 1 },
+  { name: 'Shield', hp: 34, dps: 4.5, range: 20, speed: 28, size: 6.6, interval: 3.4, sep: 9, weight: 3 },
+  { name: 'Spear', hp: 8, dps: 4.4, range: 52, speed: 32, size: 4.2, interval: 2.2, sep: 6.5, weight: 1.4 },
+  { name: 'Raider', hp: 6, dps: 3.2, range: 18, speed: 72, size: 3.6, interval: 0.9, sep: 5.5, weight: 0.65 },
 ];
 /**
  * Rock-paper-scissors damage multipliers: DAMAGE_VS[attacker][target].
@@ -70,18 +75,18 @@ export const LEASH = 90;
 export const RETARGET = 6;
 
 export const NestType = { Hive: 0, Forge: 1, Spire: 2, Swift: 3, Bastion: 4 } as const;
-export const NEST_NAMES = ['Hive', 'Forge', 'Spire', 'Swift', 'Bastion'] as const;
+export const NEST_NAMES = ['Hive', 'Forge', 'Spire', 'Den', 'Bastion'] as const;
 /** unit kind spawned by each nest type; -1 = spawns nothing */
 export const NEST_KIND: readonly number[] = [Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift, Kind.Dot];
 /** per-type spawn speed multiplier (Bastion trades production for defense) */
 export const NEST_SPAWN_MULT: readonly number[] = [1, 1, 1, 1, 0.5];
 export const NEST_RADIUS: readonly number[] = [26, 28, 26, 24, 25];
 export const NEST_BLURB: readonly string[] = [
-  'Spawns Dots: hit harder in packs. Beat Lancers, lose to Tanks.',
-  'Spawns Tanks: draw enemy fire. Beat Dots, lose to Lancers. Unlocks Fortify (R).',
-  'Spawns Lancers: long range, splash. Beat Tanks, lose to Dots. Unlocks Barrage (F).',
-  'Spawns Swifts: fast raiders, capture nests 3× faster. Unlocks Blink (G).',
-  'Spawns Dots slowly. Beam turret, shields nearby allies. Unlocks Lockdown (T).',
+  'Spawns Swarmers: stronger in packs. They overrun Spears, but Shields stop them.',
+  'Spawns Shields: draw enemy fire and stop Swarmers, but Spears pierce them. Unlocks Fortify (R).',
+  'Spawns Spears: long range, splash. They pierce Shields, but Swarmers overrun them. Unlocks Barrage (F).',
+  'Spawns Raiders: fast, fragile, capture nests 3× faster. Unlocks Blink (G).',
+  'Spawns Swarmers slowly. Beam turret, shields nearby allies. Unlocks Lockdown (T).',
 ];
 export const MAX_LEVEL = 3;
 /** spawn speed multiplier by level (index = level) */

@@ -30,13 +30,13 @@ Dev URL flags:
 
 ## How it plays
 
-- **Nests** spawn units, and each unit kind has one signature trait in a rock-paper-scissors loop (Lancers > Tanks > Dots > Lancers):
-  - **Hive → Dots:** pack bonus, more damage with friendly Dots nearby.
-  - **Forge → Tanks:** draw enemy fire.
-  - **Spire → Lancers:** long range, shots splash onto nearby enemies.
-  - **Swift → Swifts:** raiders that capture nests 3× faster.
+- **Nests** spawn units in a rock-paper-scissors loop: **Spears pierce Shields, Shields stop Swarmers, Swarmers overrun Spears.**
+  - **Hive → Swarmers:** pack bonus, more damage with friendly Swarmers nearby.
+  - **Forge → Shields:** draw enemy fire.
+  - **Spire → Spears:** long range, shots splash onto nearby enemies.
+  - **Den → Raiders:** fast, fragile, capture nests 3× faster.
   - **Bastion:** spawns slowly, beam turret, shields allies in range.
-- **Nest powers:** holding a nest type unlocks its power. **Fortify** (Forge, R): selected dots take half damage but move slower. **Barrage** (Spire, F): telegraphed strike at the cursor. **Blink** (Swift, G): teleport the selection toward the cursor. **Lockdown** (Bastion, T): an enemy nest can't spawn or recover for 8s.
+- **Nest powers:** holding a nest type unlocks its power. **Fortify** (Forge, R): selected dots take half damage but move slower. **Barrage** (Spire, F): telegraphed strike at the cursor. **Blink** (Den, G): teleport the selection toward the cursor. **Lockdown** (Bastion, T): an enemy nest can't spawn or recover for 8s.
 - **Capture** a nest by standing on it with no enemies present. Neutral nests have gray guards. A contested nest stops spawning.
 - **Upgrade** a nest by feeding it your dots (U). Levels 1–3 spawn faster.
 - **Energy** builds up over time and from kills and captures. **Surge** (Q) costs 30: the selected dots get faster, stronger and tougher for 6 seconds. **Nova** (E) costs 60: it sacrifices about 20% of the selected dots and sends out a shockwave.

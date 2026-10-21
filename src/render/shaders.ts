@@ -78,9 +78,9 @@ void main(){
   if (shape > 2.5) {
     d = max(abs(r.y) * 1.8 + r.x, -r.x / 0.8);
   } else if (shape > 1.5) {
-    d = abs(r.x) / 1.3 + abs(r.y) / 0.5;
+    d = abs(r.x) / 1.45 + abs(r.y) / 0.38;
   } else if (shape > 0.5) {
-    inner = sq < 0.5 ? 0.22 : 1.0;
+    inner = sq < 0.42 ? 0.22 : 1.0;
   }
   float core = 1.0 - smoothstep(0.82, 1.08, d);
   float glow = exp(-(max(d, 1.0) - 1.0) * 1.7) * 0.13 * (1.0 - core);
@@ -160,6 +160,13 @@ float ngon(vec2 p, float n, float rad){
   float b = TAU / n;
   return cos(floor(0.5 + a / b) * b - a) * length(p) - rad;
 }
+float ndot(vec2 a, vec2 b){ return a.x * b.x - a.y * b.y; }
+float rhombus(vec2 p, vec2 b){
+  p = abs(p);
+  float h = clamp(ndot(b - 2.0 * p, b) / dot(b, b), -1.0, 1.0);
+  float d = length(p - 0.5 * b * vec2(1.0 - h, 1.0 + h));
+  return d * sign(p.x * b.y + p.y * b.x - b.x * b.y);
+}
 float arc(vec2 p, float prog){
   float f = fract(atan(p.x, -p.y) / TAU + 1.0); // 0 at screen-top, clockwise
   return step(f, prog);
@@ -184,14 +191,16 @@ void main(){
   } else {
     float c = cos(v_par.z), s = sin(v_par.z);
     vec2 p = mat2(c, -s, s, c) * v_p;
-    float n = shape == 1 ? 6.0 : shape == 2 ? 4.0 : shape == 3 ? 3.0 : shape == 4 ? 4.0 : 8.0;
-    if (shape == 4) p = mat2(0.7071, -0.7071, 0.7071, 0.7071) * p * vec2(1.0, 1.35);
-    float rad = shape == 3 ? 0.42 : shape == 4 ? 0.5 : 0.6;
-    float d = ngon(p, n, rad);
+    float n = shape == 1 ? 6.0 : shape == 2 ? 4.0 : shape == 3 ? 3.0 : 8.0;
+    float rad = shape == 3 ? 0.42 : 0.6;
+    // Spire (4) is a needle like the Spears it spawns.
+    float d = shape == 4 ? rhombus(p, vec2(0.3, 0.82)) : ngon(p, n, rad);
     float outline = 1.0 - smoothstep(0.03, 0.03 + aa, abs(d));
+    // Forge (2) wears a heavy double border like its Shields.
+    if (shape == 2) outline = max(outline, 1.0 - smoothstep(0.025, 0.025 + aa, abs(d + 0.09)));
     float fill = d < 0.0 ? 0.13 + v_par.w * 0.45 : 0.0;
     float glow = exp(-max(d, 0.0) * 10.0) * 0.28 * step(0.0, d);
-    float core = ngon(p, n, rad * 0.36);
+    float core = shape == 4 ? rhombus(p, vec2(0.11, 0.3)) : ngon(p, n, rad * 0.36);
     float coreF = (1.0 - smoothstep(0.0, aa, core)) * 0.55;
     if (shape == 5) {
       // bastion: cross through the core
