@@ -1,9 +1,10 @@
-import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
+import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, POWER, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
 import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
 import { updateNests } from './nests';
 import { pushFx, type World } from './world';
+import { queryRadius } from './spatial';
 
 /**
  * Advance the world one fixed tick. Pure function of (world, commands):
@@ -22,6 +23,7 @@ export function step(w: World, commands: readonly Command[]): void {
   for (const b of w.bots) b.update(w);
 
   updateNests(w);
+  resolveBarrages(w);
   updateCombat(w);
   resolveDamage(w);
   updateMovement(w);
@@ -44,6 +46,29 @@ export function step(w: World, commands: readonly Command[]): void {
   }
   if (w.tick === ESCALATION.start) pushFx(w, 'escalation', 0, 0, -1);
   if (w.tick % 15 === 0) checkVictory(w);
+}
+
+const blast: number[] = [];
+
+/** Barrage strikes that land this tick. */
+function resolveBarrages(w: World): void {
+  if (w.barrages.length === 0) return;
+  const keep = [];
+  for (const b of w.barrages) {
+    if (b.impact > w.tick) {
+      keep.push(b);
+      continue;
+    }
+    queryRadius(w, b.x, b.y, POWER.barrageRadius, blast);
+    for (const j of blast) {
+      if (!w.hostile(w.owner[j], b.owner)) continue;
+      const d = Math.sqrt((w.x[j] - b.x) ** 2 + (w.y[j] - b.y) ** 2);
+      w.dmg[j] += POWER.barrageDamage * (1 - 0.4 * (d / POWER.barrageRadius));
+      w.lastHit[j] = b.owner;
+    }
+    pushFx(w, 'barrageHit', b.x, b.y, b.owner, POWER.barrageRadius);
+  }
+  w.barrages = keep;
 }
 
 const nestsByTeam = new Int32Array(NEUTRAL_TEAM + 1);

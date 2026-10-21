@@ -30,11 +30,18 @@ Dev URL flags:
 
 ## How it plays
 
-- **Nests** spawn dots. **Hive** spawns standard dots, **Forge** spawns tanks, **Spire** spawns long-range lancers, **Swift** spawns fast dots, and **Bastion** spawns slowly but fires a beam turret and shields allies in range.
+- **Nests** spawn units in a rock-paper-scissors loop: **Spears pierce Shields, Shields stop Swarmers, Swarmers overrun Spears.**
+  - **Hive → Swarmers:** pack bonus, more damage with friendly Swarmers nearby.
+  - **Forge → Shields:** draw enemy fire.
+  - **Spire → Spears:** long range, shots splash onto nearby enemies.
+  - **Den → Raiders:** fast, fragile, capture nests 3× faster.
+  - **Bastion:** spawns slowly, beam turret, shields allies in range.
+- **Nest powers:** holding a nest type unlocks its power. **Fortify** (Forge, R): selected dots take half damage but move slower. **Barrage** (Spire, F): telegraphed strike at the cursor. **Blink** (Den, G): teleport the selection toward the cursor. **Lockdown** (Bastion, T): an enemy nest can't spawn or recover for 8s.
 - **Capture** a nest by standing on it with no enemies present. Neutral nests have gray guards. A contested nest stops spawning.
 - **Upgrade** a nest by feeding it your dots (U). Levels 1–3 spawn faster.
 - **Energy** builds up over time and from kills and captures. **Surge** (Q) costs 30: the selected dots get faster, stronger and tougher for 6 seconds. **Nova** (E) costs 60: it sacrifices about 20% of the selected dots and sends out a shockwave.
 - **Anti-snowball:** big armies spawn more slowly, each extra nest adds less production (nests^0.75), dots near their own nests take less damage, factions that are behind charge energy faster, starting nests are defended capitals, and bots gang up on a runaway leader.
+- **Selecting by type:** 1–4 keep Swarmers / Shields / Spears / Raiders from your group (or grab that type on screen), and Shift+1–4 drops a type. Double-click a unit to grab all of its type on screen. The type chips and counter wheel icons work the same way, and Tab cycles. Control groups are Ctrl+5–9 / 5–9.
 - **Escalation:** from minute 5, those comeback rules fade out over 3 minutes so every match reaches an endgame.
 - **Win** by eliminating every rival, or by holding 70% of the nests (60% on large maps) for 30 seconds.
 - **Bots** have four difficulties (Easy to Brutal; only Brutal gets a production bonus) and four personalities. Every bot expands for the first 90 seconds, then:

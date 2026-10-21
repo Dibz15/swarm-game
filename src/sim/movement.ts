@@ -1,4 +1,4 @@
-import { DT, LEASH, MAX_LEVEL, POWER, UNIT_STATS, UPGRADE_COST } from './constants';
+import { DT, Kind, LEASH, MAX_LEVEL, POWER, TRAITS, UNIT_STATS, UPGRADE_COST } from './constants';
 import { pushFx, removeUnit, UNIT_FEEDING, type World } from './world';
 
 const MAX_SEP_SCAN = 22;
@@ -11,7 +11,8 @@ export function updateMovement(w: World): void {
   for (let i = 0; i < n; i++) {
     if (!w.alive[i]) continue;
     const st = UNIT_STATS[w.kind[i]];
-    const spd = st.speed * (w.surge[i] > w.tick ? POWER.surgeSpeed : 1);
+    const spd =
+      st.speed * (w.surge[i] > w.tick ? POWER.surgeSpeed : 1) * (w.fortify[i] > w.tick ? POWER.fortifySlow : 1);
     const x = w.x[i], y = w.y[i];
     let desX = 0, desY = 0;
 
@@ -74,6 +75,11 @@ export function updateMovement(w: World): void {
     let sepX = 0, sepY = 0;
     const sep = st.sep;
     const sep2 = sep * sep;
+    // Dots also count nearby friendly Dots for the pack bonus (used next tick).
+    const isDot = w.kind[i] === Kind.Dot;
+    const pack2 = TRAITS.pack.radius * TRAITS.pack.radius;
+    const me = w.owner[i];
+    let pack = 0;
     const gcx = g.cx(x), gcy = g.cy(y);
     let scanned = 0;
     outer: for (let oy = 0; oy < 3; oy++) {
@@ -89,6 +95,7 @@ export function updateMovement(w: World): void {
           if (j === i || !w.alive[j]) continue;
           const ddx = x - w.x[j], ddy = y - w.y[j];
           const dd = ddx * ddx + ddy * ddy;
+          if (isDot && dd < pack2 && w.owner[j] === me && w.kind[j] === Kind.Dot) pack++;
           if (dd < sep2) {
             if (dd > 1e-6) {
               const d = Math.sqrt(dd);
@@ -103,6 +110,8 @@ export function updateMovement(w: World): void {
         }
       }
     }
+
+    w.pack[i] = pack;
 
     let vx = w.vx[i] + (desX + sepX - w.vx[i]) * STEER;
     let vy = w.vy[i] + (desY + sepY - w.vy[i]) * STEER;

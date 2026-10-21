@@ -1,16 +1,45 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
-import { DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
+import { type NestPower, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
   'On a trackpad, hold Space and sweep the cursor to paint-select dots. WASD pans the map.',
+  'Pick a type out of a blob with 1–4: 1 Swarmers, 2 Shields, 3 Spears, 4 Raiders. Shift+number drops that type.',
   'Click one of your nests, then right-click somewhere to set its rally point.',
   'Select a nest and press U to feed it dots and level it up.',
   'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
   'Hold 70% of the nests (60% on large maps) for 30 seconds to win by domination.',
-  'Ctrl+1–5 saves a control group. Press 1–5 to recall it. C centers the camera on your selection.',
+  'Ctrl+5–9 saves a control group, 5–9 recalls it. C centers the camera on your selection, 0 fits the map.',
+  'Each nest type you hold unlocks a power: Forge → Fortify (R), Spire → Barrage (F), Den → Blink (G), Bastion → Lockdown (T).',
+  'Spears pierce Shields, Shields stop Swarmers, Swarmers overrun Spears. Raiders capture nests three times faster.',
 ];
+
+/** Small icons matching the in-game unit shapes. */
+const KIND_ICON = [
+  '<svg viewBox="-9 -9 18 18"><rect x="-7" y="-6" width="6" height="6"/><rect x="1" y="-7" width="6" height="6"/><rect x="-3" y="1" width="6" height="6"/></svg>',
+  '<svg viewBox="-9 -9 18 18"><rect x="-6" y="-6" width="12" height="12" class="hollow"/></svg>',
+  '<svg viewBox="-9 -9 18 18"><polygon points="0,-8 3,0 0,8 -3,0"/></svg>',
+  '<svg viewBox="-9 -9 18 18"><polygon points="7,0 -6,-6 -3,0 -6,6"/></svg>',
+];
+
+// What beats what, phrased for your own group and for an enemy group.
+const OWN_TIPS = [
+  'Swarmers overrun Spears · Shields stop them',
+  'Shields stop Swarmers · Spears pierce them',
+  'Spears pierce Shields · keep away from Swarmers',
+  'Raiders steal nests · avoid fights',
+];
+const ENEMY_TIPS = [
+  'Enemy Swarmers: answer with Shields',
+  'Enemy Shields: answer with Spears',
+  'Enemy Spears: answer with Swarmers',
+  'Enemy Raiders: guard your nests',
+];
+
+export type HudAction =
+  | 'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'pause' | 'mute'
+  | 'fortify' | 'barrage' | 'blink' | 'lockdown';
 
 export function formatTime(ticks: number): string {
   const s = Math.floor(ticks / TICK_HZ);
@@ -31,13 +60,18 @@ export class Hud {
   private banner: HTMLDivElement;
   private nestCard: HTMLDivElement;
   private tip: HTMLDivElement;
+  private counters: HTMLDivElement;
+  private kindChips: HTMLButtonElement[] = [];
+  /** the match this HUD is showing (set every update) */
+  private game: GameView | null = null;
+  private counterCap: HTMLDivElement;
   private tipIdx = 0;
   private tipTimer = 0;
   private acc = 0;
 
   constructor(
     root: HTMLElement,
-    private readonly actions: Record<'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'pause' | 'mute', () => void>,
+    private readonly actions: Record<HudAction, () => void>,
   ) {
     this.el = document.createElement('div');
     this.el.className = 'hud';
@@ -55,19 +89,64 @@ export class Hud {
       <div class="toasts"></div>
       <div class="nestcard"></div>
       <div class="tip"><span></span><button class="x" title="Hide tips">✕</button></div>
+      <div class="counters" title="Spears pierce Shields · Shields stop Swarmers · Swarmers overrun Spears">
+        <svg viewBox="0 0 120 92" aria-hidden="true">
+          <defs>
+            <marker id="ah" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M0,0 L8,4 L0,8 z" fill="context-stroke"></path>
+            </marker>
+          </defs>
+          <path class="arrow" data-from="2" data-to="1" d="M68,20 Q98,30 96,56" marker-end="url(#ah)"></path>
+          <path class="arrow" data-from="1" data-to="0" d="M84,76 Q60,90 36,76" marker-end="url(#ah)"></path>
+          <path class="arrow" data-from="0" data-to="2" d="M22,58 Q20,30 50,20" marker-end="url(#ah)"></path>
+          <g class="node" data-k="2" transform="translate(60,14)"><polygon points="0,-11 4,0 0,11 -4,0"></polygon><text x="9" y="4">3</text></g>
+          <g class="node" data-k="1" transform="translate(98,70)"><rect x="-8" y="-8" width="16" height="16" class="hollow"></rect><text x="-3" y="20">2</text></g>
+          <g class="node" data-k="0" transform="translate(22,70)"><rect x="-9" y="-7" width="7" height="7"></rect><rect x="1" y="-8" width="7" height="7"></rect><rect x="-4" y="1" width="7" height="7"></rect><text x="-3" y="20">1</text></g>
+          <g class="node raider" data-k="3" transform="translate(60,52)"><polygon points="7,0 -6,-6 -3,0 -6,6"></polygon><text x="10" y="4">4</text></g>
+        </svg>
+        <div class="counter-cap"></div>
+      </div>
       <div class="hud-bottom">
         <div class="selinfo"></div>
+        <div class="selchips">${[0, 1, 2, 3]
+          .map((k) => `<button class="kchip" data-k="${k}" title="${k + 1} or click: keep only ${UNIT_STATS[k].name}s · Shift+${k + 1} or Shift-click: drop them">${KIND_ICON[k]}<b></b><kbd>${k + 1}</kbd></button>`)
+          .join('')}</div>
         <div class="energy"><div class="fill"></div><span>Energy</span></div>
         <div class="actions">
           <button data-a="all">All<kbd>Z</kbd></button>
           <button data-a="surge" class="power">Surge<kbd>Q</kbd><small>${POWER.surgeCost}</small></button>
           <button data-a="nova" class="power">Nova<kbd>E</kbd><small>${POWER.novaCost}</small></button>
+          <button data-a="fortify" class="power nest" title="Selected dots take half damage but move slower. From a Forge.">Fortify<kbd>R</kbd><small>${POWER.fortifyCost}</small></button>
+          <button data-a="barrage" class="power nest" title="Artillery strike at the cursor after a short warning. From a Spire.">Barrage<kbd>F</kbd><small>${POWER.barrageCost}</small></button>
+          <button data-a="blink" class="power nest" title="Teleport the selected dots toward the cursor. From a Den.">Blink<kbd>G</kbd><small>${POWER.blinkCost}</small></button>
+          <button data-a="lockdown" class="power nest" title="Stop an enemy nest spawning for a while. From a Bastion.">Lockdown<kbd>T</kbd><small>${POWER.lockdownCost}</small></button>
           <button data-a="upgrade" style="display:none">Upgrade<kbd>U</kbd><small class="ucost"></small></button>
           <button data-a="clear" class="touch">✕</button>
         </div>
       </div>`;
     root.appendChild(this.el);
     const q = <T extends HTMLElement>(s: string) => this.el.querySelector(s) as T;
+    this.counters = q('.counters');
+    this.kindChips = [...this.el.querySelectorAll<HTMLButtonElement>('.kchip')];
+    for (const b of this.kindChips) {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.game?.filterSelection(Number(b.dataset.k), e.shiftKey);
+        b.blur();
+      });
+    }
+    // Wheel icons work like chips: narrow the selection, or grab that type on screen.
+    this.counters.querySelectorAll<SVGGElement>('.node').forEach((n) => {
+      n.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const g = this.game;
+        if (!g) return;
+        const k = Number(n.dataset.k);
+        if (g.selectionMix()[k] > 0) g.filterSelection(k, e.shiftKey);
+        else g.selectKindOnScreen(k);
+      });
+    });
+    this.counterCap = q('.counter-cap');
     this.bar = q('.strength');
     this.chips = q('.chips');
     this.clock = q('.clock');
@@ -125,6 +204,7 @@ export class Hud {
   }
 
   update(g: GameView, dt: number): void {
+    this.game = g;
     this.tipTimer += dt;
     if (this.tipTimer > 9) {
       this.tipTimer = 0;
@@ -181,6 +261,21 @@ export class Hud {
     this.btn.surge.disabled = e < POWER.surgeCost || nUnits === 0;
     this.btn.nova.disabled = e < POWER.novaCost || nUnits < 4;
     this.btn.surge.classList.toggle('ready', e >= POWER.surgeCost);
+    // Nest powers only show while you hold the matching nest type.
+    const nestPowers: [NestPower, number, boolean][] = [
+      ['fortify', POWER.fortifyCost, nUnits > 0],
+      ['barrage', POWER.barrageCost, true],
+      ['blink', POWER.blinkCost, nUnits > 0],
+      ['lockdown', POWER.lockdownCost, true],
+    ];
+    for (const [p, cost, ok] of nestPowers) {
+      const b = this.btn[p];
+      const owned = g.canUse(p);
+      b.style.display = owned ? '' : 'none';
+      b.disabled = e < cost || !ok;
+      b.classList.toggle('ready', e >= cost);
+      b.classList.toggle('aiming', g.aim === p);
+    }
     this.btn.nova.classList.toggle('ready', e >= POWER.novaCost);
     const up = g.upgradeInfo();
     this.btn.upgrade.style.display = up ? '' : 'none';
@@ -195,6 +290,17 @@ export class Hud {
       ? parts.join(' · ') + `<small>${nUnits ? 'right-click to send' : 'right-click to set rally'}</small>`
       : '<small>Drag to select your dots</small>';
 
+    this.updateCounters(g);
+
+    // Type chips for the current selection.
+    const mix = g.selectionMix();
+    const kinds = mix.filter((c) => c > 0).length;
+    this.kindChips.forEach((b, k) => {
+      b.style.display = mix[k] > 0 ? '' : 'none';
+      b.classList.toggle('solo', kinds === 1);
+      b.querySelector('b')!.textContent = String(mix[k]);
+    });
+
     // Hover card for nests.
     const hn = w.nests[g.hoverNest];
     if (hn) {
@@ -205,6 +311,30 @@ export class Hud {
     } else {
       this.nestCard.style.display = 'none';
     }
+  }
+
+  /** Light up the counter wheel for the selection or a hovered enemy group. */
+  private updateCounters(g: GameView): void {
+    const mix = g.focusMix(18 / Math.max(0.01, g.zoomForPick));
+    const total = mix ? mix.counts.reduce((a, b) => a + b, 0) : 0;
+    const on = new Set<number>();
+    if (mix && total > 0) mix.counts.forEach((c, k) => c / total >= 0.2 && on.add(k));
+    this.counters.classList.toggle('active', on.size > 0);
+    this.counters.classList.toggle('enemy', !!mix?.enemy);
+    this.counters.querySelectorAll<SVGGElement>('.node').forEach((n) => n.classList.toggle('on', on.has(Number(n.dataset.k))));
+    this.counters.querySelectorAll<SVGPathElement>('.arrow').forEach((a) => {
+      const from = Number(a.dataset.from), to = Number(a.dataset.to);
+      a.classList.toggle('good', on.has(from));
+      a.classList.toggle('bad', on.has(to) && !on.has(from));
+    });
+    if (!mix || on.size === 0) {
+      this.counterCap.textContent = 'Spear › Shield › Swarm';
+      return;
+    }
+    // Caption for the dominant kind.
+    let k = 0;
+    mix.counts.forEach((c, i) => c > mix.counts[k] && (k = i));
+    this.counterCap.textContent = (mix.enemy ? ENEMY_TIPS : OWN_TIPS)[k];
   }
 
   destroy(): void {

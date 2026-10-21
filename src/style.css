@@ -337,3 +337,60 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .vol span { width: 72px; }
 .vol input { flex: 1; accent-color: var(--accent); padding: 0; }
 @media (max-width: 720px) { .vols { grid-template-columns: 1fr; } }
+
+.actions button.aiming { background: rgba(255, 60, 172, 0.35); border-color: #ff3cac; }
+
+/* The action bar grows with nest powers: let it wrap and tighten on narrower screens. */
+.actions { flex-wrap: wrap; justify-content: center; }
+@media (max-width: 1180px) {
+  .hud-bottom { flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .selinfo { display: none; }
+  .energy { width: 100%; }
+  .actions button { padding: 6px 8px; font-size: 13px; }
+}
+
+/* Counter wheel: Spear › Shield › Swarm, lit for the selection or a hovered enemy group. */
+.counters {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 132px;
+  padding: 6px 6px 5px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  opacity: 0.55;
+  transition: opacity 0.2s, border-color 0.2s;
+  pointer-events: auto;
+}
+.counters.active { opacity: 1; border-color: var(--line-strong); }
+.counters.enemy { border-color: rgba(255, 93, 115, 0.55); }
+.counters svg { display: block; width: 100%; height: auto; }
+.counters .node polygon, .counters .node rect { fill: #59607f; stroke: none; transition: fill 0.2s; }
+.counters .node rect.hollow { fill: none; stroke: #59607f; stroke-width: 3; }
+.counters .node.on polygon, .counters .node.on rect { fill: #fff; }
+.counters .node.on rect.hollow { fill: none; stroke: #fff; }
+.counters .node.raider polygon { fill: #474d68; }
+.counters .arrow { fill: none; stroke: #3d4360; stroke-width: 2.2; transition: stroke 0.2s; }
+.counters .arrow.good { stroke: #b4ff39; }
+.counters .arrow.bad { stroke: #ff5d73; }
+.counter-cap { font-size: 11px; line-height: 1.25; color: var(--muted); text-align: center; min-height: 2.5em; }
+.counters.active .counter-cap { color: var(--text); }
+.counters.enemy .counter-cap { color: #ffb3bf; }
+.n-dia { clip-path: polygon(50% 0, 70% 50%, 50% 100%, 30% 50%); }
+@media (max-width: 720px) {
+  .counters { width: 96px; bottom: auto; top: 64px; right: 8px; }
+  .counter-cap { display: none; }
+}
+
+/* Selection type chips: click to keep a type, shift-click to drop it. */
+.selchips { display: flex; gap: 4px; }
+.kchip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; font-size: 13px; }
+.kchip svg { width: 14px; height: 14px; }
+.kchip svg rect, .kchip svg polygon { fill: currentColor; }
+.kchip svg rect.hollow { fill: none; stroke: currentColor; stroke-width: 3; }
+.kchip.solo { border-color: var(--accent); }
+.counters .node { cursor: pointer; }
+.kchip kbd { margin-left: 2px; }
+.counters .node text { font: 600 9px var(--font); fill: var(--muted); }
+.counters .node.on text { fill: #fff; }

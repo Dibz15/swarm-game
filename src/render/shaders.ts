@@ -41,38 +41,60 @@ void main(){
 export const UNIT_VS = `#version 300 es
 layout(location=0) in vec2 a_q;
 layout(location=1) in vec3 a_i;   // x, y, size
-layout(location=2) in vec4 a_c;
+layout(location=2) in vec2 a_s;   // shape (+10 = fortified), heading angle
+layout(location=3) in vec4 a_c;
 uniform vec4 u_cam;
 uniform float u_px;
 out vec2 v_p;
+out vec2 v_s;
 out vec4 v_c;
 const float G = 2.6;
 void main(){
   float s = max(a_i.z, u_px * 2.4);
   vec2 wp = a_i.xy + a_q * s * 0.5 * G;
   v_p = a_q * G;
+  v_s = a_s;
   v_c = a_c;
   gl_Position = vec4((wp - u_cam.xy) * u_cam.zw, 0., 1.);
 }`;
 
+// Shapes: 0 Dot = filled square, 1 Tank = hollow square, 2 Lancer = long
+// diamond along its heading, 3 Swift = arrowhead along its heading.
 export const UNIT_FS = `#version 300 es
 precision mediump float;
 in vec2 v_p;
+in vec2 v_s;
 in vec4 v_c;
 out vec4 o;
 void main(){
-  float d = max(abs(v_p.x), abs(v_p.y));
+  float fort = step(9.5, v_s.x);
+  float shape = v_s.x - fort * 10.0;
+  vec2 p = v_p;
+  float ca = cos(v_s.y), sa = sin(v_s.y);
+  vec2 r = vec2(ca * p.x + sa * p.y, -sa * p.x + ca * p.y);
+  float sq = max(abs(p.x), abs(p.y));
+  float d = sq;
+  float inner = 1.0;
+  if (shape > 2.5) {
+    d = max(abs(r.y) * 1.8 + r.x, -r.x / 0.8);
+  } else if (shape > 1.5) {
+    d = abs(r.x) / 1.45 + abs(r.y) / 0.38;
+  } else if (shape > 0.5) {
+    inner = sq < 0.42 ? 0.22 : 1.0;
+  }
   float core = 1.0 - smoothstep(0.82, 1.08, d);
   float glow = exp(-(max(d, 1.0) - 1.0) * 1.7) * 0.13 * (1.0 - core);
+  float shield = fort * (smoothstep(1.32, 1.42, sq) - smoothstep(1.55, 1.68, sq)) * 0.9;
   vec3 c = v_c.rgb;
-  // premultiplied: core is opaque, glow is additive (alpha 0)
-  o = vec4((c * (core * 1.05 + glow)) * v_c.a, core * v_c.a);
+  // premultiplied: core is opaque, glow and shield are additive (alpha 0)
+  o = vec4((c * (core * 1.05 * inner + glow) + mix(c, vec3(1.0), 0.6) * shield) * v_c.a, core * v_c.a);
 }`;
 
 export const BEAM_VS = `#version 300 es
 layout(location=0) in vec2 a_q;
 layout(location=1) in vec4 a_ab;  // x1 y1 x2 y2
-layout(location=2) in vec4 a_c;
+layout(location=2) in float a_w;  // width in pixels
+layout(location=3) in vec4 a_c;
 uniform vec4 u_cam;
 uniform float u_px;
 out float v_v;
@@ -83,7 +105,7 @@ void main(){
   float L = max(length(d), 1e-4);
   vec2 nrm = vec2(-d.y, d.x) / L;
   float t = a_q.x * 0.5 + 0.5;
-  float wdt = u_px * 1.8;
+  float wdt = u_px * a_w;
   vec2 wp = mix(a, b, t) + nrm * a_q.y * wdt;
   v_v = a_q.y;
   v_c = a_c;
@@ -138,6 +160,13 @@ float ngon(vec2 p, float n, float rad){
   float b = TAU / n;
   return cos(floor(0.5 + a / b) * b - a) * length(p) - rad;
 }
+float ndot(vec2 a, vec2 b){ return a.x * b.x - a.y * b.y; }
+float rhombus(vec2 p, vec2 b){
+  p = abs(p);
+  float h = clamp(ndot(b - 2.0 * p, b) / dot(b, b), -1.0, 1.0);
+  float d = length(p - 0.5 * b * vec2(1.0 - h, 1.0 + h));
+  return d * sign(p.x * b.y + p.y * b.x - b.x * b.y);
+}
 float arc(vec2 p, float prog){
   float f = fract(atan(p.x, -p.y) / TAU + 1.0); // 0 at screen-top, clockwise
   return step(f, prog);
@@ -162,14 +191,16 @@ void main(){
   } else {
     float c = cos(v_par.z), s = sin(v_par.z);
     vec2 p = mat2(c, -s, s, c) * v_p;
-    float n = shape == 1 ? 6.0 : shape == 2 ? 4.0 : shape == 3 ? 3.0 : shape == 4 ? 4.0 : 8.0;
-    if (shape == 4) p = mat2(0.7071, -0.7071, 0.7071, 0.7071) * p * vec2(1.0, 1.35);
-    float rad = shape == 3 ? 0.42 : shape == 4 ? 0.5 : 0.6;
-    float d = ngon(p, n, rad);
+    float n = shape == 1 ? 6.0 : shape == 2 ? 4.0 : shape == 3 ? 3.0 : 8.0;
+    float rad = shape == 3 ? 0.42 : 0.6;
+    // Spire (4) is a needle like the Spears it spawns.
+    float d = shape == 4 ? rhombus(p, vec2(0.3, 0.82)) : ngon(p, n, rad);
     float outline = 1.0 - smoothstep(0.03, 0.03 + aa, abs(d));
+    // Forge (2) wears a heavy double border like its Shields.
+    if (shape == 2) outline = max(outline, 1.0 - smoothstep(0.025, 0.025 + aa, abs(d + 0.09)));
     float fill = d < 0.0 ? 0.13 + v_par.w * 0.45 : 0.0;
     float glow = exp(-max(d, 0.0) * 10.0) * 0.28 * step(0.0, d);
-    float core = ngon(p, n, rad * 0.36);
+    float core = shape == 4 ? rhombus(p, vec2(0.11, 0.3)) : ngon(p, n, rad * 0.36);
     float coreF = (1.0 - smoothstep(0.0, aa, core)) * 0.55;
     if (shape == 5) {
       // bastion: cross through the core

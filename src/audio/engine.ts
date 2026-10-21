@@ -415,6 +415,49 @@ export class AudioEngine {
     [0, 7, 12].forEach((s) => this.tone(out, note(s - 12), 2.2, 'sine', 0.07, { attack: 0.08 }));
   }
 
+  fortify(x: number, y: number, mine: boolean): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, mine ? 1 : 0.6, 1, 0.05);
+    if (!out) return;
+    // Low, solid "shields up": two soft square tones a fifth apart.
+    this.tone(out, note(-12), 0.5, 'square', 0.03, { attack: 0.01 });
+    this.tone(out, note(-5), 0.45, 'triangle', 0.05, { attack: 0.02, delay: 0.04 });
+    this.noise(out, 0.25, 0.05, 'bandpass', 900, 500);
+  }
+
+  barrageCast(x: number, y: number): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, 0.8, 1.5, 0.05);
+    if (!out) return;
+    // Falling whistle across the telegraph time.
+    this.tone(out, note(19), 1.1, 'sine', 0.035, { slide: 0.35, attack: 0.05 });
+  }
+
+  barrageHit(x: number, y: number, mine: boolean): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, mine ? 1.1 : 0.9, 2, 0.0);
+    if (!out) return;
+    this.tone(out, 92, 0.8, 'sine', 0.32, { slide: 0.45, attack: 0.008 });
+    this.noise(out, 0.7, 0.22, 'lowpass', 1400, 80);
+  }
+
+  blink(x0: number, y0: number, x: number, y: number, mine: boolean): void {
+    if (!this.ctx) return;
+    const a = this.at(x0, y0, mine ? 0.9 : 0.5, 0.5, 0.05);
+    const b = this.at(x, y, mine ? 1 : 0.6, 0.6, 0.05);
+    if (a) this.tone(a, note(7), 0.18, 'sine', 0.05, { slide: 2.5 });
+    if (b) this.tone(b, note(19), 0.3, 'sine', 0.05, { slide: 0.6, delay: 0.08 });
+  }
+
+  lockdown(x: number, y: number, involved: boolean): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, involved ? 1 : 0.6, 1, 0.05);
+    if (!out) return;
+    // Descending stepped tones: something powering down.
+    [12, 7, 3, 0].forEach((s, i) => this.tone(out, note(s), 0.16, 'triangle', 0.05, { delay: i * 0.07 }));
+    this.tone(out, 55, 0.9, 'sine', 0.12, { slide: 0.8, delay: 0.25 });
+  }
+
   eliminated(): void {
     if (!this.ctx) return;
     this.tone(this.ui, note(12), 1.4, 'sine', 0.05, { slide: 0.5 });

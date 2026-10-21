@@ -1,5 +1,5 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { BASTION, NEUTRAL, NestType, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
+import { BASTION, DAMAGE_VS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
 import type { World } from '../sim/world';
 import type { Renderer } from './renderer';
 
@@ -14,7 +14,8 @@ export interface SceneOpts {
   human: number;
 }
 
-const NEST_SHAPE = [1, 2, 3, 4, 5];
+/** Nest outline echoes its unit: Hive hex, Forge block, Spire needle, Den arrowhead, Bastion octagon. */
+const NEST_SHAPE = [1, 2, 4, 3, 5];
 const NEST_SPIN = [0.22, 0.1, -0.28, 0.7, 0.12];
 const UNOWNED: RGB = [70, 76, 96];
 const SELECT_MIX = 0.5;
@@ -23,6 +24,7 @@ export function drawWorld(r: Renderer, w: World, o: SceneOpts): void {
   drawNests(r, w, o);
   drawBeams(r, w, o);
   drawUnits(r, w, o);
+  drawBarrages(r, w, o);
 }
 
 function nestColor(owner: number): RGB {
@@ -83,6 +85,13 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
       r.shape(true, n.rallyX, n.rallyY, 6, 0, 1, o.time, 0.25, c, selected ? 200 : 70);
     }
 
+    // Lockdown: a white ring that drains as the lock runs out.
+    if (n.lockedUntil > w.tick) {
+      const left = (n.lockedUntil - w.tick) / POWER.lockdownTicks;
+      r.shape(true, n.x, n.y, n.r * 1.3, 0, left, -o.time * 2, 0.07, WHITE, 230);
+      r.shape(true, n.x, n.y, n.r * 0.9, 4, 0, o.time * 3, 0.5, WHITE, 120);
+    }
+
     if (selected) {
       r.shape(true, n.x, n.y, n.r * 1.5, 0, 1, 0, 0.04, WHITE, Math.round(140 + 80 * pulseT));
     } else if (hover) {
@@ -97,28 +106,46 @@ function hash01(k: number, frame: number): number {
   return (h >>> 0) / 4294967296;
 }
 
+/** Beam width (px) by attacker kind: Lancers fire heavy beams. */
+const BEAM_WIDTH = [1.6, 2.2, 2.8, 1.2];
+
 function drawBeams(r: Renderer, w: World, o: SceneOpts): void {
   const a = o.alpha;
   const flick = o.frame >> 1;
   for (let k = 0; k < w.beamCount; k++) {
     const s = w.beams[k * 2];
     const t = w.beams[k * 2 + 1];
-    let x1: number, y1: number, owner: number;
+    let x1: number, y1: number, owner: number, width: number;
     if (s < 0) {
       const n = w.nests[-s - 1];
       x1 = n.x;
       y1 = n.y;
       owner = n.owner;
+      width = 2.4;
     } else {
       x1 = w.px[s] + (w.x[s] - w.px[s]) * a;
       y1 = w.py[s] + (w.y[s] - w.py[s]) * a;
       owner = w.owner[s];
+      width = BEAM_WIDTH[w.kind[s]];
     }
     const x2 = w.px[t] + (w.x[t] - w.px[t]) * a;
     const y2 = w.py[t] + (w.y[t] - w.py[t]) * a;
-    const c = FACTION_RGB[owner] ?? UNOWNED;
-    const alpha = s < 0 ? 230 : Math.round(50 + 170 * hash01(k, flick));
-    r.beam(x1, y1, x2, y2, c[0], c[1], c[2], alpha);
+    let c = FACTION_RGB[owner] ?? UNOWNED;
+    const lancer = s >= 0 && w.kind[s] === Kind.Lancer;
+    let alpha = s < 0 || lancer ? 200 + Math.round(55 * hash01(k, flick)) : Math.round(50 + 170 * hash01(k, flick));
+    // Counters read in the fight: strong hits are thick and hot, weak ones thin and dim.
+    if (s >= 0) {
+      const eff = DAMAGE_VS[w.kind[s]][w.kind[t]];
+      if (eff >= 1.3) {
+        width *= 1.6;
+        c = mixRgb(c, WHITE, 0.35);
+        alpha = Math.max(alpha, 190);
+      } else if (eff <= 0.75) {
+        width *= 0.6;
+        alpha = Math.round(alpha * 0.4);
+      }
+    }
+    r.beam(x1, y1, x2, y2, c[0], c[1], c[2], alpha, width);
   }
 }
 
@@ -132,14 +159,41 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
     const x = w.px[i] + (w.x[i] - w.px[i]) * a;
     const y = w.py[i] + (w.y[i] - w.py[i]) * a;
     const owner = w.owner[i];
+    const kind = w.kind[i];
     let c = sel && sel[i] ? lit[owner] : FACTION_RGB[owner];
-    let size = UNIT_STATS[w.kind[i]].size;
+    let size = UNIT_STATS[kind].size;
     let alpha = owner === NEUTRAL ? 200 : 255;
     if (w.surge[i] > w.tick) {
       c = mixRgb(c, WHITE, 0.25 * surgeGlow);
       size *= 1.15;
     }
     if (w.state[i] === UNIT_FEEDING) alpha = 190;
-    r.unit(x, y, size, c[0], c[1], c[2], alpha);
+
+    // Heading: face the target while fighting, else the direction of travel.
+    let angle = 0;
+    if (kind === Kind.Lancer || kind === Kind.Swift) {
+      const t = w.tgt[i];
+      if (w.engaged[i] && t >= 0) angle = Math.atan2(w.y[t] - w.y[i], w.x[t] - w.x[i]);
+      else angle = Math.atan2(w.vy[i], w.vx[i]);
+    }
+    // Swifts leave a faint streak behind them.
+    if (kind === Kind.Swift) {
+      const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
+      if (sp2 > 400) r.beam(x - w.vx[i] * 0.16, y - w.vy[i] * 0.16, x, y, c[0], c[1], c[2], 70, 1.4);
+    }
+    const shape = kind + (w.fortify[i] > w.tick ? 10 : 0);
+    r.unit(x, y, size, c[0], c[1], c[2], alpha, shape, angle);
+  }
+}
+
+/** Pending Barrage strikes: a ring closing in on the impact zone. */
+function drawBarrages(r: Renderer, w: World, o: SceneOpts): void {
+  for (const b of w.barrages) {
+    const c = FACTION_RGB[b.owner] ?? WHITE;
+    const left = Math.max(0, (b.impact - w.tick - o.alpha) / POWER.barrageDelay);
+    const R = POWER.barrageRadius;
+    r.shape(true, b.x, b.y, R, 0, 1, 0, 0.025, c, 150);
+    r.shape(true, b.x, b.y, R * (1 + left * 1.2), 0, 1, 0, 0.04, c, Math.round(220 * (1 - left * 0.5)));
+    r.shape(true, b.x, b.y, R, 7, 1, 0, 0, c, Math.round(40 + 60 * (1 - left)));
   }
 }

@@ -118,12 +118,12 @@ export class Renderer {
       uTime: gl.getUniformLocation(bgProg, 'u_time'),
     };
 
-    this.units = new InstanceBuffer(3, 1, 16384);
-    this.beams = new InstanceBuffer(4, 1, 8192);
+    this.units = new InstanceBuffer(5, 1, 16384);
+    this.beams = new InstanceBuffer(5, 1, 8192);
     this.shapes = new InstanceBuffer(7, 2, 256);
     this.overlay = new InstanceBuffer(7, 2, 256);
-    this.unitPass = this.makePass(UNIT_VS, UNIT_FS, this.units, [3]);
-    this.beamPass = this.makePass(BEAM_VS, BEAM_FS, this.beams, [4]);
+    this.unitPass = this.makePass(UNIT_VS, UNIT_FS, this.units, [3, 2]);
+    this.beamPass = this.makePass(BEAM_VS, BEAM_FS, this.beams, [4, 1]);
     this.shapePass = this.makePass(SHAPE_VS, SHAPE_FS, this.shapes, [3, 4]);
     this.overlayPass = this.makePass(SHAPE_VS, SHAPE_FS, this.overlay, [3, 4]);
     gl.bindVertexArray(null);
@@ -223,22 +223,26 @@ export class Renderer {
 
   // ---- instance helpers -------------------------------------------------
 
-  unit(x: number, y: number, size: number, r: number, g: number, b: number, a = 255): void {
+  /** shape: 0 square, 1 hollow square, 2 long diamond, 3 arrowhead; +10 draws a shield */
+  unit(x: number, y: number, size: number, r: number, g: number, b: number, a = 255, shape = 0, angle = 0): void {
     const u = this.units;
     const i = u.alloc();
     u.f32[i] = x;
     u.f32[i + 1] = y;
     u.f32[i + 2] = size;
+    u.f32[i + 3] = shape;
+    u.f32[i + 4] = angle;
     u.color(i, 0, r, g, b, a);
   }
 
-  beam(x1: number, y1: number, x2: number, y2: number, r: number, g: number, b: number, a: number): void {
+  beam(x1: number, y1: number, x2: number, y2: number, r: number, g: number, b: number, a: number, width = 1.8): void {
     const u = this.beams;
     const i = u.alloc();
     u.f32[i] = x1;
     u.f32[i + 1] = y1;
     u.f32[i + 2] = x2;
     u.f32[i + 3] = y2;
+    u.f32[i + 4] = width;
     u.color(i, 0, r, g, b, a);
   }
 

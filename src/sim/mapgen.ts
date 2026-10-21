@@ -27,11 +27,11 @@ export interface MapSpec {
 }
 
 const TYPE_WEIGHTS: [number, number][] = [
-  [NestType.Hive, 34],
-  [NestType.Forge, 17],
-  [NestType.Spire, 17],
-  [NestType.Swift, 17],
-  [NestType.Bastion, 15],
+  [NestType.Hive, 20],
+  [NestType.Forge, 22],
+  [NestType.Spire, 22],
+  [NestType.Swift, 18],
+  [NestType.Bastion, 14],
 ];
 
 function pickType(rng: Rng): number {
@@ -88,20 +88,23 @@ export function generateMap(seed: number, size: MapSize, players: number, portra
     }
   };
 
-  // A cheap "natural expansion" right next to each start.
-  for (let tries = 0; tries < 40; tries++) {
-    const da = (rng.next() < 0.5 ? -1 : 1) * rng.range(0.12, 0.28) * sector;
-    const r = rng.range(0.55, 0.68);
-    if (fits(r, da)) {
-      place(r, da, NestType.Hive, 1, 4);
-      break;
-    }
-  }
-
   // Keep the mix varied: at most one Bastion and two of any other type per
   // sector, so a seed can't produce a map that is mostly turrets.
   const typeCount = new Map<number, number>();
   const allowed = (t: number) => (typeCount.get(t) ?? 0) < (t === NestType.Bastion ? 1 : 2);
+
+  // A cheap "natural expansion" right next to each start: Hive, Forge or Spire.
+  const naturalType = rng.pick([NestType.Hive, NestType.Forge, NestType.Spire]);
+  for (let tries = 0; tries < 40; tries++) {
+    const da = (rng.next() < 0.5 ? -1 : 1) * rng.range(0.12, 0.28) * sector;
+    const r = rng.range(0.55, 0.68);
+    if (fits(r, da)) {
+      place(r, da, naturalType, 1, naturalType === NestType.Forge ? 6 : 4);
+      typeCount.set(naturalType, 1);
+      break;
+    }
+  }
+
   let placed = 1;
   for (let tries = 0; tries < 400 && placed < perSector; tries++) {
     const r = rng.range(0.28, 1.0);
@@ -109,7 +112,7 @@ export function generateMap(seed: number, size: MapSize, players: number, portra
     if (!fits(r, da)) continue;
     let type = pickType(rng);
     for (let k = 0; k < 6 && !allowed(type); k++) type = pickType(rng);
-    if (!allowed(type)) type = NestType.Hive;
+    if (!allowed(type)) type = [NestType.Forge, NestType.Spire, NestType.Swift, NestType.Hive].find(allowed) ?? NestType.Hive;
     typeCount.set(type, (typeCount.get(type) ?? 0) + 1);
     const level = rng.next() < 0.15 ? 2 : 1;
     let g = Math.round(4 + (1 - r) * 9 + rng.int(4) + (level - 1) * 6);

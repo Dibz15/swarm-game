@@ -1,11 +1,12 @@
-import { FACTION_NAMES, FACTION_RGB, WHITE } from '../content/factions';
+import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
 import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
-import { MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, UNIT_FEEDING, UPGRADE_COST, type MatchSetup } from '../sim/index';
+import { DAMAGE_VS, MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, UPGRADE_COST, type MatchSetup, type NestPower } from '../sim/index';
+import { hasPower } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { LocalSession } from './session';
 
@@ -26,7 +27,15 @@ export class GameView {
   readonly human: number;
   readonly selection = new Selection();
   hoverNest = -1;
-  /** paint-select brush shown at the cursor while S is held */
+  /** a targeted power waiting for a click (touch / HUD buttons) */
+  aim: NestPower | null = null;
+  /** world position under the cursor, for previews and key casts */
+  cursor: [number, number] | null = null;
+  /** world units per ~1 css px, for HUD pick radii */
+  get zoomForPick(): number {
+    return this.s.camera.zoom / this.s.renderer.dpr;
+  }
+  /** paint-select brush shown at the cursor while Space is held */
   brush: { x: number; y: number; r: number } | null = null;
   result: MatchResult | null = null;
   resultTime = 0;
@@ -79,6 +88,7 @@ export class GameView {
 
   render(time: number): void {
     this.frame++;
+    this.hitSparks();
     drawWorld(this.s.renderer, this.world, {
       alpha: this.session.alpha,
       time,
@@ -88,9 +98,59 @@ export class GameView {
       hoverNest: this.hoverNest,
       human: this.human,
     });
+    this.drawAim();
     if (this.brush) {
       const b = this.brush;
       this.s.renderer.shape(true, b.x, b.y, b.r, 0, 1, 0, 1.5 / b.r, WHITE, 120);
+    }
+  }
+
+  /** Sparks where counters land, glints where shots bounce off. Sampled, client-only. */
+  private hitSparks(): void {
+    const w = this.world;
+    if (w.beamCount === 0 || this.session.paused) return;
+    const { particles, camera } = this.s;
+    for (let n = 0; n < 8; n++) {
+      const k = Math.floor(Math.random() * w.beamCount);
+      const a = w.beams[k * 2], t = w.beams[k * 2 + 1];
+      if (a < 0) continue;
+      const [sx, sy] = camera.toScreen(w.x[t], w.y[t]);
+      if (sx < 0 || sy < 0 || sx > camera.viewW || sy > camera.viewH) continue;
+      const eff = DAMAGE_VS[w.kind[a]][w.kind[t]];
+      if (eff >= 1.3 && Math.random() < 0.5) {
+        particles.burst(w.x[t], w.y[t], mixRgb(FACTION_RGB[w.owner[a]], WHITE, 0.5), 2, 70, 1.6, 0.22);
+      } else if (eff <= 0.75 && Math.random() < 0.2) {
+        particles.burst(w.x[t], w.y[t], [170, 176, 196], 1, 50, 1.2, 0.15);
+      }
+    }
+  }
+
+  private drawAim(): void {
+    const power = this.aim;
+    const cur = this.cursor;
+    if (!power || !cur) return;
+    const r = this.s.renderer;
+    const c = FACTION_RGB[this.human];
+    if (power === 'barrage') {
+      r.shape(true, cur[0], cur[1], POWER.barrageRadius, 0, 1, 0, 0.03, c, 200);
+      r.shape(true, cur[0], cur[1], POWER.barrageRadius, 7, 1, 0, 0, c, 40);
+    } else if (power === 'blink') {
+      const from = this.selectionCenter();
+      if (!from) return;
+      let dx = cur[0] - from[0], dy = cur[1] - from[1];
+      const d = Math.hypot(dx, dy);
+      if (d > POWER.blinkRange) {
+        dx *= POWER.blinkRange / d;
+        dy *= POWER.blinkRange / d;
+      }
+      r.shape(true, from[0], from[1], POWER.blinkRange, 0, 1, 0, 0.01, c, 90);
+      r.beam(from[0], from[1], from[0] + dx, from[1] + dy, c[0], c[1], c[2], 160, 1.5);
+      r.shape(true, from[0] + dx, from[1] + dy, 16, 0, 1, 0, 0.12, WHITE, 220);
+    } else if (power === 'lockdown') {
+      const n = this.nestAt(cur[0], cur[1], 1.6);
+      const ok = n && n.owner >= 0 && n.owner !== NEUTRAL && this.world.hostile(n.owner, this.human);
+      if (n) r.shape(true, n.x, n.y, n.r * 1.6, 0, 1, 0, 0.06, ok ? WHITE : [255, 93, 115], 220);
+      else r.shape(true, cur[0], cur[1], 14, 0, 1, 0, 0.1, [255, 93, 115], 160);
     }
   }
 
@@ -145,6 +205,35 @@ export class GameView {
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 1.4, dur: 0.5, c, thick: 2 });
           sfx.surge(e.x, e.y, e.f === this.human);
           break;
+        case 'fortify':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 1.3, r1: e.r * 0.8, dur: 0.45, c: WHITE, thick: 3 });
+          sfx.fortify(e.x, e.y, e.f === this.human);
+          break;
+        case 'barrage':
+          sfx.barrageCast(e.x, e.y);
+          if (e.f !== this.human && this.isNearMine(e.x, e.y, e.r * 1.5)) toast('Incoming Barrage! Move out', '#ff5d73');
+          break;
+        case 'barrageHit': {
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.2, r1: e.r * 1.1, dur: 0.5, c: WHITE, thick: 4 });
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.5, r1: e.r, dur: 0.3, c, thick: 0, disc: true });
+          particles.burst(e.x, e.y, c, 40, e.r * 2, 2.6, 0.7);
+          const [sx, sy] = camera.toScreen(e.x, e.y);
+          if (sx > -100 && sy > -100 && sx < camera.viewW + 100 && sy < camera.viewH + 100) camera.shake = Math.min(1, camera.shake + 0.35);
+          sfx.barrageHit(e.x, e.y, e.f === this.human);
+          break;
+        }
+        case 'blink':
+          particles.burst(e.x0, e.y0, c, 30, 90, 2.2, 0.5);
+          particles.burst(e.x, e.y, c, 30, 90, 2.2, 0.5);
+          rings.add({ x: e.x0, y: e.y0, r0: e.r, r1: 4, dur: 0.3, c, thick: 2 });
+          rings.add({ x: e.x, y: e.y, r0: 4, r1: e.r * 1.3, dur: 0.4, c, thick: 2 });
+          sfx.blink(e.x0, e.y0, e.x, e.y, e.f === this.human);
+          break;
+        case 'lockdown':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r * 1.2, dur: 0.5, c: WHITE, thick: 3 });
+          sfx.lockdown(e.x, e.y, e.f === this.human || e.prev === this.human);
+          if (e.prev === this.human) toast(`Your ${NEST_NAMES[nest.type]} is locked down`, '#ff5d73');
+          break;
         case 'upgradeFail':
           if (e.f === this.human) {
             sfx.fail();
@@ -195,6 +284,7 @@ export class GameView {
   }
 
   selectBox(x0: number, y0: number, x1: number, y1: number, additive: boolean): void {
+    this.typeCycle = null;
     const ax = Math.min(x0, x1), bx = Math.max(x0, x1);
     const ay = Math.min(y0, y1), by = Math.max(y0, y1);
     const units = this.ownUnitsIn((x, y) => x >= ax && x <= bx && y >= ay && y <= by);
@@ -210,6 +300,7 @@ export class GameView {
    * center, or when no dots are under the cursor.
    */
   selectAt(wx: number, wy: number, radius: number, additive: boolean): boolean {
+    this.typeCycle = null;
     const n = this.nestAt(wx, wy);
     const own = n && n.owner === this.human ? n : null;
     const units = this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= radius * radius);
@@ -251,6 +342,105 @@ export class GameView {
 
   selectAll(): void {
     this.selection.set(this.ownUnitsIn(() => true), [], false);
+    this.typeCycle = null;
+    this.s.sfx.click();
+  }
+
+  // ---- picking unit types out of a selection ------------------------------
+
+  /** set while Tab-cycling: the selection we started from and where we are */
+  private typeCycle: { base: number[]; idx: number } | null = null;
+
+  /** Selected unit counts by kind. */
+  selectionMix(): number[] {
+    const w = this.world;
+    const counts = [0, 0, 0, 0];
+    for (const u of this.selection.units) {
+      const s = w.uidToSlot.get(u);
+      if (s !== undefined) counts[w.kind[s]]++;
+    }
+    return counts;
+  }
+
+  private kindOf(uid: number): number {
+    const s = this.world.uidToSlot.get(uid);
+    return s === undefined ? -1 : this.world.kind[s];
+  }
+
+  /** Keep only `kind` in the selection (or drop it, when `remove`). */
+  filterSelection(kind: number, remove = false): void {
+    const keep = [...this.selection.units].filter((u) => (this.kindOf(u) === kind) !== remove);
+    if (!keep.length) return;
+    this.selection.set(keep, [], false);
+    this.typeCycle = null;
+    this.s.sfx.click();
+  }
+
+  /** Every own unit of `kind` inside the given world rect (the screen). */
+  selectKindIn(kind: number, x0: number, y0: number, x1: number, y1: number): void {
+    const w = this.world;
+    const units: number[] = [];
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.owner[i] !== this.human || w.kind[i] !== kind || w.state[i] === UNIT_FEEDING) continue;
+      if (w.x[i] >= x0 && w.x[i] <= x1 && w.y[i] >= y0 && w.y[i] <= y1) units.push(w.uid[i]);
+    }
+    if (!units.length) return;
+    this.selection.set(units, [], false);
+    this.typeCycle = null;
+    this.s.sfx.click();
+  }
+
+  /**
+   * Number keys 1-4: keep just this type from the current group. The group
+   * is remembered, so 1 then 3 picks Spears from the same blob. If the group
+   * has none of this type, grab that type on screen instead.
+   */
+  selectType(kind: number): void {
+    const base = this.typeCycle?.base ?? [...this.selection.units];
+    const pick = base.filter((u) => this.kindOf(u) === kind);
+    if (!pick.length) return this.selectKindOnScreen(kind);
+    this.selection.set(pick, [], false);
+    this.typeCycle = { base, idx: [0, 1, 2, 3].filter((k) => base.some((u) => this.kindOf(u) === k)).indexOf(kind) };
+    this.s.sfx.click();
+  }
+
+  /** Every own unit of `kind` currently on screen. */
+  selectKindOnScreen(kind: number): void {
+    const cam = this.s.camera;
+    const [x0, y0] = cam.toWorld(0, 0);
+    const [x1, y1] = cam.toWorld(cam.viewW, cam.viewH);
+    this.selectKindIn(kind, x0, y0, x1, y1);
+  }
+
+  /** Own unit kind under a world point, or -1. */
+  kindAt(wx: number, wy: number, radius: number): number {
+    const w = this.world;
+    let best = -1, bd = radius * radius;
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.owner[i] !== this.human) continue;
+      const d = (w.x[i] - wx) ** 2 + (w.y[i] - wy) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = w.kind[i];
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Tab: narrow the selection to one unit type at a time, cycling through the
+   * types it started with; after the last, back to the whole group.
+   */
+  cycleType(dir: 1 | -1): void {
+    const base = this.typeCycle?.base ?? [...this.selection.units];
+    const kinds = [0, 1, 2, 3].filter((k) => base.some((u) => this.kindOf(u) === k));
+    if (kinds.length < 2) return;
+    // Steps: each kind, then "all" (index kinds.length).
+    const n = kinds.length + 1;
+    const idx = ((this.typeCycle ? this.typeCycle.idx : kinds.length) + dir + n) % n;
+    const units = idx === kinds.length ? base : base.filter((u) => this.kindOf(u) === kinds[idx]);
+    this.selection.set(units, [], false);
+    this.typeCycle = { base, idx };
     this.s.sfx.click();
   }
 
@@ -283,6 +473,64 @@ export class GameView {
     this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
   }
 
+  canUse(power: NestPower): boolean {
+    return hasPower(this.world, this.human, power);
+  }
+
+  private power(power: NestPower, cost: number): boolean {
+    if (!this.canUse(power)) {
+      this.s.toast(`Hold a ${NEST_NAMES[POWER_NEST[power]]} to use this`, '#9aa4c7');
+      return false;
+    }
+    if (this.world.factions[this.human].energy < cost) {
+      this.s.sfx.fail();
+      return false;
+    }
+    return true;
+  }
+
+  fortify(): void {
+    if (!this.selection.units.size) return this.s.toast('Select dots first, then Fortify', '#9aa4c7');
+    if (!this.power('fortify', POWER.fortifyCost)) return;
+    this.session.issue({ t: 'fortify', p: this.human, units: [...this.selection.units] });
+  }
+
+  /** Targeted powers: cast at a world point. */
+  castAt(power: NestPower, wx: number, wy: number): void {
+    this.aim = null;
+    if (power === 'fortify') return this.fortify();
+    if (power === 'barrage') {
+      if (!this.power('barrage', POWER.barrageCost)) return;
+      this.session.issue({ t: 'barrage', p: this.human, x: wx, y: wy });
+    } else if (power === 'blink') {
+      if (!this.selection.units.size) return this.s.toast('Select dots first, then Blink', '#9aa4c7');
+      if (!this.power('blink', POWER.blinkCost)) return;
+      this.session.issue({ t: 'blink', p: this.human, units: [...this.selection.units], x: wx, y: wy });
+    } else {
+      const n = this.nestAt(wx, wy, 1.6);
+      if (!n || n.owner < 0 || n.owner === NEUTRAL || !this.world.hostile(n.owner, this.human)) {
+        return this.s.toast('Lockdown needs an enemy nest under the cursor', '#9aa4c7');
+      }
+      if (!this.power('lockdown', POWER.lockdownCost)) return;
+      this.session.issue({ t: 'lockdown', p: this.human, nest: n.id });
+    }
+  }
+
+  /** HUD button: Fortify fires at once; the others wait for a click. */
+  startAim(power: NestPower): void {
+    if (power === 'fortify') return this.fortify();
+    if (!this.canUse(power)) return void this.power(power, 0);
+    this.aim = this.aim === power ? null : power;
+  }
+
+  private isNearMine(x: number, y: number, r: number): boolean {
+    const w = this.world;
+    for (let i = 0; i < w.n; i++) {
+      if (w.alive[i] && w.owner[i] === this.human && (w.x[i] - x) ** 2 + (w.y[i] - y) ** 2 < r * r) return true;
+    }
+    return false;
+  }
+
   upgrade(): void {
     const ids = [...this.selection.nests].filter((id) => {
       const n = this.world.nests[id];
@@ -299,6 +547,34 @@ export class GameView {
       if (n && n.level < MAX_LEVEL) return { nest: n, cost: UPGRADE_COST[n.level] - n.feedProgress - n.feedIncoming };
     }
     return null;
+  }
+
+  /**
+   * Unit mix the counter wheel should explain: an enemy group under the
+   * cursor if there is one, else your selection.
+   */
+  focusMix(pickRadius: number): { enemy: boolean; counts: number[] } | null {
+    const w = this.world;
+    const cur = this.cursor;
+    if (cur) {
+      const counts = [0, 0, 0, 0];
+      let n = 0;
+      const r2 = (pickRadius * 2) ** 2;
+      for (let i = 0; i < w.n; i++) {
+        if (!w.alive[i] || w.owner[i] === NEUTRAL || !w.hostile(w.owner[i], this.human)) continue;
+        if ((w.x[i] - cur[0]) ** 2 + (w.y[i] - cur[1]) ** 2 > r2) continue;
+        counts[w.kind[i]]++;
+        n++;
+      }
+      if (n >= 3) return { enemy: true, counts };
+    }
+    if (!this.selection.units.size) return null;
+    const counts = [0, 0, 0, 0];
+    for (const u of this.selection.units) {
+      const s = w.uidToSlot.get(u);
+      if (s !== undefined) counts[w.kind[s]]++;
+    }
+    return { enemy: false, counts };
   }
 
   homePoint(): [number, number] {

@@ -1,4 +1,4 @@
-import { MAX_LEVEL, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from './constants';
+import { MAX_LEVEL, NEUTRAL, POWER, POWER_NEST, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, type NestPower } from './constants';
 import { clamp } from './mathx';
 import { queryRadius } from './spatial';
 import { pushFx, removeUnit, UNIT_FEEDING, type World } from './world';
@@ -13,7 +13,18 @@ export type Command =
   | { t: 'rally'; p: number; nests: number[]; x: number; y: number }
   | { t: 'upgrade'; p: number; nest: number }
   | { t: 'surge'; p: number; units: number[] }
-  | { t: 'nova'; p: number; units: number[] };
+  | { t: 'nova'; p: number; units: number[] }
+  | { t: 'fortify'; p: number; units: number[] }
+  | { t: 'barrage'; p: number; x: number; y: number }
+  | { t: 'blink'; p: number; units: number[]; x: number; y: number }
+  | { t: 'lockdown'; p: number; nest: number };
+
+/** True if p holds (fully controls) a nest that grants this power. */
+export function hasPower(w: World, p: number, power: NestPower): boolean {
+  const type = POWER_NEST[power];
+  for (const n of w.nests) if (n.owner === p && n.type === type && n.control >= 1) return true;
+  return false;
+}
 
 const scratch: number[] = [];
 
@@ -120,7 +131,7 @@ export function applyCommand(w: World, c: Command): void {
       if (slots.length < 4) return;
       f.energy -= POWER.novaCost;
       const [cx, cy] = centroid(w, slots);
-      const R = Math.min(175, 64 + Math.sqrt(slots.length) * 7.5);
+      const R = Math.min(140, 70 + Math.sqrt(slots.length) * 5);
 
       // Sacrifice the units closest to the center.
       const d2 = (s: number) => (w.x[s] - cx) ** 2 + (w.y[s] - cy) ** 2;
@@ -145,6 +156,62 @@ export function applyCommand(w: World, c: Command): void {
         w.vy[j] += (dy / d) * POWER.novaKnock * fall;
       }
       pushFx(w, 'nova', cx, cy, c.p, R);
+      return;
+    }
+
+    case 'fortify': {
+      if (f.energy < POWER.fortifyCost || !hasPower(w, c.p, 'fortify')) return;
+      const slots = resolve(w, c.p, c.units);
+      if (slots.length === 0) return;
+      f.energy -= POWER.fortifyCost;
+      const until = w.tick + POWER.fortifyTicks;
+      for (const s of slots) w.fortify[s] = until;
+      const [cx, cy] = centroid(w, slots);
+      pushFx(w, 'fortify', cx, cy, c.p, groupArrive(slots.length) + 14);
+      return;
+    }
+
+    case 'barrage': {
+      if (f.energy < POWER.barrageCost || !hasPower(w, c.p, 'barrage')) return;
+      f.energy -= POWER.barrageCost;
+      const x = clamp(c.x, 0, w.width), y = clamp(c.y, 0, w.height);
+      w.barrages.push({ x, y, owner: c.p, impact: w.tick + POWER.barrageDelay });
+      pushFx(w, 'barrage', x, y, c.p, POWER.barrageRadius);
+      return;
+    }
+
+    case 'blink': {
+      if (f.energy < POWER.blinkCost || !hasPower(w, c.p, 'blink')) return;
+      const slots = resolve(w, c.p, c.units);
+      if (slots.length === 0) return;
+      f.energy -= POWER.blinkCost;
+      const [cx, cy] = centroid(w, slots);
+      let dx = c.x - cx, dy = c.y - cy;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > POWER.blinkRange) {
+        dx *= POWER.blinkRange / d;
+        dy *= POWER.blinkRange / d;
+      }
+      const ar = groupArrive(slots.length);
+      for (const s of slots) {
+        const nx = clamp(w.x[s] + dx, 2, w.width - 2), ny = clamp(w.y[s] + dy, 2, w.height - 2);
+        w.x[s] = w.px[s] = nx;
+        w.y[s] = w.py[s] = ny;
+        w.ox[s] = cx + dx;
+        w.oy[s] = cy + dy;
+        w.arrive[s] = ar;
+      }
+      pushFx(w, 'blink', cx + dx, cy + dy, c.p, ar + 10, -1, -1, cx, cy);
+      return;
+    }
+
+    case 'lockdown': {
+      if (f.energy < POWER.lockdownCost || !hasPower(w, c.p, 'lockdown')) return;
+      const n = w.nests[c.nest];
+      if (!n || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, c.p)) return;
+      f.energy -= POWER.lockdownCost;
+      n.lockedUntil = w.tick + POWER.lockdownTicks;
+      pushFx(w, 'lockdown', n.x, n.y, c.p, n.r, n.id, n.owner);
       return;
     }
   }

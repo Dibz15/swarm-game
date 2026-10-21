@@ -24,6 +24,8 @@ export interface Nest {
   lastSpawn: number;
   /** true while hostile units stand on it */
   contested: boolean;
+  /** tick until which a Lockdown stops spawning and control recovery */
+  lockedUntil: number;
   /** a player's starting nest: built-in turret + stronger home armor */
   capital: boolean;
 }
@@ -57,7 +59,12 @@ export type FxType =
   | 'upgradeFail'
   | 'eliminated'
   | 'absorb'
-  | 'escalation';
+  | 'escalation'
+  | 'fortify'
+  | 'barrage'
+  | 'barrageHit'
+  | 'blink'
+  | 'lockdown';
 
 export interface FxEvent {
   type: FxType;
@@ -69,6 +76,17 @@ export interface FxEvent {
   nest: number;
   /** previous owner, for capture/neutralize */
   prev: number;
+  /** origin, for blink */
+  x0: number;
+  y0: number;
+}
+
+export interface Barrage {
+  x: number;
+  y: number;
+  owner: number;
+  /** tick the strike lands */
+  impact: number;
 }
 
 export const UNIT_FEEDING = 1;
@@ -116,6 +134,15 @@ export class World {
   readonly tgtUid = new Uint32Array(MAX_UNITS);
   /** tick until which the unit is surged */
   readonly surge = new Int32Array(MAX_UNITS);
+  /** tick until which the unit is fortified */
+  readonly fortify = new Int32Array(MAX_UNITS);
+  /** last unit that hit this one (slot + uid), for retaliation */
+  readonly attacker = new Int32Array(MAX_UNITS);
+  readonly attackerUid = new Uint32Array(MAX_UNITS);
+  /** last tick this unit alerted its neighbors (rate limit) */
+  readonly alertTick = new Int32Array(MAX_UNITS);
+  /** nearby friendly Dots last tick (pack bonus) */
+  readonly pack = new Uint8Array(MAX_UNITS);
 
   readonly free: number[] = [];
   readonly uidToSlot = new Map<number, number>();
@@ -133,6 +160,8 @@ export class World {
   /** x, y, owner triples; drained by the client */
   deaths: number[] = [];
   fx: FxEvent[] = [];
+  /** pending Barrage strikes */
+  barrages: Barrage[] = [];
 
   /** share of nests a team must hold for DOMINATION.ticks to win */
   domShare = 0.7;
@@ -210,6 +239,11 @@ export function spawnUnit(
   w.tgt[i] = -1;
   w.tgtUid[i] = 0;
   w.surge[i] = 0;
+  w.fortify[i] = 0;
+  w.pack[i] = 0;
+  w.attacker[i] = -1;
+  w.attackerUid[i] = 0;
+  w.alertTick[i] = -1000;
   const uid = w.nextUid++;
   w.uid[i] = uid;
   w.uidToSlot.set(uid, i);
@@ -241,6 +275,8 @@ export function pushFx(
   r = 0,
   nest = -1,
   prev = -1,
+  x0 = 0,
+  y0 = 0,
 ): void {
-  w.fx.push({ type, x, y, f, r, nest, prev });
+  w.fx.push({ type, x, y, f, r, nest, prev, x0, y0 });
 }

@@ -10,6 +10,8 @@ import {
   LEVEL_SPAWN_MULT,
   NEST_KIND,
   NEST_SPAWN_MULT,
+  Kind,
+  TRAITS,
   NEUTRAL,
   NUM_FACTIONS,
   NestType,
@@ -69,7 +71,8 @@ function updateControl(w: World, n: Nest): void {
   queryRadius(w, n.x, n.y, n.r, scratch);
   for (const s of scratch) {
     if (w.state[s] === UNIT_FEEDING) continue;
-    counts[w.owner[s]]++;
+    // Swifts are raiders: they capture and drain nests several times faster.
+    counts[w.owner[s]] += w.kind[s] === Kind.Swift ? TRAITS.raidCapture : 1;
   }
 
   // Which teams are standing on the nest, and which faction leads each?
@@ -97,8 +100,8 @@ function updateControl(w: World, n: Nest): void {
 
   if (teamA === -1) {
     // Nobody here: owned nests recover, unowned ones decay.
-    if (n.owner >= 0) n.control = Math.min(1, n.control + DT * 0.08);
-    else n.control = Math.max(0, n.control - DT * 0.08);
+    if (n.owner < 0) n.control = Math.max(0, n.control - DT * 0.08);
+    else if (n.lockedUntil <= w.tick) n.control = Math.min(1, n.control + DT * 0.08);
     return;
   }
 
@@ -107,7 +110,7 @@ function updateControl(w: World, n: Nest): void {
 
   const rate = captureRate(totalA, n.level);
   if (n.owner >= 0 && teamA === ownerTeam) {
-    n.control = Math.min(1, n.control + rate);
+    if (n.lockedUntil <= w.tick) n.control = Math.min(1, n.control + rate);
     return;
   }
 
@@ -151,7 +154,7 @@ function updateControl(w: World, n: Nest): void {
 }
 
 function spawn(w: World, n: Nest): void {
-  if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1 || n.contested) return;
+  if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1 || n.contested || n.lockedUntil > w.tick) return;
   const kind = NEST_KIND[n.type];
   if (kind < 0) return;
   if (w.unitCount[n.owner] >= FACTION_UNIT_CAP) return;

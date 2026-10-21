@@ -61,6 +61,7 @@ export function createWorld(setup: MatchSetup): World {
       feedIncoming: 0,
       lastSpawn: -100,
       contested: false,
+      lockedUntil: 0,
       capital: s.player >= 0,
     });
 

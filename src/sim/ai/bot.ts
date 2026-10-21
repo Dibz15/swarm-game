@@ -1,5 +1,5 @@
-import { MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
-import { applyCommand, type Command } from '../commands';
+import { Kind, MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
+import { applyCommand, hasPower, type Command } from '../commands';
 import { Rng } from '../rng';
 import { queryRadius } from '../spatial';
 import { UNIT_FEEDING, type Nest, type World } from '../world';
@@ -67,6 +67,9 @@ const scratch: number[] = [];
  * so aggressive personalities don't bleed out before they have an economy.
  */
 const OPENING = { ticks: 90 * 30, neutral: 1.6, enemy: 0.35 };
+
+/** Energy bots keep banked for a Nova once their army is this big. */
+const NOVA_RESERVE = { minArmy: 30, energy: 25 };
 
 /** When bots start ganging up on the leader. */
 const RUNAWAY = {
@@ -241,6 +244,24 @@ export class Bot {
     // Opening: everyone builds an economy first; personalities show after.
     const opening = w.tick < OPENING.ticks;
 
+    // Counter-picking: value the nest type that beats what rivals are fielding
+    // (Spire vs Tanks, Forge vs Dots, Hive vs Lancers).
+    const mix = [0, 0, 0, 0];
+    let mixTotal = 0;
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.owner[i] === NEUTRAL || w.teamOf[w.owner[i]] === myTeam) continue;
+      mix[w.kind[i]]++;
+      mixTotal++;
+    }
+    const share = (k: number) => (mixTotal > 20 ? mix[k] / mixTotal : 0);
+    const counterBonus = [
+      1 + 1.2 * share(Kind.Lancer), // Hive (Dots) beats Lancers
+      1 + 1.2 * share(Kind.Dot), // Forge (Tanks) beats Dots
+      1 + 1.2 * share(Kind.Tank), // Spire (Lancers) beats Tanks
+      1,
+      1,
+    ];
+
     let best: Nest | null = null;
     let bestScore = -Infinity;
     let bestNeed = 0;
@@ -255,6 +276,7 @@ export class Bot {
       const def = hostile[n.id];
       let value = n.type === NestType.Bastion ? 0.95 * this.p.bastion : n.type === NestType.Hive ? 1 : 1.1;
       value *= 0.6 + 0.4 * n.level;
+      value *= counterBonus[n.type];
       let margin = this.d.margin * this.p.margin;
       if (n.owner === NEUTRAL || n.owner < 0) value *= opening ? Math.max(this.p.neutral, OPENING.neutral) : this.p.neutral;
       else {
@@ -295,7 +317,9 @@ export class Bot {
     }
     if (best && available >= bestNeed) {
       this.focus = best.id;
-      send(take(best.x, best.y, Math.min(available, bestNeed * 1.6 + 8), 1e9), best);
+      const group = take(best.x, best.y, Math.min(available, bestNeed * 1.6 + 8), 1e9);
+      send(group, best);
+      if (this.d.powers && group.length > 0) this.supportAttack(w, group, best);
     }
 
     // Rally: easy bots idle new spawns at home; better bots stream them to
@@ -339,6 +363,42 @@ export class Bot {
     if (this.d.powers && fa.energy >= POWER.surgeCost) this.usePowers(w);
   }
 
+  /**
+   * Can we spend `cost` energy and still keep the Nova reserve? Once a bot's
+   * army is big enough for a Nova to matter, other powers leave some energy
+   * banked so it can reach a Nova when a big brawl starts.
+   */
+  private spendable(w: World, cost: number): boolean {
+    const reserve = w.unitCount[this.faction] >= NOVA_RESERVE.minArmy ? NOVA_RESERVE.energy : 0;
+    return w.factions[this.faction].energy >= cost + reserve;
+  }
+
+  /** Powers that help an attack just launched: Lockdown the target, Blink to close distance. */
+  private supportAttack(w: World, group: number[], target: Nest): void {
+    const me = this.faction;
+    const fa = w.factions[me];
+    const enemyNest = target.owner >= 0 && target.owner !== NEUTRAL;
+    if (enemyNest && this.spendable(w, POWER.lockdownCost + 10) && hasPower(w, me, 'lockdown')) {
+      this.issue(w, { t: 'lockdown', p: me, nest: target.id });
+      return;
+    }
+    if (this.spendable(w, POWER.blinkCost + 15) && group.length >= 8 && hasPower(w, me, 'blink')) {
+      let cx = 0, cy = 0;
+      for (const s of group) {
+        cx += w.x[s];
+        cy += w.y[s];
+      }
+      cx /= group.length;
+      cy /= group.length;
+      // Only worth it for long trips; land short of the nest, not on its turret.
+      const d = Math.hypot(target.x - cx, target.y - cy);
+      if (d > POWER.blinkRange + 120) {
+        const k = POWER.blinkRange / d;
+        this.issue(w, { t: 'blink', p: me, units: group.map((s) => w.uid[s]), x: cx + (target.x - cx) * k, y: cy + (target.y - cy) * k });
+      }
+    }
+  }
+
   private usePowers(w: World): void {
     const me = this.faction;
     const fa = w.factions[me];
@@ -361,12 +421,52 @@ export class Bot {
     queryRadius(w, w.x[bestC], w.y[bestC], 75, scratch);
     const own = scratch.filter((s) => w.owner[s] === me && w.state[s] !== UNIT_FEEDING);
     const uids = own.map((s) => w.uid[s]);
-    if (fa.energy >= POWER.novaCost && bestH >= 16 && own.length >= 10) {
+    // Where are the two sides in this fight?
+    let ox = 0, oy = 0;
+    for (const s of own) {
+      ox += w.x[s];
+      oy += w.y[s];
+    }
+    queryRadius(w, w.x[bestC], w.y[bestC], 90, scratch);
+    let ex = 0, ey = 0, ne = 0;
+    for (const s of scratch) {
+      if (!w.hostile(w.owner[s], me)) continue;
+      ex += w.x[s];
+      ey += w.y[s];
+      ne++;
+    }
+    const brawl = own.length >= 12 && bestH >= 16;
+
+    // Nova is the answer to a big brawl right on top of us.
+    if (brawl && fa.energy >= POWER.novaCost) {
       this.issue(w, { t: 'nova', p: me, units: uids });
+      return;
+    }
+    // Barrage is artillery: for enemies massed apart from our own troops
+    // (standing off or dug in), or, when energy allows, smaller fights.
+    if (ne >= 12 && fa.energy >= POWER.barrageCost && hasPower(w, me, 'barrage')) {
+      const apart = own.length === 0 || Math.hypot(ex / ne - ox / own.length, ey / ne - oy / own.length) > 45;
+      // In small skirmishes keep a cushion so energy can still build to a Nova.
+      if (apart ? this.spendable(w, POWER.barrageCost) : !brawl && this.spendable(w, POWER.barrageCost + 20)) {
+        this.issue(w, { t: 'barrage', p: me, x: ex / ne, y: ey / ne });
+        return;
+      }
+    }
+    // In a brawl, save energy toward Nova rather than spending it piecemeal;
+    // only dig in if badly outnumbered. Rushers can't help themselves.
+    if (brawl && !this.p.eagerSurge) {
+      if (bestH > own.length * 1.5 && this.spendable(w, POWER.fortifyCost) && hasPower(w, me, 'fortify')) {
+        this.issue(w, { t: 'fortify', p: me, units: uids });
+      }
+      return;
+    }
+    if (this.spendable(w, POWER.fortifyCost) && bestH >= 10 && own.length >= 8 && hasPower(w, me, 'fortify') && (this.cfg.personality === 'turtler' || bestH > own.length)) {
+      // Dig in when outnumbered (Turtlers always like to).
+      this.issue(w, { t: 'fortify', p: me, units: uids });
     } else if (this.p.eagerSurge && bestH >= 6 && own.length >= 6) {
       // Rushers spend energy on Surge the moment a fight starts.
       this.issue(w, { t: 'surge', p: me, units: uids });
-    } else if (bestH >= 10 && own.length >= 10 && fa.energy >= POWER.surgeCost + (this.cfg.difficulty >= 2 ? 25 : 0)) {
+    } else if (bestH >= 10 && own.length >= 10 && this.spendable(w, POWER.surgeCost + (this.cfg.difficulty >= 2 ? 25 : 0))) {
       this.issue(w, { t: 'surge', p: me, units: uids });
     }
   }
