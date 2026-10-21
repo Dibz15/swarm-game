@@ -5,7 +5,8 @@ import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
-import { MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, UNIT_FEEDING, UPGRADE_COST, type MatchSetup } from '../sim/index';
+import { MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, UNIT_FEEDING, UPGRADE_COST, type MatchSetup, type NestPower } from '../sim/index';
+import { hasPower } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { LocalSession } from './session';
 
@@ -26,6 +27,10 @@ export class GameView {
   readonly human: number;
   readonly selection = new Selection();
   hoverNest = -1;
+  /** a targeted power waiting for a click (touch / HUD buttons) */
+  aim: NestPower | null = null;
+  /** world position under the cursor, for previews and key casts */
+  cursor: [number, number] | null = null;
   /** paint-select brush shown at the cursor while S is held */
   brush: { x: number; y: number; r: number } | null = null;
   result: MatchResult | null = null;
@@ -88,9 +93,39 @@ export class GameView {
       hoverNest: this.hoverNest,
       human: this.human,
     });
+    this.drawAim();
     if (this.brush) {
       const b = this.brush;
       this.s.renderer.shape(true, b.x, b.y, b.r, 0, 1, 0, 1.5 / b.r, WHITE, 120);
+    }
+  }
+
+  private drawAim(): void {
+    const power = this.aim;
+    const cur = this.cursor;
+    if (!power || !cur) return;
+    const r = this.s.renderer;
+    const c = FACTION_RGB[this.human];
+    if (power === 'barrage') {
+      r.shape(true, cur[0], cur[1], POWER.barrageRadius, 0, 1, 0, 0.03, c, 200);
+      r.shape(true, cur[0], cur[1], POWER.barrageRadius, 7, 1, 0, 0, c, 40);
+    } else if (power === 'blink') {
+      const from = this.selectionCenter();
+      if (!from) return;
+      let dx = cur[0] - from[0], dy = cur[1] - from[1];
+      const d = Math.hypot(dx, dy);
+      if (d > POWER.blinkRange) {
+        dx *= POWER.blinkRange / d;
+        dy *= POWER.blinkRange / d;
+      }
+      r.shape(true, from[0], from[1], POWER.blinkRange, 0, 1, 0, 0.01, c, 90);
+      r.beam(from[0], from[1], from[0] + dx, from[1] + dy, c[0], c[1], c[2], 160, 1.5);
+      r.shape(true, from[0] + dx, from[1] + dy, 16, 0, 1, 0, 0.12, WHITE, 220);
+    } else if (power === 'lockdown') {
+      const n = this.nestAt(cur[0], cur[1], 1.6);
+      const ok = n && n.owner >= 0 && n.owner !== NEUTRAL && this.world.hostile(n.owner, this.human);
+      if (n) r.shape(true, n.x, n.y, n.r * 1.6, 0, 1, 0, 0.06, ok ? WHITE : [255, 93, 115], 220);
+      else r.shape(true, cur[0], cur[1], 14, 0, 1, 0, 0.1, [255, 93, 115], 160);
     }
   }
 
@@ -144,6 +179,35 @@ export class GameView {
         case 'surge':
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 1.4, dur: 0.5, c, thick: 2 });
           sfx.surge(e.x, e.y, e.f === this.human);
+          break;
+        case 'fortify':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 1.3, r1: e.r * 0.8, dur: 0.45, c: WHITE, thick: 3 });
+          sfx.fortify(e.x, e.y, e.f === this.human);
+          break;
+        case 'barrage':
+          sfx.barrageCast(e.x, e.y);
+          if (e.f !== this.human && this.isNearMine(e.x, e.y, e.r * 1.5)) toast('Incoming Barrage! Move out', '#ff5d73');
+          break;
+        case 'barrageHit': {
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.2, r1: e.r * 1.1, dur: 0.5, c: WHITE, thick: 4 });
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.5, r1: e.r, dur: 0.3, c, thick: 0, disc: true });
+          particles.burst(e.x, e.y, c, 40, e.r * 2, 2.6, 0.7);
+          const [sx, sy] = camera.toScreen(e.x, e.y);
+          if (sx > -100 && sy > -100 && sx < camera.viewW + 100 && sy < camera.viewH + 100) camera.shake = Math.min(1, camera.shake + 0.35);
+          sfx.barrageHit(e.x, e.y, e.f === this.human);
+          break;
+        }
+        case 'blink':
+          particles.burst(e.x0, e.y0, c, 30, 90, 2.2, 0.5);
+          particles.burst(e.x, e.y, c, 30, 90, 2.2, 0.5);
+          rings.add({ x: e.x0, y: e.y0, r0: e.r, r1: 4, dur: 0.3, c, thick: 2 });
+          rings.add({ x: e.x, y: e.y, r0: 4, r1: e.r * 1.3, dur: 0.4, c, thick: 2 });
+          sfx.blink(e.x0, e.y0, e.x, e.y, e.f === this.human);
+          break;
+        case 'lockdown':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r * 1.2, dur: 0.5, c: WHITE, thick: 3 });
+          sfx.lockdown(e.x, e.y, e.f === this.human || e.prev === this.human);
+          if (e.prev === this.human) toast(`Your ${NEST_NAMES[nest.type]} is locked down`, '#ff5d73');
           break;
         case 'upgradeFail':
           if (e.f === this.human) {
@@ -281,6 +345,64 @@ export class GameView {
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');
     if (this.world.factions[this.human].energy < POWER.novaCost) return this.s.sfx.fail();
     this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
+  }
+
+  canUse(power: NestPower): boolean {
+    return hasPower(this.world, this.human, power);
+  }
+
+  private power(power: NestPower, cost: number): boolean {
+    if (!this.canUse(power)) {
+      this.s.toast(`Hold a ${NEST_NAMES[{ fortify: 1, barrage: 2, blink: 3, lockdown: 4 }[power]]} to use this`, '#9aa4c7');
+      return false;
+    }
+    if (this.world.factions[this.human].energy < cost) {
+      this.s.sfx.fail();
+      return false;
+    }
+    return true;
+  }
+
+  fortify(): void {
+    if (!this.selection.units.size) return this.s.toast('Select dots first, then Fortify', '#9aa4c7');
+    if (!this.power('fortify', POWER.fortifyCost)) return;
+    this.session.issue({ t: 'fortify', p: this.human, units: [...this.selection.units] });
+  }
+
+  /** Targeted powers: cast at a world point. */
+  castAt(power: NestPower, wx: number, wy: number): void {
+    this.aim = null;
+    if (power === 'fortify') return this.fortify();
+    if (power === 'barrage') {
+      if (!this.power('barrage', POWER.barrageCost)) return;
+      this.session.issue({ t: 'barrage', p: this.human, x: wx, y: wy });
+    } else if (power === 'blink') {
+      if (!this.selection.units.size) return this.s.toast('Select dots first, then Blink', '#9aa4c7');
+      if (!this.power('blink', POWER.blinkCost)) return;
+      this.session.issue({ t: 'blink', p: this.human, units: [...this.selection.units], x: wx, y: wy });
+    } else {
+      const n = this.nestAt(wx, wy, 1.6);
+      if (!n || n.owner < 0 || n.owner === NEUTRAL || !this.world.hostile(n.owner, this.human)) {
+        return this.s.toast('Lockdown needs an enemy nest under the cursor', '#9aa4c7');
+      }
+      if (!this.power('lockdown', POWER.lockdownCost)) return;
+      this.session.issue({ t: 'lockdown', p: this.human, nest: n.id });
+    }
+  }
+
+  /** HUD button: Fortify fires at once; the others wait for a click. */
+  startAim(power: NestPower): void {
+    if (power === 'fortify') return this.fortify();
+    if (!this.canUse(power)) return void this.power(power, 0);
+    this.aim = this.aim === power ? null : power;
+  }
+
+  private isNearMine(x: number, y: number, r: number): boolean {
+    const w = this.world;
+    for (let i = 0; i < w.n; i++) {
+      if (w.alive[i] && w.owner[i] === this.human && (w.x[i] - x) ** 2 + (w.y[i] - y) ** 2 < r * r) return true;
+    }
+    return false;
   }
 
   upgrade(): void {

@@ -1,9 +1,16 @@
-import { AGGRO_EXTRA, DT, ENERGY, NEUTRAL, POWER, RETARGET, UNIT_STATS } from './constants';
+import { AGGRO_EXTRA, ALERT_EVERY, ALERT_RADIUS, DAMAGE_VS, RETALIATE_EXTRA, DT, ENERGY, Kind, NEUTRAL, POWER, RETARGET, TRAITS, UNIT_STATS } from './constants';
+import { queryRadius } from './spatial';
 import { removeUnit, type World } from './world';
 
 const MAX_SCAN = 420;
 
-/** Nearest hostile unit within radius, or -1. Scan is capped for dense blobs. */
+const TAUNT2 = TRAITS.taunt * TRAITS.taunt;
+const pierceScratch: number[] = [];
+
+/**
+ * Nearest hostile unit within radius, or -1. Tanks draw fire: they count as
+ * closer than they are. Scan is capped for dense blobs.
+ */
 function findTarget(w: World, i: number, radius: number): number {
   const g = w.grid;
   const x = w.x[i], y = w.y[i];
@@ -20,7 +27,9 @@ function findTarget(w: World, i: number, radius: number): number {
         const j = g.items[k];
         if (w.teamOf[w.owner[j]] === myTeam || !w.alive[j]) continue;
         const dx = w.x[j] - x, dy = w.y[j] - y;
-        const d = dx * dx + dy * dy;
+        const raw = dx * dx + dy * dy;
+        if (raw > radius * radius) continue;
+        const d = w.kind[j] === Kind.Tank ? raw * TAUNT2 : raw;
         if (d < bestD) {
           bestD = d;
           best = j;
@@ -41,16 +50,27 @@ export function updateCombat(w: World): void {
     const st = UNIT_STATS[w.kind[i]];
     const aggro = st.range + AGGRO_EXTRA;
 
+    // Targets stay valid a little past notice range, so a unit can keep
+    // answering an attacker that outranges it.
+    const reach = aggro + RETALIATE_EXTRA;
     let t = w.tgt[i];
     let valid = t >= 0 && w.alive[t] === 1 && w.uid[t] === w.tgtUid[i];
     let d2 = 0;
     if (valid) {
       const dx = w.x[t] - w.x[i], dy = w.y[t] - w.y[i];
       d2 = dx * dx + dy * dy;
-      if (d2 > aggro * aggro) valid = false;
+      if (d2 > reach * reach) valid = false;
     }
     if (!valid || i % RETARGET === phase) {
-      const nt = findTarget(w, i, aggro);
+      let nt = findTarget(w, i, aggro);
+      if (nt < 0) {
+        // Nothing in sight: turn on whoever shot us, if they're close enough.
+        const a = w.attacker[i];
+        if (a >= 0 && w.alive[a] && w.uid[a] === w.attackerUid[i]) {
+          const ax = w.x[a] - w.x[i], ay = w.y[a] - w.y[i];
+          if (ax * ax + ay * ay <= reach * reach) nt = a;
+        }
+      }
       if (nt !== t) {
         t = nt;
         w.tgt[i] = t;
@@ -62,14 +82,48 @@ export function updateCombat(w: World): void {
     }
 
     if (d2 <= st.range * st.range) {
-      const mult = w.surge[i] > w.tick ? POWER.surgeDmg : 1;
-      w.dmg[t] += st.dps * mult * DT;
+      const k = w.kind[i];
+      let mult = (w.surge[i] > w.tick ? POWER.surgeDmg : 1) * DAMAGE_VS[k][w.kind[t]];
+      if (k === Kind.Dot) mult *= 1 + Math.min(TRAITS.pack.max, w.pack[i] * TRAITS.pack.perAlly);
+      const dmg = st.dps * mult * DT;
+      w.dmg[t] += dmg;
       w.lastHit[t] = w.owner[i];
+      w.attacker[t] = i;
+      w.attackerUid[t] = w.uid[i];
+      if (w.tick - w.alertTick[t] >= ALERT_EVERY) alert(w, t, i);
+      if (k === Kind.Lancer) pierce(w, i, t, st.dps * DT);
       w.engaged[i] = 1;
       const b = w.beamCount++ * 2;
       w.beams[b] = i;
       w.beams[b + 1] = t;
     }
+  }
+}
+
+const alertScratch: number[] = [];
+
+/** Victim t calls for help: idle allies nearby turn on attacker a. */
+function alert(w: World, t: number, a: number): void {
+  w.alertTick[t] = w.tick;
+  queryRadius(w, w.x[t], w.y[t], ALERT_RADIUS, alertScratch);
+  const team = w.teamOf[w.owner[t]];
+  for (const j of alertScratch) {
+    if (w.teamOf[w.owner[j]] !== team || w.engaged[j]) continue;
+    w.attacker[j] = a;
+    w.attackerUid[j] = w.uid[a];
+  }
+}
+
+/** Lancer shots splash onto a few enemies packed around the target. */
+function pierce(w: World, i: number, t: number, base: number): void {
+  queryRadius(w, w.x[t], w.y[t], TRAITS.pierce.radius, pierceScratch);
+  let hit = 0;
+  const owner = w.owner[i];
+  for (const j of pierceScratch) {
+    if (j === t || !w.hostile(w.owner[j], owner)) continue;
+    w.dmg[j] += base * TRAITS.pierce.damage * DAMAGE_VS[Kind.Lancer][w.kind[j]];
+    w.lastHit[j] = owner;
+    if (++hit >= TRAITS.pierce.extra) break;
   }
 }
 
@@ -79,7 +133,8 @@ export function resolveDamage(w: World): void {
   for (let i = 0; i < n; i++) {
     if (!w.alive[i] || w.dmg[i] === 0) continue;
     const surged = w.surge[i] > w.tick ? POWER.surgeArmor : 1;
-    w.hp[i] -= w.dmg[i] * w.armor[i] * surged;
+    const fortified = w.fortify[i] > w.tick ? POWER.fortifyArmor : 1;
+    w.hp[i] -= w.dmg[i] * w.armor[i] * surged * fortified;
     w.dmg[i] = 0;
     if (w.hp[i] > 0) continue;
     const killer = w.lastHit[i];

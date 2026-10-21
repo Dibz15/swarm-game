@@ -149,6 +149,10 @@ class App {
       clear: () => this.game?.selection.clear(),
       pause: () => this.togglePause(),
       mute: () => this.toggleMute(),
+      fortify: () => this.game?.startAim('fortify'),
+      barrage: () => this.game?.startAim('barrage'),
+      blink: () => this.game?.startAim('blink'),
+      lockdown: () => this.game?.startAim('lockdown'),
     });
     this.hud.setMuted(this.sfx.muted);
     // Open on the player's home, zoomed in a little.

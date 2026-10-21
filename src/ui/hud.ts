@@ -1,6 +1,6 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
-import { DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
+import { type NestPower, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
@@ -9,8 +9,14 @@ const TIPS = [
   'Select a nest and press U to feed it dots and level it up.',
   'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
   'Hold 70% of the nests (60% on large maps) for 30 seconds to win by domination.',
-  'Ctrl+1–5 saves a control group. Press 1–5 to recall it. C centers the camera on your selection.',
+  'Ctrl+1–5 saves a control group. Press 1–5 to recall it. C centers the camera on your selection, 0 fits the map.',
+  'Each nest type you hold unlocks a power: Forge → Fortify (R), Spire → Barrage (F), Swift → Blink (G), Bastion → Lockdown (T).',
+  'Lancers beat Tanks, Tanks beat Dots, Dots beat Lancers. Swifts capture nests three times faster.',
 ];
+
+export type HudAction =
+  | 'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'pause' | 'mute'
+  | 'fortify' | 'barrage' | 'blink' | 'lockdown';
 
 export function formatTime(ticks: number): string {
   const s = Math.floor(ticks / TICK_HZ);
@@ -37,7 +43,7 @@ export class Hud {
 
   constructor(
     root: HTMLElement,
-    private readonly actions: Record<'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'pause' | 'mute', () => void>,
+    private readonly actions: Record<HudAction, () => void>,
   ) {
     this.el = document.createElement('div');
     this.el.className = 'hud';
@@ -62,6 +68,10 @@ export class Hud {
           <button data-a="all">All<kbd>Z</kbd></button>
           <button data-a="surge" class="power">Surge<kbd>Q</kbd><small>${POWER.surgeCost}</small></button>
           <button data-a="nova" class="power">Nova<kbd>E</kbd><small>${POWER.novaCost}</small></button>
+          <button data-a="fortify" class="power nest" title="Selected dots take half damage but move slower. From a Forge.">Fortify<kbd>R</kbd><small>${POWER.fortifyCost}</small></button>
+          <button data-a="barrage" class="power nest" title="Artillery strike at the cursor after a short warning. From a Spire.">Barrage<kbd>F</kbd><small>${POWER.barrageCost}</small></button>
+          <button data-a="blink" class="power nest" title="Teleport the selected dots toward the cursor. From a Swift nest.">Blink<kbd>G</kbd><small>${POWER.blinkCost}</small></button>
+          <button data-a="lockdown" class="power nest" title="Stop an enemy nest spawning for a while. From a Bastion.">Lockdown<kbd>T</kbd><small>${POWER.lockdownCost}</small></button>
           <button data-a="upgrade" style="display:none">Upgrade<kbd>U</kbd><small class="ucost"></small></button>
           <button data-a="clear" class="touch">✕</button>
         </div>
@@ -181,6 +191,21 @@ export class Hud {
     this.btn.surge.disabled = e < POWER.surgeCost || nUnits === 0;
     this.btn.nova.disabled = e < POWER.novaCost || nUnits < 4;
     this.btn.surge.classList.toggle('ready', e >= POWER.surgeCost);
+    // Nest powers only show while you hold the matching nest type.
+    const nestPowers: [NestPower, number, boolean][] = [
+      ['fortify', POWER.fortifyCost, nUnits > 0],
+      ['barrage', POWER.barrageCost, true],
+      ['blink', POWER.blinkCost, nUnits > 0],
+      ['lockdown', POWER.lockdownCost, true],
+    ];
+    for (const [p, cost, ok] of nestPowers) {
+      const b = this.btn[p];
+      const owned = g.canUse(p);
+      b.style.display = owned ? '' : 'none';
+      b.disabled = e < cost || !ok;
+      b.classList.toggle('ready', e >= cost);
+      b.classList.toggle('aiming', g.aim === p);
+    }
     this.btn.nova.classList.toggle('ready', e >= POWER.novaCost);
     const up = g.upgradeInfo();
     this.btn.upgrade.style.display = up ? '' : 'none';

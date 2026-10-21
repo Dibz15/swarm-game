@@ -29,12 +29,41 @@ export interface UnitStats {
 
 export const UNIT_STATS: readonly UnitStats[] = [
   { name: 'Dot', hp: 10, dps: 4, range: 22, speed: 40, size: 4.4, interval: 1.4, sep: 6.5, weight: 1 },
-  { name: 'Tank', hp: 34, dps: 4.5, range: 20, speed: 24, size: 6.6, interval: 3.4, sep: 9, weight: 3 },
+  { name: 'Tank', hp: 34, dps: 4.5, range: 20, speed: 28, size: 6.6, interval: 3.4, sep: 9, weight: 3 },
   { name: 'Lancer', hp: 8, dps: 4.4, range: 52, speed: 32, size: 4.2, interval: 2.2, sep: 6.5, weight: 1.4 },
   { name: 'Swift', hp: 6, dps: 3.2, range: 18, speed: 72, size: 3.6, interval: 0.9, sep: 5.5, weight: 0.65 },
 ];
+/**
+ * Rock-paper-scissors damage multipliers: DAMAGE_VS[attacker][target].
+ * Lancers beat Tanks, Tanks beat Dots, Dots beat Lancers; Swifts are raiders.
+ */
+export const DAMAGE_VS: readonly (readonly number[])[] = [
+  //  Dot  Tank Lancer Swift
+  [1.0, 0.6, 1.7, 1.0], // Dot
+  [1.4, 1.0, 0.8, 1.2], // Tank
+  [0.75, 1.2, 1.0, 0.8], // Lancer
+  [1.0, 0.5, 1.0, 1.0], // Swift
+];
+
+/** Signature traits, one per unit kind. */
+export const TRAITS = {
+  /** Dots: +perAlly damage per nearby friendly Dot, up to max */
+  pack: { radius: 22, perAlly: 0.07, max: 0.7 },
+  /** Tanks: enemies treat a Tank as this fraction of its real distance when picking targets */
+  taunt: 0.45,
+  /** Lancers: each shot also hits up to `extra` enemies within `radius` of the target */
+  pierce: { radius: 14, extra: 2, damage: 0.3 },
+  /** Swifts: count this many times when capturing or draining a nest */
+  raidCapture: 3,
+};
+
 /** units notice enemies this far beyond their attack range */
 export const AGGRO_EXTRA = 26;
+/** a unit shot from beyond its notice range turns on its attacker if it's within this much extra */
+export const RETALIATE_EXTRA = 60;
+/** when hit, a unit alerts idle allies this close, at most once per ALERT_EVERY ticks */
+export const ALERT_RADIUS = 60;
+export const ALERT_EVERY = 20;
 /** how far an idle unit will chase from its order point */
 export const LEASH = 90;
 /** each unit re-searches for the nearest enemy every RETARGET ticks (staggered) */
@@ -48,11 +77,11 @@ export const NEST_KIND: readonly number[] = [Kind.Dot, Kind.Tank, Kind.Lancer, K
 export const NEST_SPAWN_MULT: readonly number[] = [1, 1, 1, 1, 0.5];
 export const NEST_RADIUS: readonly number[] = [26, 28, 26, 24, 25];
 export const NEST_BLURB: readonly string[] = [
-  'Spawns standard dots.',
-  'Spawns slow, tough tanks.',
-  'Spawns long-range lancers.',
-  'Spawns fast, fragile swifts.',
-  'Spawns dots slowly. Fires a beam turret and shields nearby allies.',
+  'Spawns Dots: hit harder in packs. Beat Lancers, lose to Tanks.',
+  'Spawns Tanks: draw enemy fire. Beat Dots, lose to Lancers. Unlocks Fortify (R).',
+  'Spawns Lancers: long range, splash. Beat Tanks, lose to Dots. Unlocks Barrage (F).',
+  'Spawns Swifts: fast raiders, capture nests 3× faster. Unlocks Blink (G).',
+  'Spawns Dots slowly. Beam turret, shields nearby allies. Unlocks Lockdown (T).',
 ];
 export const MAX_LEVEL = 3;
 /** spawn speed multiplier by level (index = level) */
@@ -126,7 +155,29 @@ export const POWER = {
   novaDamage: 22,
   novaSacrifice: 0.2,
   novaKnock: 110,
+
+  // Nest-granted powers: available while you hold a nest of that type.
+  /** Forge: selected dots take less damage but move slower */
+  fortifyCost: 25,
+  fortifyTicks: 5 * TICK_HZ,
+  fortifyArmor: 0.5,
+  fortifySlow: 0.55,
+  /** Spire: telegraphed artillery strike at a point */
+  barrageCost: 40,
+  barrageDelay: Math.round(1.2 * TICK_HZ),
+  barrageRadius: 58,
+  barrageDamage: 20,
+  /** Swift: teleport the selected group toward a point */
+  blinkCost: 30,
+  blinkRange: 180,
+  /** Bastion: stop an enemy nest from spawning or recovering control */
+  lockdownCost: 35,
+  lockdownTicks: 8 * TICK_HZ,
 };
+
+/** Which nest type grants each power. */
+export const POWER_NEST = { fortify: 1, barrage: 2, blink: 3, lockdown: 4 } as const;
+export type NestPower = keyof typeof POWER_NEST;
 
 export const DOMINATION = {
   /** share of all nests a team must hold, by map size; large maps need less so endgames don't drag */

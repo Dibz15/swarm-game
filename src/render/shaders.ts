@@ -41,38 +41,60 @@ void main(){
 export const UNIT_VS = `#version 300 es
 layout(location=0) in vec2 a_q;
 layout(location=1) in vec3 a_i;   // x, y, size
-layout(location=2) in vec4 a_c;
+layout(location=2) in vec2 a_s;   // shape (+10 = fortified), heading angle
+layout(location=3) in vec4 a_c;
 uniform vec4 u_cam;
 uniform float u_px;
 out vec2 v_p;
+out vec2 v_s;
 out vec4 v_c;
 const float G = 2.6;
 void main(){
   float s = max(a_i.z, u_px * 2.4);
   vec2 wp = a_i.xy + a_q * s * 0.5 * G;
   v_p = a_q * G;
+  v_s = a_s;
   v_c = a_c;
   gl_Position = vec4((wp - u_cam.xy) * u_cam.zw, 0., 1.);
 }`;
 
+// Shapes: 0 Dot = filled square, 1 Tank = hollow square, 2 Lancer = long
+// diamond along its heading, 3 Swift = arrowhead along its heading.
 export const UNIT_FS = `#version 300 es
 precision mediump float;
 in vec2 v_p;
+in vec2 v_s;
 in vec4 v_c;
 out vec4 o;
 void main(){
-  float d = max(abs(v_p.x), abs(v_p.y));
+  float fort = step(9.5, v_s.x);
+  float shape = v_s.x - fort * 10.0;
+  vec2 p = v_p;
+  float ca = cos(v_s.y), sa = sin(v_s.y);
+  vec2 r = vec2(ca * p.x + sa * p.y, -sa * p.x + ca * p.y);
+  float sq = max(abs(p.x), abs(p.y));
+  float d = sq;
+  float inner = 1.0;
+  if (shape > 2.5) {
+    d = max(abs(r.y) * 1.8 + r.x, -r.x / 0.8);
+  } else if (shape > 1.5) {
+    d = abs(r.x) / 1.3 + abs(r.y) / 0.5;
+  } else if (shape > 0.5) {
+    inner = sq < 0.5 ? 0.22 : 1.0;
+  }
   float core = 1.0 - smoothstep(0.82, 1.08, d);
   float glow = exp(-(max(d, 1.0) - 1.0) * 1.7) * 0.13 * (1.0 - core);
+  float shield = fort * (smoothstep(1.32, 1.42, sq) - smoothstep(1.55, 1.68, sq)) * 0.9;
   vec3 c = v_c.rgb;
-  // premultiplied: core is opaque, glow is additive (alpha 0)
-  o = vec4((c * (core * 1.05 + glow)) * v_c.a, core * v_c.a);
+  // premultiplied: core is opaque, glow and shield are additive (alpha 0)
+  o = vec4((c * (core * 1.05 * inner + glow) + mix(c, vec3(1.0), 0.6) * shield) * v_c.a, core * v_c.a);
 }`;
 
 export const BEAM_VS = `#version 300 es
 layout(location=0) in vec2 a_q;
 layout(location=1) in vec4 a_ab;  // x1 y1 x2 y2
-layout(location=2) in vec4 a_c;
+layout(location=2) in float a_w;  // width in pixels
+layout(location=3) in vec4 a_c;
 uniform vec4 u_cam;
 uniform float u_px;
 out float v_v;
@@ -83,7 +105,7 @@ void main(){
   float L = max(length(d), 1e-4);
   vec2 nrm = vec2(-d.y, d.x) / L;
   float t = a_q.x * 0.5 + 0.5;
-  float wdt = u_px * 1.8;
+  float wdt = u_px * a_w;
   vec2 wp = mix(a, b, t) + nrm * a_q.y * wdt;
   v_v = a_q.y;
   v_c = a_c;

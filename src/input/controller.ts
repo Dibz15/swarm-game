@@ -99,8 +99,12 @@ export class InputController {
       return;
     }
     if (e.button === 2) {
-      const [wx, wy] = this.world(x, y);
-      this.game.commandAt(wx, wy);
+      // Right-click cancels a pending aim instead of ordering.
+      if (this.game.aim) this.game.aim = null;
+      else {
+        const [wx, wy] = this.world(x, y);
+        this.game.commandAt(wx, wy);
+      }
     } else if (e.button === 1) {
       this.panning = true;
       e.preventDefault();
@@ -207,6 +211,10 @@ export class InputController {
     if (this.boxing) return this.endBox(true, p, additive);
 
     const [wx, wy] = this.world(p.x, p.y);
+    if (this.game.aim) {
+      this.game.castAt(this.game.aim, wx, wy);
+      return;
+    }
     const now = performance.now();
     const dbl = now - this.lastClick.t < 320 && Math.hypot(p.x - this.lastClick.x, p.y - this.lastClick.y) < 20;
     this.lastClick = { t: now, x: p.x, y: p.y };
@@ -221,7 +229,9 @@ export class InputController {
   private tap(sx: number, sy: number): void {
     const g = this.game!;
     const [wx, wy] = this.world(sx, sy);
-    if (!g.selection.empty) {
+    if (g.aim) {
+      g.castAt(g.aim, wx, wy);
+    } else if (!g.selection.empty) {
       g.commandAt(wx, wy);
     } else {
       g.selectAt(wx, wy, this.pickRadius() * 1.6, false);
@@ -247,7 +257,8 @@ export class InputController {
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     const k = e.key.toLowerCase();
     if (k === 'escape') {
-      this.onPause();
+      if (this.game.aim) this.game.aim = null;
+      else this.onPause();
       return;
     }
     if (!this.enabled) return;
@@ -297,6 +308,18 @@ export class InputController {
       case 'u':
         g.upgrade();
         break;
+      // Nest-granted powers. Keys fire at the cursor; no cursor means aim mode.
+      case 'r':
+        g.fortify();
+        break;
+      case 'f':
+      case 'g':
+      case 't': {
+        const power = k === 'f' ? 'barrage' : k === 'g' ? 'blink' : 'lockdown';
+        if (g.cursor) g.castAt(power, g.cursor[0], g.cursor[1]);
+        else g.startAim(power);
+        break;
+      }
       case 'c':
         if (!this.centerOnSelection()) {
           const [x, y] = g.homePoint();
@@ -310,7 +333,7 @@ export class InputController {
         this.camera.cy = y;
         break;
       }
-      case 'f':
+      case '0':
         this.camera.fit();
         break;
     }
@@ -349,6 +372,7 @@ export class InputController {
 
     if (this.hoverPos) {
       const [wx, wy] = this.world(this.hoverPos[0], this.hoverPos[1]);
+      this.game.cursor = [wx, wy];
       if (this.painting && this.enabled) {
         const r = (34 * this.renderer.dpr) / this.camera.zoom;
         this.game.brush = { x: wx, y: wy, r };
