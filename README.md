@@ -9,6 +9,8 @@ npm test           # determinism, spatial, capture, upgrade, bot-FFA smoke test
 npm run build      # static site in dist/ — host anywhere (GitHub Pages, Netlify, S3…)
 ```
 
+CI: `.github/workflows/ci.yml` runs typecheck, tests and build on every push and PR. Pushes to `main` also publish `dist/` to GitHub Pages (Settings → Pages → Source must be "GitHub Actions").
+
 Balance tools (headless bot matches):
 
 ```bash
