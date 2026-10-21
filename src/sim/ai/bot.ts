@@ -68,6 +68,9 @@ const scratch: number[] = [];
  */
 const OPENING = { ticks: 90 * 30, neutral: 1.6, enemy: 0.35 };
 
+/** Energy bots keep banked for a Nova once their army is this big. */
+const NOVA_RESERVE = { minArmy: 30, energy: 25 };
+
 /** When bots start ganging up on the leader. */
 const RUNAWAY = {
   afterTicks: 100 * 30,
@@ -360,16 +363,26 @@ export class Bot {
     if (this.d.powers && fa.energy >= POWER.surgeCost) this.usePowers(w);
   }
 
+  /**
+   * Can we spend `cost` energy and still keep the Nova reserve? Once a bot's
+   * army is big enough for a Nova to matter, other powers leave some energy
+   * banked so it can reach a Nova when a big brawl starts.
+   */
+  private spendable(w: World, cost: number): boolean {
+    const reserve = w.unitCount[this.faction] >= NOVA_RESERVE.minArmy ? NOVA_RESERVE.energy : 0;
+    return w.factions[this.faction].energy >= cost + reserve;
+  }
+
   /** Powers that help an attack just launched: Lockdown the target, Blink to close distance. */
   private supportAttack(w: World, group: number[], target: Nest): void {
     const me = this.faction;
     const fa = w.factions[me];
     const enemyNest = target.owner >= 0 && target.owner !== NEUTRAL;
-    if (enemyNest && fa.energy >= POWER.lockdownCost + 10 && hasPower(w, me, 'lockdown')) {
+    if (enemyNest && this.spendable(w, POWER.lockdownCost + 10) && hasPower(w, me, 'lockdown')) {
       this.issue(w, { t: 'lockdown', p: me, nest: target.id });
       return;
     }
-    if (fa.energy >= POWER.blinkCost + 15 && group.length >= 8 && hasPower(w, me, 'blink')) {
+    if (this.spendable(w, POWER.blinkCost + 15) && group.length >= 8 && hasPower(w, me, 'blink')) {
       let cx = 0, cy = 0;
       for (const s of group) {
         cx += w.x[s];
@@ -408,31 +421,52 @@ export class Bot {
     queryRadius(w, w.x[bestC], w.y[bestC], 75, scratch);
     const own = scratch.filter((s) => w.owner[s] === me && w.state[s] !== UNIT_FEEDING);
     const uids = own.map((s) => w.uid[s]);
-    // Barrage the enemy mass in the fight (it lands after a delay, so aim at
-    // the enemy centroid where they're dug in).
-    if (fa.energy >= POWER.barrageCost && bestH >= 12 && hasPower(w, me, 'barrage')) {
-      queryRadius(w, w.x[bestC], w.y[bestC], 90, scratch);
-      let ex = 0, ey = 0, n = 0;
-      for (const s of scratch) {
-        if (!w.hostile(w.owner[s], me)) continue;
-        ex += w.x[s];
-        ey += w.y[s];
-        n++;
-      }
-      if (n > 0) {
-        this.issue(w, { t: 'barrage', p: me, x: ex / n, y: ey / n });
+    // Where are the two sides in this fight?
+    let ox = 0, oy = 0;
+    for (const s of own) {
+      ox += w.x[s];
+      oy += w.y[s];
+    }
+    queryRadius(w, w.x[bestC], w.y[bestC], 90, scratch);
+    let ex = 0, ey = 0, ne = 0;
+    for (const s of scratch) {
+      if (!w.hostile(w.owner[s], me)) continue;
+      ex += w.x[s];
+      ey += w.y[s];
+      ne++;
+    }
+    const brawl = own.length >= 12 && bestH >= 16;
+
+    // Nova is the answer to a big brawl right on top of us.
+    if (brawl && fa.energy >= POWER.novaCost) {
+      this.issue(w, { t: 'nova', p: me, units: uids });
+      return;
+    }
+    // Barrage is artillery: for enemies massed apart from our own troops
+    // (standing off or dug in), or, when energy allows, smaller fights.
+    if (ne >= 12 && fa.energy >= POWER.barrageCost && hasPower(w, me, 'barrage')) {
+      const apart = own.length === 0 || Math.hypot(ex / ne - ox / own.length, ey / ne - oy / own.length) > 45;
+      // In small skirmishes keep a cushion so energy can still build to a Nova.
+      if (apart ? this.spendable(w, POWER.barrageCost) : !brawl && this.spendable(w, POWER.barrageCost + 20)) {
+        this.issue(w, { t: 'barrage', p: me, x: ex / ne, y: ey / ne });
         return;
       }
     }
-    if (fa.energy >= POWER.novaCost && bestH >= 16 && own.length >= 10) {
-      this.issue(w, { t: 'nova', p: me, units: uids });
-    } else if (fa.energy >= POWER.fortifyCost && bestH >= 10 && own.length >= 8 && hasPower(w, me, 'fortify') && (this.cfg.personality === 'turtler' || bestH > own.length)) {
+    // In a brawl, save energy toward Nova rather than spending it piecemeal;
+    // only dig in if badly outnumbered. Rushers can't help themselves.
+    if (brawl && !this.p.eagerSurge) {
+      if (bestH > own.length * 1.5 && this.spendable(w, POWER.fortifyCost) && hasPower(w, me, 'fortify')) {
+        this.issue(w, { t: 'fortify', p: me, units: uids });
+      }
+      return;
+    }
+    if (this.spendable(w, POWER.fortifyCost) && bestH >= 10 && own.length >= 8 && hasPower(w, me, 'fortify') && (this.cfg.personality === 'turtler' || bestH > own.length)) {
       // Dig in when outnumbered (Turtlers always like to).
       this.issue(w, { t: 'fortify', p: me, units: uids });
     } else if (this.p.eagerSurge && bestH >= 6 && own.length >= 6) {
       // Rushers spend energy on Surge the moment a fight starts.
       this.issue(w, { t: 'surge', p: me, units: uids });
-    } else if (bestH >= 10 && own.length >= 10 && fa.energy >= POWER.surgeCost + (this.cfg.difficulty >= 2 ? 25 : 0)) {
+    } else if (bestH >= 10 && own.length >= 10 && this.spendable(w, POWER.surgeCost + (this.cfg.difficulty >= 2 ? 25 : 0))) {
       this.issue(w, { t: 'surge', p: me, units: uids });
     }
   }

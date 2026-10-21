@@ -131,7 +131,7 @@ export function applyCommand(w: World, c: Command): void {
       if (slots.length < 4) return;
       f.energy -= POWER.novaCost;
       const [cx, cy] = centroid(w, slots);
-      const R = Math.min(175, 64 + Math.sqrt(slots.length) * 7.5);
+      const R = Math.min(140, 70 + Math.sqrt(slots.length) * 5);
 
       // Sacrifice the units closest to the center.
       const d2 = (s: number) => (w.x[s] - cx) ** 2 + (w.y[s] - cy) ** 2;
