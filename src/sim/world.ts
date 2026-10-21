@@ -56,7 +56,8 @@ export type FxType =
   | 'surge'
   | 'upgradeFail'
   | 'eliminated'
-  | 'absorb';
+  | 'absorb'
+  | 'escalation';
 
 export interface FxEvent {
   type: FxType;
@@ -133,6 +134,8 @@ export class World {
   deaths: number[] = [];
   fx: FxEvent[] = [];
 
+  /** share of nests a team must hold for DOMINATION.ticks to win */
+  domShare = 0.7;
   over = false;
   winnerTeam = -1;
   /** consecutive ticks each team has held the domination share */

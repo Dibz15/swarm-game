@@ -8,7 +8,7 @@ const TIPS = [
   'Click one of your nests, then right-click somewhere to set its rally point.',
   'Select a nest and press U to feed it dots and level it up.',
   'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
-  'Hold 70% of the nests for 30 seconds to win by domination.',
+  'Hold 70% of the nests (60% on large maps) for 30 seconds to win by domination.',
   'Ctrl+1–5 saves a control group. Press 1–5 to recall it. C centers the camera on your selection.',
 ];
 

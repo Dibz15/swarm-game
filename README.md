@@ -15,6 +15,11 @@ Balance tools (headless bot matches):
 npx vite-node scripts/balance.ts 4 medium 10   # players, size, games: length, lead changes, stragglers
 npx vite-node scripts/map-mix.ts               # nest-type mix across generated maps
 npx vite-node scripts/bastion-probe.ts         # stress test: every neutral nest is a Bastion
+npx vite-node scripts/personality-probe.ts 4 medium 120   # win rate per bot personality
+npx vite-node scripts/ffa-probe.ts             # who attacks whom, knockout timing
+npx vite-node scripts/collapse-probe.ts        # how the first-out player loses
+npx vite-node scripts/kill-matrix.ts           # winner vs loser kill shares
+npx vite-node scripts/trace.ts 5 large 1005    # 30s timeline of one match
 ```
 
 Dev URL flags:
@@ -27,9 +32,14 @@ Dev URL flags:
 - **Capture** a nest by standing on it with no enemies present. Neutral nests have gray guards. A contested nest stops spawning.
 - **Upgrade** a nest by feeding it your dots (U). Levels 1–3 spawn faster.
 - **Energy** builds up over time and from kills and captures. **Surge** (Q) costs 30: the selected dots get faster, stronger and tougher for 6 seconds. **Nova** (E) costs 60: it sacrifices about 20% of the selected dots and sends out a shockwave.
-- **Anti-snowball:** big armies spawn more slowly, dots near their own nests take less damage, factions that are behind charge energy faster, and bots gang up on a runaway leader.
-- **Win** by eliminating every rival, or by holding 70% of the nests for 30 seconds.
-- **Bots** have four personalities (Rusher, Turtler, Expander, Opportunist) and four difficulties (Easy to Brutal). Only Brutal gets a production bonus.
+- **Anti-snowball:** big armies spawn more slowly, each extra nest adds less production (nests^0.75), dots near their own nests take less damage, factions that are behind charge energy faster, starting nests are defended capitals, and bots gang up on a runaway leader.
+- **Escalation:** from minute 5, those comeback rules fade out over 3 minutes so every match reaches an endgame.
+- **Win** by eliminating every rival, or by holding 70% of the nests (60% on large maps) for 30 seconds.
+- **Bots** have four difficulties (Easy to Brutal; only Brutal gets a production bonus) and four personalities. Every bot expands for the first 90 seconds, then:
+  - **Rusher** attacks nearby players, commits hard, and Surges as soon as a fight starts.
+  - **Turtler** upgrades nests, builds Bastions and keeps a big home guard.
+  - **Expander** prioritizes neutral nests.
+  - **Opportunist** circles fights between other players to grab contested nests, and picks on the weakest player in big free-for-alls.
 
 ## Architecture
 

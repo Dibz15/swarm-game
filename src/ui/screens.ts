@@ -6,6 +6,7 @@ import type { MatchSetup } from '../sim/setup';
 import type { World } from '../sim/world';
 import { NEUTRAL } from '../sim/constants';
 import { formatTime } from './hud';
+import type { AudioEngine, VolumeKind } from '../audio/engine';
 
 function el(html: string): HTMLDivElement {
   const d = document.createElement('div');
@@ -62,11 +63,11 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
         <div class="howto-grid">
           <div>
             <h3>The goal</h3>
-            <p>Every color wants the map. <b>Nests</b> are the only way to make more dots, so capture them. Win by wiping out every rival, or by holding <b>70% of the nests for 30 seconds</b>.</p>
+            <p>Every color wants the map. <b>Nests</b> are the only way to make more dots, so capture them. Win by wiping out every rival, or by holding <b>70% of the nests for 30 seconds</b> (60% on large maps).</p>
             <h3>Fighting</h3>
             <p>Dots fight automatically. Any dot near an enemy locks on and shoots. The thin lines are the shots. Your job is to decide where your dots go and when they go there.</p>
             <h3>Capturing</h3>
-            <p>Park dots on a nest while no enemies are on it, and the ring fills. Neutral nests have gray guards, so clear them out first. A nest that's under attack stops spawning. Your dots take less damage near your own nests, and huge armies spawn more slowly, so a comeback is always possible.</p>
+            <p>Park dots on a nest while no enemies are on it, and the ring fills. Neutral nests have gray guards, so clear them out first. A nest that's under attack stops spawning. Your dots take less damage near your own nests, and huge armies spawn more slowly, so a comeback is always possible. From minute 5 those comeback bonuses fade out (<b>escalation</b>), so every match reaches an endgame.</p>
           </div>
           <div>
             <h3>Nests</h3>
@@ -309,7 +310,9 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
   return m;
 }
 
-export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void }): HTMLDivElement {
+export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine }): HTMLDivElement {
+  const vol = (k: VolumeKind, label: string) =>
+    `<label class="vol"><span>${label}</span><input type="range" min="0" max="100" value="${Math.round(h.audio.volumes[k] * 100)}" data-vol="${k}"></label>`;
   const m = el(`
     <div class="screen modal dim">
       <div class="card">
@@ -319,10 +322,17 @@ export function pauseMenu(h: { resume: () => void; restart: () => void; quit: ()
           <button data-a="restart">Restart match</button>
           <button data-a="quit">Quit to menu</button>
         </div>
+        <h3>Sound</h3>
+        <div class="vols">
+          ${vol('master', 'Master')}${vol('sfx', 'Effects')}${vol('ambience', 'Ambience')}${vol('music', 'Music')}
+        </div>
         <h3>Controls</h3>
         ${CONTROLS_HTML}
       </div>
     </div>`);
+  m.querySelectorAll<HTMLInputElement>('[data-vol]').forEach((inp) =>
+    inp.addEventListener('input', () => h.audio.setVolume(inp.dataset.vol as VolumeKind, Number(inp.value) / 100)),
+  );
   m.querySelector('[data-a=resume]')!.addEventListener('click', h.resume);
   m.querySelector('[data-a=restart]')!.addEventListener('click', h.restart);
   m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);

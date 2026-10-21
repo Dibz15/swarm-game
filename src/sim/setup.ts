@@ -1,4 +1,4 @@
-import { Kind, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
+import { DOMINATION, Kind, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
 import { generateMap, type MapSize } from './mapgen';
 import { TAU, dcos, dsin } from './mathx';
@@ -25,6 +25,7 @@ export const START_UNITS = 10;
 export function createWorld(setup: MatchSetup): World {
   const map = generateMap(setup.seed, setup.size, setup.players.length, setup.portrait);
   const w = new World(setup.seed, map.width, map.height);
+  w.domShare = DOMINATION.share[setup.size] ?? 0.7;
 
   // Inactive factions get unique teams so they never count as allies.
   for (let f = 0; f < NUM_FACTIONS; f++) if (f !== NEUTRAL) w.setTeam(f, 200 + f);

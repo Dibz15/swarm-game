@@ -1,4 +1,4 @@
-import { BALANCE, DOMINATION, DT, ENERGY, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
+import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
 import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
@@ -33,7 +33,7 @@ export function step(w: World, commands: readonly Command[]): void {
     const fa = w.factions[f];
     if (!fa.active || fa.eliminated) continue;
     const behind = 1 - w.unitCount[f] / leader;
-    const rate = ENERGY.passive * (1 + BALANCE.underdogEnergy * behind);
+    const rate = ENERGY.passive * (1 + BALANCE.underdogEnergy * behind * (1 - escalation(w.tick)));
     fa.energy = Math.min(ENERGY.max, fa.energy + rate * DT);
   }
 
@@ -42,6 +42,7 @@ export function step(w: World, commands: readonly Command[]): void {
       if (w.factions[f].active) w.history[f].push(w.unitCount[f]);
     }
   }
+  if (w.tick === ESCALATION.start) pushFx(w, 'escalation', 0, 0, -1);
   if (w.tick % 15 === 0) checkVictory(w);
 }
 
@@ -76,7 +77,7 @@ function checkVictory(w: World): void {
     return;
   }
 
-  const need = Math.ceil(w.nests.length * DOMINATION.share);
+  const need = Math.ceil(w.nests.length * w.domShare);
   for (const t of aliveTeams) {
     if (nestsByTeam[t] >= need) {
       w.domTicks[t] += 15;

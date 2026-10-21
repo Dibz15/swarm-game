@@ -82,17 +82,36 @@ export const CAPITAL = { range: 88, dps: 11, targets: 2, armor: 0.6 };
 
 /**
  * Anti-snowball tuning.
- * - Production slows as an army grows: mult = 1 / (1 + max(0, units - softCap) / softScale).
+ * - Production slows as an army grows past softCap + capPerNest * nests:
+ *   mult = 1 / (1 + over / softScale). Sitting on one nest stalls early.
  * - Units near their own nests take less damage (home turf).
  * - Factions behind the leader charge energy faster.
+ * - Each extra nest adds less production than the last.
  */
 export const BALANCE = {
-  softCap: 110,
-  softScale: 260,
+  softCap: 30,
+  /** extra soft-cap headroom per nest held, so hoarding on one nest stalls sooner */
+  capPerNest: 25,
+  softScale: 160,
   homeRadius: 70,
   homeArmor: 0.75,
   underdogEnergy: 1.5,
+  /** total production grows as nests^exp, so wide empires out-produce less */
+  nestExponent: 0.9,
 };
+
+/**
+ * Late-game escalation. The comeback rules above keep the early game close,
+ * but with many players they can hold everyone level forever. From `start`
+ * they fade out over `ramp` ticks so every match gets an endgame.
+ */
+export const ESCALATION = { start: 5 * 60 * TICK_HZ, ramp: 3 * 60 * TICK_HZ };
+
+/** 0 before escalation, rising to 1 once it is complete. */
+export function escalation(tick: number): number {
+  const t = (tick - ESCALATION.start) / ESCALATION.ramp;
+  return t <= 0 ? 0 : t >= 1 ? 1 : t;
+}
 
 export const ENERGY = { max: 100, passive: 0.9, kill: 0.2, capture: 15 };
 
@@ -109,4 +128,8 @@ export const POWER = {
   novaKnock: 110,
 };
 
-export const DOMINATION = { share: 0.7, ticks: 30 * TICK_HZ };
+export const DOMINATION = {
+  /** share of all nests a team must hold, by map size; large maps need less so endgames don't drag */
+  share: { small: 0.7, medium: 0.7, large: 0.6 } as Record<string, number>,
+  ticks: 30 * TICK_HZ,
+};

@@ -4,7 +4,7 @@ import type { Camera } from '../render/camera';
 import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { drawWorld } from '../render/scene';
-import type { Sfx } from '../audio/sfx';
+import type { AudioEngine } from '../audio/engine';
 import { MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, UNIT_FEEDING, UPGRADE_COST, type MatchSetup } from '../sim/index';
 import type { Nest, World } from '../sim/world';
 import { LocalSession } from './session';
@@ -14,7 +14,7 @@ export interface Services {
   camera: Camera;
   particles: Particles;
   rings: Rings;
-  sfx: Sfx;
+  sfx: AudioEngine;
   toast(msg: string, color?: string): void;
 }
 
@@ -31,6 +31,7 @@ export class GameView {
   result: MatchResult | null = null;
   resultTime = 0;
   private mask = new Uint8Array(MAX_UNITS);
+  private spawnSeen: number[] = [];
   private frame = 0;
 
   constructor(
@@ -59,7 +60,14 @@ export class GameView {
       if (me?.eliminated) this.finish('defeat', time);
       else if (w.over) this.finish(w.winnerTeam === w.teamOf[this.human] ? 'victory' : 'defeat', time);
     }
-    this.s.sfx.battle(this.session.paused ? 0 : w.beamCount / 500);
+    this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
+    // Soft ticks for your own nests spawning, if they are on screen.
+    for (const n of w.nests) {
+      if (n.owner === this.human && n.lastSpawn !== this.spawnSeen[n.id]) {
+        this.spawnSeen[n.id] = n.lastSpawn;
+        if (n.lastSpawn === w.tick) this.s.sfx.spawn(n.x, n.y);
+      }
+    }
   }
 
   private finish(r: MatchResult, time: number): void {
@@ -92,6 +100,7 @@ export class GameView {
     const d = w.deaths;
     for (let k = 0; k < d.length; k += 3) {
       particles.burst(d[k], d[k + 1], FACTION_RGB[d[k + 2]], 4, 55, 2, 0.5);
+      sfx.death(d[k], d[k + 1], d[k + 2]);
     }
     w.deaths = [];
 
@@ -102,23 +111,21 @@ export class GameView {
         case 'capture':
           rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3.2, dur: 0.7, c, thick: 2.5 });
           particles.burst(e.x, e.y, c, 26, 120, 2.6, 0.8);
-          if (e.f === this.human) {
-            sfx.capture();
-            toast(`Captured ${NEST_NAMES[nest.type]}`, hex(e.f));
-          } else sfx.enemyCapture();
+          sfx.capture(e.x, e.y, e.f === this.human);
+          if (e.f === this.human) toast(`Captured ${NEST_NAMES[nest.type]}`, hex(e.f));
           break;
         case 'neutralize':
           rings.add({ x: e.x, y: e.y, r0: e.r * 1.4, r1: e.r * 0.6, dur: 0.5, c: FACTION_RGB[e.prev] ?? WHITE, thick: 2 });
           if (e.prev === this.human) {
-            sfx.lost();
+            sfx.lost(e.x, e.y);
             toast(`Lost ${NEST_NAMES[nest.type]}`, '#ff5d73');
           }
           break;
         case 'levelup':
           rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 2.2, dur: 0.6, c: WHITE, thick: 2 });
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.5, r1: e.r * 1.6, dur: 0.5, c, thick: 4 });
+          sfx.levelUp(e.x, e.y, e.f === this.human);
           if (e.f === this.human) {
-            sfx.levelUp();
             toast(`${NEST_NAMES[nest.type]} upgraded to level ${nest.level}`, hex(e.f));
           }
           break;
@@ -130,13 +137,13 @@ export class GameView {
           const [sx, sy] = camera.toScreen(e.x, e.y);
           if (sx > -200 && sy > -200 && sx < camera.viewW + 200 && sy < camera.viewH + 200) {
             camera.shake = Math.min(1, camera.shake + (e.f === this.human ? 0.9 : 0.5));
-            sfx.nova();
           }
+          sfx.nova(e.x, e.y, e.f === this.human);
           break;
         }
         case 'surge':
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 1.4, dur: 0.5, c, thick: 2 });
-          if (e.f === this.human) sfx.surge();
+          sfx.surge(e.x, e.y, e.f === this.human);
           break;
         case 'upgradeFail':
           if (e.f === this.human) {
@@ -152,6 +159,10 @@ export class GameView {
           }
           break;
         case 'absorb':
+          break;
+        case 'escalation':
+          toast('Escalation: comeback bonuses are fading. Time to close it out!', '#ffb627');
+          sfx.escalation();
           break;
       }
     }

@@ -3,6 +3,7 @@ import {
   BASTION,
   CAPITAL,
   bastionTurret,
+  escalation,
   DT,
   ENERGY,
   FACTION_UNIT_CAP,
@@ -25,8 +26,12 @@ function captureRate(count: number, level: number): number {
   return (DT * (0.12 + 0.025 * Math.min(count, 24))) / (0.8 + 0.2 * level);
 }
 
+const nestCount = new Int32Array(NUM_FACTIONS);
+
 export function updateNests(w: World): void {
   w.armor.fill(1, 0, w.n);
+  nestCount.fill(0);
+  for (const n of w.nests) if (n.owner >= 0) nestCount[n.owner]++;
   for (const n of w.nests) {
     updateControl(w, n);
     applyArmor(w, n);
@@ -47,7 +52,11 @@ function applyArmor(w: World, n: Nest): void {
   if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1) return;
   const bastion = n.type === NestType.Bastion;
   const r = bastion ? BASTION.range + BASTION.rangePerLevel * (n.level - 1) : n.r + BALANCE.homeRadius;
-  const k = Math.min(bastion ? BASTION.aura : BALANCE.homeArmor, n.capital ? CAPITAL.armor : 1);
+  // Home turf fades fully during escalation; capitals keep half their armor.
+  const L = escalation(w.tick);
+  const home = 1 - (1 - BALANCE.homeArmor) * (1 - L);
+  const cap = 1 - (1 - CAPITAL.armor) * (1 - 0.5 * L);
+  const k = Math.min(bastion ? BASTION.aura : home, n.capital ? cap : 1);
   const team = w.teamOf[n.owner];
   queryRadius(w, n.x, n.y, r, scratch);
   for (const s of scratch) {
@@ -148,8 +157,15 @@ function spawn(w: World, n: Nest): void {
   if (w.unitCount[n.owner] >= FACTION_UNIT_CAP) return;
   const f = w.factions[n.owner];
   // Soft cap: big armies produce slower, which keeps comebacks possible.
-  const soft = 1 / (1 + Math.max(0, w.unitCount[n.owner] - BALANCE.softCap) / BALANCE.softScale);
-  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * soft;
+  // Both comeback rules relax as the match escalates.
+  const L = escalation(w.tick);
+  const k = nestCount[n.owner];
+  const softCap = (BALANCE.softCap + BALANCE.capPerNest * k) * (1 + 2 * L);
+  const soft = 1 / (1 + Math.max(0, w.unitCount[n.owner] - softCap) / BALANCE.softScale);
+  // Diminishing returns on width: k nests produce like k^exp nests.
+  const exp = BALANCE.nestExponent + (1 - BALANCE.nestExponent) * L;
+  const wide = k > 1 ? Math.pow(k, exp - 1) : 1;
+  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * soft * wide;
   const interval = UNIT_STATS[kind].interval;
   if (n.spawnAcc < interval) return;
   n.spawnAcc -= interval;

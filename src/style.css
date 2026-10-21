@@ -331,3 +331,9 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   .end .result { font-size: 44px; }
   .stats th:nth-child(n+5), .stats td:nth-child(n+5) { display: none; }
 }
+
+.vols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; }
+.vol { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #c6cceb; }
+.vol span { width: 72px; }
+.vol input { flex: 1; accent-color: var(--accent); padding: 0; }
+@media (max-width: 720px) { .vols { grid-template-columns: 1fr; } }

@@ -1,4 +1,4 @@
-import { MAX_LEVEL, NEUTRAL, NestType, bastionTurret, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
+import { MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
 import { applyCommand, type Command } from '../commands';
 import { Rng } from '../rng';
 import { queryRadius } from '../spatial';
@@ -45,16 +45,28 @@ interface PersonalityKnobs {
   /** bonus for hitting the weakest rival */
   weakest: number;
   bastion: number;
+  /** bonus for enemy nests someone else is already fighting over */
+  vulture: number;
+  /** surge in any real fight instead of saving energy for Nova */
+  eagerSurge: boolean;
+  /** distance penalty multiplier: higher keeps fights closer to home */
+  reach: number;
 }
 
 const PERSONALITY: Record<Personality, PersonalityKnobs> = {
-  rusher: { neutral: 1.0, enemy: 1.7, margin: 0.85, upgrade: 0.45, reserve: 0.08, weakest: 1, bastion: 0.6 },
-  turtler: { neutral: 1.0, enemy: 0.8, margin: 1.3, upgrade: 1.9, reserve: 0.35, weakest: 1, bastion: 1.8 },
-  expander: { neutral: 1.9, enemy: 0.9, margin: 1.0, upgrade: 0.9, reserve: 0.18, weakest: 1, bastion: 0.9 },
-  opportunist: { neutral: 1.0, enemy: 1.2, margin: 1.0, upgrade: 1.0, reserve: 0.2, weakest: 2.4, bastion: 1 },
+  rusher: { neutral: 1.3, enemy: 1.5, margin: 1.0, upgrade: 0.45, reserve: 0.15, weakest: 1, bastion: 0.6, vulture: 1, eagerSurge: true, reach: 1.3 },
+  turtler: { neutral: 1.0, enemy: 0.8, margin: 1.3, upgrade: 1.9, reserve: 0.35, weakest: 1, bastion: 1.8, vulture: 1, eagerSurge: false, reach: 1 },
+  expander: { neutral: 1.5, enemy: 0.9, margin: 1.0, upgrade: 0.9, reserve: 0.18, weakest: 1, bastion: 0.9, vulture: 1, eagerSurge: false, reach: 1 },
+  opportunist: { neutral: 1.0, enemy: 1.2, margin: 1.0, upgrade: 1.0, reserve: 0.2, weakest: 1.8, bastion: 1, vulture: 2.2, eagerSurge: false, reach: 1 },
 };
 
 const scratch: number[] = [];
+
+/**
+ * Opening phase: all bots favor neutral nests and mostly leave players alone,
+ * so aggressive personalities don't bleed out before they have an economy.
+ */
+const OPENING = { ticks: 90 * 30, neutral: 1.6, enemy: 0.35 };
 
 /** When bots start ganging up on the leader. */
 const RUNAWAY = {
@@ -202,7 +214,8 @@ export class Bot {
       const share = w.unitCount[leader] / Math.max(1, totalUnits);
       const vsMe = w.unitCount[leader] / Math.max(1, w.unitCount[me]);
       const k = Math.min((share - RUNAWAY.share) / 0.25, (vsMe - RUNAWAY.vsMe) / 1.5, 1);
-      if (k > 0) leaderBonus = 1 + 0.9 * k;
+      // Late game: stop propping up the pack so someone can close it out.
+      if (k > 0) leaderBonus = 1 + 0.9 * k * (1 - escalation(w.tick));
     }
 
     // Finish off stragglers: a rival down to one nest and a tiny army is a
@@ -210,8 +223,23 @@ export class Bot {
     const myUnits = w.unitCount[me];
     const nestCount = new Int32Array(NEUTRAL + 1);
     for (const n of w.nests) if (n.owner >= 0 && n.owner < NEUTRAL) nestCount[n.owner]++;
+    // Escalation widens what counts as a straggler, so endgames consolidate.
+    const L = escalation(w.tick);
     const straggler = (f: number) =>
-      nestCount[f] <= 1 && myUnits >= 30 && w.unitCount[f] < myUnits * 0.3;
+      nestCount[f] <= 1 + 2 * L && myUnits >= 30 && w.unitCount[f] < myUnits * (0.3 + 0.3 * L);
+
+    // Is a third party (not us, not the owner) standing on this nest?
+    const hostileNotOwner = (n: Nest): boolean => {
+      queryRadius(w, n.x, n.y, n.r, scratch);
+      for (const s of scratch) {
+        const o = w.owner[s];
+        if (o !== n.owner && w.teamOf[o] !== myTeam && o !== NEUTRAL) return true;
+      }
+      return false;
+    };
+
+    // Opening: everyone builds an economy first; personalities show after.
+    const opening = w.tick < OPENING.ticks;
 
     let best: Nest | null = null;
     let bestScore = -Infinity;
@@ -228,10 +256,14 @@ export class Bot {
       let value = n.type === NestType.Bastion ? 0.95 * this.p.bastion : n.type === NestType.Hive ? 1 : 1.1;
       value *= 0.6 + 0.4 * n.level;
       let margin = this.d.margin * this.p.margin;
-      if (n.owner === NEUTRAL || n.owner < 0) value *= this.p.neutral;
+      if (n.owner === NEUTRAL || n.owner < 0) value *= opening ? Math.max(this.p.neutral, OPENING.neutral) : this.p.neutral;
       else {
-        value *= this.p.enemy;
-        if (n.owner === weakest) value *= this.p.weakest;
+        value *= opening ? OPENING.enemy : this.p.enemy;
+        // Picking on the weakest only pays with several rivals; in a
+        // three-way it just hands the game to the third player.
+        if (n.owner === weakest && rivals > 3) value *= this.p.weakest;
+        // Third-party: a nest under attack by someone else is softened up.
+        if (n.contested && hostileNotOwner(n)) value *= this.p.vulture;
         if (n.owner === leader) value *= leaderBonus;
         if (straggler(n.owner)) {
           value *= 2.4;
@@ -239,7 +271,7 @@ export class Bot {
         }
       }
       const dist = Math.sqrt((n.x - hx) ** 2 + (n.y - hy) ** 2);
-      let score = value / (def + 4) / (1 + dist / 420);
+      let score = value / (def + 4) / (1 + (dist / 420) * this.p.reach);
       if (n.id === this.focus) score *= 1.25; // stick with a plan
       score *= 1 + (this.rng.next() - 0.5) * this.d.noise;
       const need = def * margin + 4 + n.level * 2;
@@ -331,6 +363,9 @@ export class Bot {
     const uids = own.map((s) => w.uid[s]);
     if (fa.energy >= POWER.novaCost && bestH >= 16 && own.length >= 10) {
       this.issue(w, { t: 'nova', p: me, units: uids });
+    } else if (this.p.eagerSurge && bestH >= 6 && own.length >= 6) {
+      // Rushers spend energy on Surge the moment a fight starts.
+      this.issue(w, { t: 'surge', p: me, units: uids });
     } else if (bestH >= 10 && own.length >= 10 && fa.energy >= POWER.surgeCost + (this.cfg.difficulty >= 2 ? 25 : 0)) {
       this.issue(w, { t: 'surge', p: me, units: uids });
     }

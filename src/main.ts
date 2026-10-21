@@ -1,5 +1,5 @@
 import './style.css';
-import { Sfx } from './audio/sfx';
+import { AudioEngine } from './audio/engine';
 import { FACTION_RGB } from './content/factions';
 import { GameView, type Services } from './game/gameView';
 import { LocalSession } from './game/session';
@@ -23,7 +23,7 @@ class App {
   private camera = new Camera();
   private particles = new Particles();
   private rings = new Rings();
-  private sfx = new Sfx();
+  private sfx = new AudioEngine();
   private input: InputController;
   private services: Services;
 
@@ -54,11 +54,7 @@ class App {
       sfx: this.sfx,
       toast: (m, c) => this.hud?.toast(m, c),
     };
-    try {
-      this.sfx.setMuted(localStorage.getItem('swarm.muted') === '1');
-    } catch {
-      /* ignore */
-    }
+    this.sfx.setListener(this.camera);
     window.addEventListener('pointerdown', () => this.sfx.unlock(), { capture: true });
     window.addEventListener('keydown', (e) => {
       this.sfx.unlock();
@@ -168,7 +164,6 @@ class App {
     this.hud = null;
     this.game = null;
     this.input.game = null;
-    this.sfx.battle(0);
   }
 
   private togglePause(): void {
@@ -187,6 +182,7 @@ class App {
           resume: () => this.togglePause(),
           restart: () => this.startGame(g.setup),
           quit: () => this.showMenu(),
+          audio: this.sfx,
         }),
       );
     }
@@ -195,11 +191,6 @@ class App {
   private toggleMute(): void {
     this.sfx.setMuted(!this.sfx.muted);
     this.hud?.setMuted(this.sfx.muted);
-    try {
-      localStorage.setItem('swarm.muted', this.sfx.muted ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
   }
 
   private showEnd(): void {
@@ -274,8 +265,12 @@ class App {
       const d = this.demo;
       d.update(dt);
       const w = d.world;
-      for (let k = 0; k < w.deaths.length; k += 3) this.particles.burst(w.deaths[k], w.deaths[k + 1], FACTION_RGB[w.deaths[k + 2]], 3, 45, 2, 0.45);
+      for (let k = 0; k < w.deaths.length; k += 3) {
+        this.particles.burst(w.deaths[k], w.deaths[k + 1], FACTION_RGB[w.deaths[k + 2]], 3, 45, 2, 0.45);
+        this.sfx.death(w.deaths[k], w.deaths[k + 1], w.deaths[k + 2]);
+      }
       w.deaths = [];
+      this.sfx.update(dt, w, -1, 'menu');
       w.fx = [];
       if (w.over || w.tick > 30 * 60 * 6) this.startDemo();
       // slow cinematic drift
