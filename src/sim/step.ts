@@ -1,0 +1,86 @@
+import { DOMINATION, DT, ENERGY, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
+import { applyCommand, type Command } from './commands';
+import { updateCombat, resolveDamage } from './combat';
+import { updateMovement } from './movement';
+import { updateNests } from './nests';
+import { pushFx, type World } from './world';
+
+/**
+ * Advance the world one fixed tick. Pure function of (world, commands):
+ * the same inputs always produce the same state, which is what lockstep
+ * multiplayer and replays rely on.
+ */
+export function step(w: World, commands: readonly Command[]): void {
+  if (w.over) return;
+  w.tick++;
+  w.beamCount = 0;
+  w.px.set(w.x.subarray(0, w.n));
+  w.py.set(w.y.subarray(0, w.n));
+
+  w.grid.build(w);
+  for (const c of commands) applyCommand(w, c);
+  for (const b of w.bots) b.update(w);
+
+  updateNests(w);
+  updateCombat(w);
+  resolveDamage(w);
+  updateMovement(w);
+
+  for (let f = 0; f < NEUTRAL; f++) {
+    const fa = w.factions[f];
+    if (fa.active && !fa.eliminated) fa.energy = Math.min(ENERGY.max, fa.energy + ENERGY.passive * DT);
+  }
+
+  if (w.tick % TICK_HZ === 0) {
+    for (let f = 0; f < NEUTRAL; f++) {
+      if (w.factions[f].active) w.history[f].push(w.unitCount[f]);
+    }
+  }
+  if (w.tick % 15 === 0) checkVictory(w);
+}
+
+const nestsByTeam = new Int32Array(NEUTRAL_TEAM + 1);
+
+function checkVictory(w: World): void {
+  const ownsNest = new Uint8Array(NUM_FACTIONS);
+  nestsByTeam.fill(0);
+  for (const n of w.nests) {
+    if (n.owner < 0) continue;
+    ownsNest[n.owner] = 1;
+    nestsByTeam[w.teamOf[n.owner]]++;
+  }
+
+  const aliveTeams = new Set<number>();
+  for (let f = 0; f < NEUTRAL; f++) {
+    const fa = w.factions[f];
+    if (!fa.active || fa.eliminated) continue;
+    if (w.unitCount[f] === 0 && !ownsNest[f]) {
+      fa.eliminated = true;
+      fa.eliminatedTick = w.tick;
+      fa.energy = 0;
+      pushFx(w, 'eliminated', 0, 0, f);
+      continue;
+    }
+    aliveTeams.add(fa.team);
+  }
+
+  if (aliveTeams.size <= 1) {
+    w.over = true;
+    w.winnerTeam = aliveTeams.size === 1 ? [...aliveTeams][0] : -1;
+    return;
+  }
+
+  const need = Math.ceil(w.nests.length * DOMINATION.share);
+  for (const t of aliveTeams) {
+    if (nestsByTeam[t] >= need) {
+      w.domTicks[t] += 15;
+      if (w.domTicks[t] >= DOMINATION.ticks) {
+        w.over = true;
+        w.winnerTeam = t;
+        return;
+      }
+    } else {
+      w.domTicks[t] = 0;
+    }
+  }
+}

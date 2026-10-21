@@ -1,0 +1,238 @@
+import { MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './constants';
+import { Rng } from './rng';
+import { Grid } from './spatial';
+import type { Bot } from './ai/bot';
+
+export interface Nest {
+  id: number;
+  x: number;
+  y: number;
+  r: number;
+  type: number;
+  /** owning faction, -1 = unowned (neutralized) */
+  owner: number;
+  level: number;
+  /** 0..1 control of `controller` (== owner once captured) */
+  control: number;
+  controller: number;
+  spawnAcc: number;
+  rallyX: number;
+  rallyY: number;
+  feedProgress: number;
+  feedIncoming: number;
+  /** tick of the last spawn, for render pulses */
+  lastSpawn: number;
+  /** true while hostile units stand on it */
+  contested: boolean;
+}
+
+export interface FactionStats {
+  spawned: number;
+  kills: number;
+  lost: number;
+  captured: number;
+  peak: number;
+}
+
+export interface Faction {
+  id: number;
+  active: boolean;
+  team: number;
+  human: boolean;
+  energy: number;
+  eliminated: boolean;
+  eliminatedTick: number;
+  prodMult: number;
+  stats: FactionStats;
+}
+
+export type FxType =
+  | 'capture'
+  | 'neutralize'
+  | 'levelup'
+  | 'nova'
+  | 'surge'
+  | 'upgradeFail'
+  | 'eliminated'
+  | 'absorb';
+
+export interface FxEvent {
+  type: FxType;
+  x: number;
+  y: number;
+  /** faction responsible */
+  f: number;
+  r: number;
+  nest: number;
+  /** previous owner, for capture/neutralize */
+  prev: number;
+}
+
+export const UNIT_FEEDING = 1;
+
+/**
+ * Entire game state. Units live in structure-of-arrays typed arrays indexed
+ * by slot; dead slots are recycled through `free`. `uid` is a stable id used
+ * by commands, since slots get reused.
+ */
+export class World {
+  tick = 0;
+  readonly seed: number;
+  readonly width: number;
+  readonly height: number;
+  readonly rng: Rng;
+
+  /** high-water slot count; iterate 0..n and check alive */
+  n = 0;
+  count = 0;
+  nextUid = 1;
+
+  readonly x = new Float64Array(MAX_UNITS);
+  readonly y = new Float64Array(MAX_UNITS);
+  readonly px = new Float64Array(MAX_UNITS);
+  readonly py = new Float64Array(MAX_UNITS);
+  readonly vx = new Float64Array(MAX_UNITS);
+  readonly vy = new Float64Array(MAX_UNITS);
+  readonly hp = new Float64Array(MAX_UNITS);
+  readonly dmg = new Float64Array(MAX_UNITS);
+  /** order point and arrival radius */
+  readonly ox = new Float64Array(MAX_UNITS);
+  readonly oy = new Float64Array(MAX_UNITS);
+  readonly arrive = new Float64Array(MAX_UNITS);
+  readonly owner = new Uint8Array(MAX_UNITS);
+  readonly kind = new Uint8Array(MAX_UNITS);
+  readonly alive = new Uint8Array(MAX_UNITS);
+  readonly state = new Uint8Array(MAX_UNITS);
+  readonly engaged = new Uint8Array(MAX_UNITS);
+  readonly lastHit = new Int8Array(MAX_UNITS);
+  readonly feedNest = new Int16Array(MAX_UNITS);
+  readonly uid = new Uint32Array(MAX_UNITS);
+  readonly tgt = new Int32Array(MAX_UNITS);
+  readonly tgtUid = new Uint32Array(MAX_UNITS);
+  /** tick until which the unit is surged */
+  readonly surge = new Int32Array(MAX_UNITS);
+
+  readonly free: number[] = [];
+  readonly uidToSlot = new Map<number, number>();
+
+  readonly factions: Faction[] = [];
+  readonly teamOf = new Int32Array(NUM_FACTIONS);
+  readonly unitCount = new Int32Array(NUM_FACTIONS);
+  nests: Nest[] = [];
+  readonly grid: Grid;
+  bots: Bot[] = [];
+
+  /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
+  readonly beams = new Int32Array(MAX_UNITS * 2 + 512);
+  beamCount = 0;
+  /** x, y, owner triples; drained by the client */
+  deaths: number[] = [];
+  fx: FxEvent[] = [];
+
+  over = false;
+  winnerTeam = -1;
+  /** consecutive ticks each team has held the domination share */
+  readonly domTicks = new Int32Array(NEUTRAL_TEAM + 1);
+  /** per-faction unit counts sampled once a second */
+  readonly history: number[][] = [];
+
+  constructor(seed: number, width: number, height: number) {
+    this.seed = seed >>> 0;
+    this.width = width;
+    this.height = height;
+    this.rng = new Rng(seed ^ 0x51f15e);
+    this.grid = new Grid(width, height);
+    for (let f = 0; f < NUM_FACTIONS; f++) {
+      this.factions.push({
+        id: f,
+        active: f === NEUTRAL,
+        team: f === NEUTRAL ? NEUTRAL_TEAM : f,
+        human: false,
+        energy: 0,
+        eliminated: false,
+        eliminatedTick: 0,
+        prodMult: 1,
+        stats: { spawned: 0, kills: 0, lost: 0, captured: 0, peak: 0 },
+      });
+      this.teamOf[f] = f === NEUTRAL ? NEUTRAL_TEAM : f;
+      this.history.push([]);
+    }
+  }
+
+  setTeam(f: number, team: number): void {
+    this.factions[f].team = team;
+    this.teamOf[f] = team;
+  }
+
+  hostile(a: number, b: number): boolean {
+    return this.teamOf[a] !== this.teamOf[b];
+  }
+}
+
+export function spawnUnit(
+  w: World,
+  owner: number,
+  kind: number,
+  x: number,
+  y: number,
+  ox: number,
+  oy: number,
+  arrive: number,
+): number {
+  if (w.count >= MAX_UNITS) return -1;
+  const i = w.free.length > 0 ? w.free.pop()! : w.n++;
+  w.x[i] = x;
+  w.y[i] = y;
+  w.px[i] = x;
+  w.py[i] = y;
+  w.vx[i] = 0;
+  w.vy[i] = 0;
+  w.hp[i] = UNIT_STATS[kind].hp;
+  w.dmg[i] = 0;
+  w.ox[i] = ox;
+  w.oy[i] = oy;
+  w.arrive[i] = arrive;
+  w.owner[i] = owner;
+  w.kind[i] = kind;
+  w.alive[i] = 1;
+  w.state[i] = 0;
+  w.engaged[i] = 0;
+  w.lastHit[i] = -1;
+  w.feedNest[i] = -1;
+  w.tgt[i] = -1;
+  w.tgtUid[i] = 0;
+  w.surge[i] = 0;
+  const uid = w.nextUid++;
+  w.uid[i] = uid;
+  w.uidToSlot.set(uid, i);
+  w.count++;
+  w.unitCount[owner]++;
+  return i;
+}
+
+export function removeUnit(w: World, i: number): void {
+  if (!w.alive[i]) return;
+  if (w.state[i] === UNIT_FEEDING) {
+    const n = w.nests[w.feedNest[i]];
+    if (n) n.feedIncoming--;
+    w.state[i] = 0;
+  }
+  w.alive[i] = 0;
+  w.uidToSlot.delete(w.uid[i]);
+  w.free.push(i);
+  w.count--;
+  w.unitCount[w.owner[i]]--;
+}
+
+export function pushFx(
+  w: World,
+  type: FxType,
+  x: number,
+  y: number,
+  f: number,
+  r = 0,
+  nest = -1,
+  prev = -1,
+): void {
+  w.fx.push({ type, x, y, f, r, nest, prev });
+}

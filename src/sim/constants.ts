@@ -1,0 +1,77 @@
+// Core tuning constants for the deterministic simulation.
+
+export const TICK_HZ = 30;
+export const DT = 1 / TICK_HZ;
+export const MAX_UNITS = 8192;
+/** 6 playable colors + 1 neutral faction. Faction id == color index. */
+export const NUM_FACTIONS = 7;
+export const NEUTRAL = 6;
+export const NEUTRAL_TEAM = 100;
+export const FACTION_UNIT_CAP = 1000;
+export const CELL = 32;
+
+export const Kind = { Dot: 0, Tank: 1, Lancer: 2, Swift: 3 } as const;
+
+export interface UnitStats {
+  name: string;
+  hp: number;
+  dps: number;
+  range: number;
+  speed: number;
+  size: number;
+  /** seconds between spawns at nest level 1 */
+  interval: number;
+  /** separation radius */
+  sep: number;
+  /** bot strength weight */
+  weight: number;
+}
+
+export const UNIT_STATS: readonly UnitStats[] = [
+  { name: 'Dot', hp: 10, dps: 4, range: 22, speed: 40, size: 4.4, interval: 1.4, sep: 6.5, weight: 1 },
+  { name: 'Tank', hp: 34, dps: 4.5, range: 20, speed: 24, size: 6.6, interval: 3.4, sep: 9, weight: 3 },
+  { name: 'Lancer', hp: 8, dps: 4.4, range: 52, speed: 32, size: 4.2, interval: 2.2, sep: 6.5, weight: 1.4 },
+  { name: 'Swift', hp: 6, dps: 3.2, range: 18, speed: 72, size: 3.6, interval: 0.9, sep: 5.5, weight: 0.65 },
+];
+/** units notice enemies this far beyond their attack range */
+export const AGGRO_EXTRA = 26;
+/** how far an idle unit will chase from its order point */
+export const LEASH = 90;
+/** each unit re-searches for the nearest enemy every RETARGET ticks (staggered) */
+export const RETARGET = 6;
+
+export const NestType = { Hive: 0, Forge: 1, Spire: 2, Swift: 3, Bastion: 4 } as const;
+export const NEST_NAMES = ['Hive', 'Forge', 'Spire', 'Swift', 'Bastion'] as const;
+/** unit kind spawned by each nest type; -1 = spawns nothing */
+export const NEST_KIND: readonly number[] = [Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift, -1];
+export const NEST_RADIUS: readonly number[] = [26, 28, 26, 24, 25];
+export const NEST_BLURB: readonly string[] = [
+  'Spawns standard dots.',
+  'Spawns slow, tough tanks.',
+  'Spawns long-range lancers.',
+  'Spawns fast, fragile swifts.',
+  'Spawns nothing. Fires a defensive beam.',
+];
+export const MAX_LEVEL = 3;
+/** spawn speed multiplier by level (index = level) */
+export const LEVEL_SPAWN_MULT: readonly number[] = [0, 1, 1.5, 2];
+/** dots consumed to go from level L to L+1 (index = L) */
+export const UPGRADE_COST: readonly number[] = [0, 20, 35, 0];
+export const UPGRADE_PICK_RADIUS = 240;
+
+export const BASTION = { range: 92, rangePerLevel: 16, dps: 13, minControl: 0.5 };
+
+export const ENERGY = { max: 100, passive: 0.9, kill: 0.2, capture: 15 };
+
+export const POWER = {
+  surgeCost: 35,
+  surgeTicks: 4 * TICK_HZ,
+  surgeSpeed: 1.6,
+  surgeDmg: 1.4,
+  novaCost: 60,
+  novaDamage: 22,
+  novaSacrifice: 0.2,
+  novaKnock: 110,
+};
+
+export const DOMINATION = { share: 0.7, ticks: 30 * TICK_HZ };

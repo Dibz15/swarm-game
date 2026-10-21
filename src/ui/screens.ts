@@ -1,0 +1,405 @@
+import { FACTION_HEX, FACTION_NAMES } from '../content/factions';
+import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
+import type { MapSize } from '../sim/mapgen';
+import { hashString } from '../sim/rng';
+import type { MatchSetup } from '../sim/setup';
+import type { World } from '../sim/world';
+import { NEUTRAL } from '../sim/constants';
+import { formatTime } from './hud';
+
+function el(html: string): HTMLDivElement {
+  const d = document.createElement('div');
+  d.innerHTML = html.trim();
+  return d.firstElementChild as HTMLDivElement;
+}
+
+const PERSONA_LABEL: Record<Personality | 'random', string> = {
+  random: 'Random',
+  rusher: 'Rusher',
+  turtler: 'Turtler',
+  expander: 'Expander',
+  opportunist: 'Opportunist',
+};
+
+export const CONTROLS_HTML = `
+  <dl class="controls">
+    <dt>Drag</dt><dd>Box-select dots (and your nests)</dd>
+    <dt>Click</dt><dd>Select a blob of dots or a nest</dd>
+    <dt>Double-click / A</dt><dd>Select all your dots</dd>
+    <dt>Right-click</dt><dd>Send dots / set the rally point of selected nests</dd>
+    <dt>Q / E</dt><dd>Surge / Nova on the selected dots</dd>
+    <dt>U</dt><dd>Upgrade the selected nest (feeds it nearby dots)</dd>
+    <dt>Ctrl+1–5, 1–5</dt><dd>Save / recall control groups</dd>
+    <dt>Wheel, middle-drag, arrows</dt><dd>Zoom and pan · F fits the map · Space centers</dd>
+    <dt>Touch</dt><dd>Drag selects, tap sends, two fingers pan and zoom</dd>
+  </dl>`;
+
+export function mainMenu(handlers: { skirmish: () => void; howto: () => void }): HTMLDivElement {
+  const m = el(`
+    <div class="screen menu">
+      <div class="menu-inner">
+        <h1 class="logo">${'SWARM'.split('').map((c, i) => `<span style="--c:${FACTION_HEX[i]}">${c}</span>`).join('')}</h1>
+        <p class="tag">a tiny war of colors</p>
+        <div class="menu-buttons">
+          <button class="primary" data-a="skirmish">Skirmish</button>
+          <button data-a="campaign" disabled>Campaign <small>soon</small></button>
+          <button data-a="howto">How to play</button>
+        </div>
+      </div>
+      <footer>v0.1 · fight for the nests</footer>
+    </div>`);
+  m.querySelector('[data-a=skirmish]')!.addEventListener('click', handlers.skirmish);
+  m.querySelector('[data-a=howto]')!.addEventListener('click', handlers.howto);
+  return m;
+}
+
+export function howToPlay(onBack: () => void): HTMLDivElement {
+  const m = el(`
+    <div class="screen modal">
+      <div class="card wide">
+        <h2>How to play</h2>
+        <div class="howto-grid">
+          <div>
+            <h3>The goal</h3>
+            <p>Every color wants the map. <b>Nests</b> are the only way to make more dots, so capture them. Win by wiping out every rival, or by holding <b>70% of the nests for 30 seconds</b>.</p>
+            <h3>Fighting</h3>
+            <p>Dots fight automatically. Any dot near an enemy locks on and shoots. The thin lines are the shots. Your job is to decide where your dots go and when they go there.</p>
+            <h3>Capturing</h3>
+            <p>Park dots on a nest while no enemies are on it, and the ring fills. Neutral nests have gray guards, so clear them out first. A nest that's under attack stops spawning.</p>
+          </div>
+          <div>
+            <h3>Nests</h3>
+            <ul class="nests">
+              <li><i class="n-hex"></i><b>Hive</b> spawns standard dots</li>
+              <li><i class="n-sq"></i><b>Forge</b> spawns slow, tough tanks</li>
+              <li><i class="n-tri"></i><b>Spire</b> spawns long-range lancers</li>
+              <li><i class="n-dia"></i><b>Swift</b> spawns fast, fragile dots</li>
+              <li><i class="n-oct"></i><b>Bastion</b> spawns nothing but shoots a beam turret</li>
+            </ul>
+            <p><b>Upgrade</b> a nest by feeding it dots (U). That makes it spawn faster. Spend your army now, or grow your production.</p>
+            <p><b>Energy</b> builds up over time, and faster from kills and captures. <b>Surge</b> (35) makes your selected dots faster and stronger for a few seconds. <b>Nova</b> (60) sacrifices some of your dots to blast everything around them.</p>
+          </div>
+        </div>
+        <h3>Controls</h3>
+        ${CONTROLS_HTML}
+        <div class="row end"><button class="primary" data-a="back">Got it</button></div>
+      </div>
+    </div>`);
+  m.querySelector('[data-a=back]')!.addEventListener('click', onBack);
+  return m;
+}
+
+interface BotRow {
+  faction: number;
+  difficulty: number;
+  personality: Personality | 'random';
+  team: number;
+}
+
+export interface SetupPrefs {
+  color: number;
+  size: MapSize;
+  teams: boolean;
+  bots: BotRow[];
+}
+
+const DEFAULT_PREFS: SetupPrefs = {
+  color: 0,
+  size: 'medium',
+  teams: false,
+  bots: [
+    { faction: 1, difficulty: 1, personality: 'random', team: 1 },
+    { faction: 2, difficulty: 1, personality: 'random', team: 2 },
+    { faction: 3, difficulty: 1, personality: 'random', team: 3 },
+  ],
+};
+
+export function loadPrefs(): SetupPrefs {
+  try {
+    const raw = localStorage.getItem('swarm.setup');
+    if (raw) return { ...DEFAULT_PREFS, ...JSON.parse(raw) };
+  } catch {
+    /* ignore */
+  }
+  return structuredClone(DEFAULT_PREFS);
+}
+
+function savePrefs(p: SetupPrefs): void {
+  try {
+    localStorage.setItem('swarm.setup', JSON.stringify(p));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function randomSeed(): string {
+  const words = ['ember', 'tide', 'nova', 'moss', 'flux', 'drift', 'spark', 'hollow', 'prism', 'vale', 'echo', 'glint', 'rune', 'haze'];
+  const r = () => words[Math.floor(Math.random() * words.length)];
+  return `${r()}-${r()}-${Math.floor(Math.random() * 100)}`;
+}
+
+export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
+  const seed = hashString(seedText.trim() || 'swarm');
+  // Resolve "random" personalities deterministically from the seed.
+  let s = seed;
+  const nextPers = (): Personality => {
+    s = (Math.imul(s ^ (s >>> 13), 0x5bd1e995) + 0x6b43a9b5) >>> 0;
+    return PERSONALITIES[s % PERSONALITIES.length];
+  };
+  return {
+    seed,
+    size: p.size,
+    portrait: window.innerHeight > window.innerWidth * 1.15,
+    players: [
+      { faction: p.color, team: 0, human: true },
+      ...p.bots.map((b, i) => ({
+        faction: b.faction,
+        team: p.teams ? b.team : i + 1,
+        human: false,
+        bot: { difficulty: b.difficulty, personality: b.personality === 'random' ? nextPers() : b.personality },
+      })),
+    ],
+  };
+}
+
+export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () => void): HTMLDivElement {
+  const prefs = loadPrefs();
+  let seedText = randomSeed();
+
+  const m = el(`
+    <div class="screen modal">
+      <div class="card setup">
+        <h2>Skirmish</h2>
+        <div class="field">
+          <label>Your color</label>
+          <div class="swatches"></div>
+        </div>
+        <div class="field">
+          <label>Opponents <small>bots</small></label>
+          <div class="bots"></div>
+          <div class="row">
+            <button class="small" data-a="add">+ Add bot</button>
+            <label class="check"><input type="checkbox" data-a="teams"> Teams (you are team A)</label>
+          </div>
+        </div>
+        <div class="field two">
+          <div>
+            <label>Map size</label>
+            <div class="seg" data-a="size">
+              <button data-v="small">Small</button><button data-v="medium">Medium</button><button data-v="large">Large</button>
+            </div>
+          </div>
+          <div>
+            <label>Map seed</label>
+            <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
+          </div>
+        </div>
+        <div class="row end">
+          <button data-a="back">Back</button>
+          <button class="primary" data-a="start">Start match</button>
+        </div>
+      </div>
+    </div>`);
+
+  const swatches = m.querySelector('.swatches') as HTMLDivElement;
+  const bots = m.querySelector('.bots') as HTMLDivElement;
+  const seedInput = m.querySelector('.seed') as HTMLInputElement;
+  const teamsBox = m.querySelector('[data-a=teams]') as HTMLInputElement;
+  seedInput.value = seedText;
+  teamsBox.checked = prefs.teams;
+
+  const used = () => new Set([prefs.color, ...prefs.bots.map((b) => b.faction)]);
+  const freeColor = () => [0, 1, 2, 3, 4, 5].find((c) => !used().has(c)) ?? -1;
+
+  const render = () => {
+    swatches.innerHTML = FACTION_HEX.slice(0, 6)
+      .map((c, i) => `<button class="sw${i === prefs.color ? ' on' : ''}" data-c="${i}" style="--c:${c}" title="${FACTION_NAMES[i]}"></button>`)
+      .join('');
+    bots.innerHTML = prefs.bots
+      .map(
+        (b, i) => `
+        <div class="bot" data-i="${i}">
+          <button class="sw small on" data-a="color" style="--c:${FACTION_HEX[b.faction]}" title="Change color"></button>
+          <select data-a="diff">${DIFFICULTY_NAMES.map((d, k) => `<option value="${k}"${k === b.difficulty ? ' selected' : ''}>${d}</option>`).join('')}</select>
+          <select data-a="pers">${(['random', ...PERSONALITIES] as const).map((p) => `<option value="${p}"${p === b.personality ? ' selected' : ''}>${PERSONA_LABEL[p]}</option>`).join('')}</select>
+          <select data-a="team" ${prefs.teams ? '' : 'hidden'}>${[0, 1, 2, 3, 4, 5].map((t) => `<option value="${t}"${t === b.team ? ' selected' : ''}>Team ${'ABCDEF'[t]}${t === 0 ? ' (ally)' : ''}</option>`).join('')}</select>
+          <button class="small icon" data-a="del" title="Remove" ${prefs.bots.length <= 1 ? 'disabled' : ''}>✕</button>
+        </div>`,
+      )
+      .join('');
+    (m.querySelector('[data-a=add]') as HTMLButtonElement).disabled = prefs.bots.length >= 5;
+    m.querySelectorAll<HTMLButtonElement>('[data-a=size] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.size));
+  };
+
+  swatches.addEventListener('click', (e) => {
+    const c = Number((e.target as HTMLElement).dataset.c);
+    if (Number.isNaN(c)) return;
+    // swap with a bot that had this color
+    const other = prefs.bots.find((b) => b.faction === c);
+    if (other) other.faction = prefs.color;
+    prefs.color = c;
+    render();
+  });
+
+  bots.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    const row = t.closest('.bot') as HTMLElement | null;
+    if (!row) return;
+    const b = prefs.bots[Number(row.dataset.i)];
+    if (t.dataset.a === 'del' && prefs.bots.length > 1) {
+      prefs.bots.splice(Number(row.dataset.i), 1);
+      render();
+    } else if (t.dataset.a === 'color') {
+      const u = used();
+      for (let k = 1; k <= 6; k++) {
+        const c = (b.faction + k) % 6;
+        if (!u.has(c)) {
+          b.faction = c;
+          break;
+        }
+      }
+      render();
+    }
+  });
+
+  bots.addEventListener('change', (e) => {
+    const t = e.target as HTMLSelectElement;
+    const row = t.closest('.bot') as HTMLElement;
+    const b = prefs.bots[Number(row.dataset.i)];
+    if (t.dataset.a === 'diff') b.difficulty = Number(t.value);
+    if (t.dataset.a === 'pers') b.personality = t.value as Personality | 'random';
+    if (t.dataset.a === 'team') b.team = Number(t.value);
+  });
+
+  m.querySelector('[data-a=add]')!.addEventListener('click', () => {
+    const c = freeColor();
+    if (c < 0 || prefs.bots.length >= 5) return;
+    const last = prefs.bots[prefs.bots.length - 1];
+    prefs.bots.push({ faction: c, difficulty: last?.difficulty ?? 1, personality: 'random', team: prefs.bots.length + 1 });
+    render();
+  });
+  teamsBox.addEventListener('change', () => {
+    prefs.teams = teamsBox.checked;
+    // Default split: alternate bots between your team (A) and team B.
+    if (prefs.teams) prefs.bots.forEach((b, i) => (b.team = i % 2 === 0 ? 1 : 0));
+    render();
+  });
+  m.querySelector('[data-a=size]')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).dataset.v as MapSize | undefined;
+    if (v) {
+      prefs.size = v;
+      render();
+    }
+  });
+  m.querySelector('[data-a=dice]')!.addEventListener('click', () => {
+    seedText = randomSeed();
+    seedInput.value = seedText;
+  });
+  m.querySelector('[data-a=back]')!.addEventListener('click', onBack);
+  m.querySelector('[data-a=start]')!.addEventListener('click', () => {
+    if (prefs.teams && prefs.bots.every((b) => b.team === 0)) {
+      prefs.bots[prefs.bots.length - 1].team = 1;
+    }
+    savePrefs(prefs);
+    onStart(buildSetup(prefs, seedInput.value));
+  });
+
+  render();
+  return m;
+}
+
+export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void }): HTMLDivElement {
+  const m = el(`
+    <div class="screen modal dim">
+      <div class="card">
+        <h2>Paused</h2>
+        <div class="menu-buttons">
+          <button class="primary" data-a="resume">Resume</button>
+          <button data-a="restart">Restart match</button>
+          <button data-a="quit">Quit to menu</button>
+        </div>
+        <h3>Controls</h3>
+        ${CONTROLS_HTML}
+      </div>
+    </div>`);
+  m.querySelector('[data-a=resume]')!.addEventListener('click', h.resume);
+  m.querySelector('[data-a=restart]')!.addEventListener('click', h.restart);
+  m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
+  return m;
+}
+
+export function endScreen(
+  w: World,
+  human: number,
+  victory: boolean,
+  h: { rematch: () => void; newMap: () => void; quit: () => void },
+): HTMLDivElement {
+  const rows = w.factions
+    .filter((f) => f.active && f.id !== NEUTRAL)
+    .map(
+      (f) => `<tr class="${f.id === human ? 'me' : ''}${f.eliminated ? ' dead' : ''}">
+        <td><i style="background:${FACTION_HEX[f.id]}"></i>${FACTION_NAMES[f.id]}${f.id === human ? ' (you)' : ''}</td>
+        <td>${f.stats.spawned}</td><td>${f.stats.kills}</td><td>${f.stats.lost}</td><td>${f.stats.captured}</td><td>${f.stats.peak}</td>
+        <td>${f.eliminated ? formatTime(f.eliminatedTick) : '—'}</td></tr>`,
+    )
+    .join('');
+  const m = el(`
+    <div class="screen modal dim">
+      <div class="card wide end ${victory ? 'win' : 'lose'}">
+        <h1 class="result">${victory ? 'Victory' : 'Defeat'}</h1>
+        <p class="sub">Match time ${formatTime(w.tick)}</p>
+        <canvas class="chart"></canvas>
+        <table class="stats">
+          <thead><tr><th></th><th>Spawned</th><th>Kills</th><th>Lost</th><th>Captures</th><th>Peak</th><th>Out at</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="row end">
+          <button data-a="quit">Menu</button>
+          <button data-a="newmap">New map</button>
+          <button class="primary" data-a="rematch">Rematch</button>
+        </div>
+      </div>
+    </div>`);
+  m.querySelector('[data-a=rematch]')!.addEventListener('click', h.rematch);
+  m.querySelector('[data-a=newmap]')!.addEventListener('click', h.newMap);
+  m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
+  requestAnimationFrame(() => drawChart(m.querySelector('.chart') as HTMLCanvasElement, w));
+  return m;
+}
+
+/** Army size over time per faction. */
+function drawChart(c: HTMLCanvasElement, w: World): void {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = c.clientWidth, H = c.clientHeight;
+  c.width = W * dpr;
+  c.height = H * dpr;
+  const g = c.getContext('2d');
+  if (!g) return;
+  g.scale(dpr, dpr);
+  const series = w.factions.filter((f) => f.active && f.id !== NEUTRAL).map((f) => ({ f: f.id, h: w.history[f.id] }));
+  const len = Math.max(2, ...series.map((s) => s.h.length));
+  const max = Math.max(10, ...series.flatMap((s) => s.h));
+  g.strokeStyle = 'rgba(120,140,200,0.15)';
+  g.lineWidth = 1;
+  for (let k = 1; k < 4; k++) {
+    const y = (H * k) / 4;
+    g.beginPath();
+    g.moveTo(0, y);
+    g.lineTo(W, y);
+    g.stroke();
+  }
+  for (const s of series) {
+    g.strokeStyle = FACTION_HEX[s.f];
+    g.lineWidth = 2;
+    g.shadowColor = FACTION_HEX[s.f];
+    g.shadowBlur = 8;
+    g.beginPath();
+    s.h.forEach((v, i) => {
+      const x = (i / (len - 1)) * W;
+      const y = H - (v / max) * (H - 6) - 3;
+      if (i === 0) g.moveTo(x, y);
+      else g.lineTo(x, y);
+    });
+    g.stroke();
+  }
+}
