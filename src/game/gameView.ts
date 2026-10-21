@@ -26,6 +26,8 @@ export class GameView {
   readonly human: number;
   readonly selection = new Selection();
   hoverNest = -1;
+  /** paint-select brush shown at the cursor while S is held */
+  brush: { x: number; y: number; r: number } | null = null;
   result: MatchResult | null = null;
   resultTime = 0;
   private mask = new Uint8Array(MAX_UNITS);
@@ -78,6 +80,10 @@ export class GameView {
       hoverNest: this.hoverNest,
       human: this.human,
     });
+    if (this.brush) {
+      const b = this.brush;
+      this.s.renderer.shape(true, b.x, b.y, b.r, 0, 1, 0, 1.5 / b.r, WHITE, 120);
+    }
   }
 
   private drainEvents(): void {
@@ -188,16 +194,21 @@ export class GameView {
     if (units.length || nests.length) this.s.sfx.click();
   }
 
-  /** Click-select: an own nest, else own units near the point. */
+  /**
+   * Click-select. Dots win over nests: a nest is picked only by clicking its
+   * center, or when no dots are under the cursor.
+   */
   selectAt(wx: number, wy: number, radius: number, additive: boolean): boolean {
     const n = this.nestAt(wx, wy);
-    if (n && n.owner === this.human) {
-      if (additive && this.selection.nests.has(n.id)) this.selection.nests.delete(n.id);
-      else this.selection.set([], [n.id], additive);
+    const own = n && n.owner === this.human ? n : null;
+    const units = this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= radius * radius);
+    const onCore = own && (own.x - wx) ** 2 + (own.y - wy) ** 2 <= (own.r * 0.4) ** 2;
+    if (own && (onCore || units.length === 0)) {
+      if (additive && this.selection.nests.has(own.id)) this.selection.nests.delete(own.id);
+      else this.selection.set([], [own.id], additive);
       this.s.sfx.click();
       return true;
     }
-    const units = this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= radius * radius);
     if (units.length) {
       // Grow to the whole local blob so a click grabs a group, not one dot.
       const w = this.world;
@@ -216,6 +227,15 @@ export class GameView {
     }
     if (!additive) this.selection.clear();
     return false;
+  }
+
+  /** Brush selection (hold Space and move): adds own dots under the brush. */
+  paintSelect(wx: number, wy: number, radius: number): void {
+    const before = this.selection.units.size;
+    for (const u of this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= radius * radius)) {
+      this.selection.units.add(u);
+    }
+    if (this.selection.units.size > before) this.s.sfx.click();
   }
 
   selectAll(): void {

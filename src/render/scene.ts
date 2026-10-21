@@ -53,6 +53,11 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
     const bodyA = n.owner < 0 ? 170 : n.owner === NEUTRAL ? 200 : 255;
     r.shape(false, n.x, n.y, n.r, NEST_SHAPE[n.type], progress, o.time * NEST_SPIN[n.type], spawnPulse, c, bodyA, ringC, ringA);
 
+    // Capitals wear a second, slowly counter-rotating ring.
+    if (n.capital && n.owner >= 0 && n.owner !== NEUTRAL) {
+      r.shape(false, n.x, n.y, n.r * 1.2, 0, 0.92, 0, 0.035, c, 120);
+    }
+
     // Level pips under the nest.
     for (let l = 0; l < n.level; l++) {
       const px = n.x + (l - (n.level - 1) / 2) * 7;

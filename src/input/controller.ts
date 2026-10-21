@@ -19,7 +19,8 @@ const DRAG_PX = 6;
  * Mouse / touch / keyboard -> GameView actions.
  *
  * Mouse: left-drag box-select, left-click select, double-click select all,
- * right-click order, middle-drag / wheel camera.
+ * hold Space + move to paint-select, right-click order, WASD / arrows /
+ * middle-drag / wheel camera.
  * Touch: one-finger drag box-selects, tap orders when something is
  * selected (or selects own stuff when nothing is), two fingers pan + pinch.
  */
@@ -36,6 +37,8 @@ export class InputController {
   private pinchMid: [number, number] = [0, 0];
   private lastClick = { t: 0, x: 0, y: 0 };
   private keys = new Set<string>();
+  /** physical key codes, so WASD panning works on any keyboard layout */
+  private codes = new Set<string>();
   private hoverPos: [number, number] | null = null;
 
   constructor(
@@ -54,8 +57,16 @@ export class InputController {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('wheel', (e) => this.wheel(e), { passive: false });
     window.addEventListener('keydown', (e) => this.keydown(e));
-    window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.key.toLowerCase());
+      this.codes.delete(e.code);
+      if (e.code === 'Space') this.stopPaint();
+    });
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+      this.codes.clear();
+      this.stopPaint();
+    });
   }
 
   private dev(e: { clientX: number; clientY: number }): [number, number] {
@@ -243,6 +254,21 @@ export class InputController {
     this.keys.add(k);
     const g = this.game;
     const mod = e.ctrlKey || e.metaKey;
+    if (!mod) this.codes.add(e.code);
+    if (e.code === 'Space') {
+      // Hold Space and sweep the cursor to paint-select (trackpad friendly).
+      e.preventDefault();
+      if (!e.repeat) {
+        if (!e.shiftKey) g.selection.clear();
+        this.painting = true;
+      }
+      return;
+    }
+    if (mod && k === 'a') {
+      e.preventDefault();
+      g.selectAll();
+      return;
+    }
     if (k >= '1' && k <= '9') {
       const n = Number(k);
       if (mod) {
@@ -259,7 +285,7 @@ export class InputController {
     }
     if (mod) return;
     switch (k) {
-      case 'a':
+      case 'z':
         g.selectAll();
         break;
       case 'q':
@@ -271,8 +297,7 @@ export class InputController {
       case 'u':
         g.upgrade();
         break;
-      case ' ':
-        e.preventDefault();
+      case 'c':
         if (!this.centerOnSelection()) {
           const [x, y] = g.homePoint();
           this.camera.cx = x;
@@ -289,6 +314,13 @@ export class InputController {
         this.camera.fit();
         break;
     }
+  }
+
+  private painting = false;
+
+  private stopPaint(): void {
+    this.painting = false;
+    if (this.game) this.game.brush = null;
   }
 
   private lastGroup = -1;
@@ -308,14 +340,20 @@ export class InputController {
     if (!this.game) return;
     const sp = (900 * dt * this.renderer.dpr);
     let dx = 0, dy = 0;
-    if (this.keys.has('arrowleft')) dx += sp;
-    if (this.keys.has('arrowright')) dx -= sp;
-    if (this.keys.has('arrowup')) dy += sp;
-    if (this.keys.has('arrowdown')) dy -= sp;
+    const c = this.codes;
+    if (c.has('ArrowLeft') || c.has('KeyA')) dx += sp;
+    if (c.has('ArrowRight') || c.has('KeyD')) dx -= sp;
+    if (c.has('ArrowUp') || c.has('KeyW')) dy += sp;
+    if (c.has('ArrowDown') || c.has('KeyS')) dy -= sp;
     if (dx || dy) this.camera.pan(dx, dy);
 
     if (this.hoverPos) {
       const [wx, wy] = this.world(this.hoverPos[0], this.hoverPos[1]);
+      if (this.painting && this.enabled) {
+        const r = (34 * this.renderer.dpr) / this.camera.zoom;
+        this.game.brush = { x: wx, y: wy, r };
+        this.game.paintSelect(wx, wy, r);
+      }
       const n = this.game.nestAt(wx, wy);
       this.game.hoverNest = n ? n.id : -1;
       this.canvas.style.cursor = n ? 'pointer' : 'crosshair';
@@ -323,8 +361,10 @@ export class InputController {
   }
 
   reset(): void {
+    this.stopPaint();
     this.ptrs.clear();
     this.keys.clear();
+    this.codes.clear();
     this.endBox(false);
     this.panning = false;
   }

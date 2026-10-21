@@ -1,4 +1,4 @@
-import { MAX_LEVEL, NEUTRAL, NestType, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
+import { MAX_LEVEL, NEUTRAL, NestType, bastionTurret, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
 import { applyCommand, type Command } from '../commands';
 import { Rng } from '../rng';
 import { queryRadius } from '../spatial';
@@ -55,6 +55,16 @@ const PERSONALITY: Record<Personality, PersonalityKnobs> = {
 };
 
 const scratch: number[] = [];
+
+/** When bots start ganging up on the leader. */
+const RUNAWAY = {
+  afterTicks: 100 * 30,
+  minUnits: 70,
+  /** leader's share of all units where the bonus starts */
+  share: 0.4,
+  /** leader size relative to this bot where the bonus starts */
+  vsMe: 1.4,
+};
 
 /**
  * A bot player. Runs inside the sim step (deterministic, own seeded RNG)
@@ -116,8 +126,11 @@ export class Bot {
         else h += wt;
       }
       if (n.type === NestType.Bastion && n.owner >= 0 && w.teamOf[n.owner] !== myTeam && n.control > 0.5) {
-        h += 7 * (n.owner === NEUTRAL ? 1 : n.level);
+        // Roughly the dots a turret kills during a ~5s capture.
+        const t = bastionTurret(n.owner, n.level);
+        h += t.dps * t.targets * 0.5;
       }
+      if (n.capital && n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] !== myTeam) h += 10;
       hostile.push(h);
       friendly.push(f);
     }
@@ -173,32 +186,81 @@ export class Bot {
       if (weakest < 0 || w.unitCount[f] < w.unitCount[weakest]) weakest = f;
     }
 
+    // Gang up on a runaway leader (human or bot) so FFAs don't just snowball.
+    // Only after the opening, and scaled by how big the lead really is, so a
+    // small early edge doesn't pull the whole map onto one player.
+    let leader = -1, totalUnits = 0, rivals = 0;
+    for (let f = 0; f < NEUTRAL; f++) {
+      const o = w.factions[f];
+      if (!o.active || o.eliminated) continue;
+      totalUnits += w.unitCount[f];
+      rivals++;
+      if (w.teamOf[f] !== myTeam && (leader < 0 || w.unitCount[f] > w.unitCount[leader])) leader = f;
+    }
+    let leaderBonus = 1;
+    if (leader >= 0 && rivals > 2 && w.tick > RUNAWAY.afterTicks && w.unitCount[leader] >= RUNAWAY.minUnits) {
+      const share = w.unitCount[leader] / Math.max(1, totalUnits);
+      const vsMe = w.unitCount[leader] / Math.max(1, w.unitCount[me]);
+      const k = Math.min((share - RUNAWAY.share) / 0.25, (vsMe - RUNAWAY.vsMe) / 1.5, 1);
+      if (k > 0) leaderBonus = 1 + 0.9 * k;
+    }
+
+    // Finish off stragglers: a rival down to one nest and a tiny army is a
+    // cheap kill, and leaving it alive just stalls the match.
+    const myUnits = w.unitCount[me];
+    const nestCount = new Int32Array(NEUTRAL + 1);
+    for (const n of w.nests) if (n.owner >= 0 && n.owner < NEUTRAL) nestCount[n.owner]++;
+    const straggler = (f: number) =>
+      nestCount[f] <= 1 && myUnits >= 30 && w.unitCount[f] < myUnits * 0.3;
+
     let best: Nest | null = null;
     let bestScore = -Infinity;
     let bestNeed = 0;
+    // Best target we can afford right now, so small bots still act.
+    let fallback: Nest | null = null;
+    let fallbackScore = -Infinity;
+    let fallbackNeed = 0;
+    const reserve = threatened ? 0 : Math.floor(total * this.p.reserve);
+    const available = idle.length - used.size - reserve;
     for (const n of w.nests) {
       if (n.owner >= 0 && w.teamOf[n.owner] === myTeam) continue;
       const def = hostile[n.id];
-      let value = n.type === NestType.Bastion ? 0.75 * this.p.bastion : n.type === NestType.Hive ? 1 : 1.1;
+      let value = n.type === NestType.Bastion ? 0.95 * this.p.bastion : n.type === NestType.Hive ? 1 : 1.1;
       value *= 0.6 + 0.4 * n.level;
+      let margin = this.d.margin * this.p.margin;
       if (n.owner === NEUTRAL || n.owner < 0) value *= this.p.neutral;
       else {
         value *= this.p.enemy;
         if (n.owner === weakest) value *= this.p.weakest;
+        if (n.owner === leader) value *= leaderBonus;
+        if (straggler(n.owner)) {
+          value *= 2.4;
+          margin = Math.min(margin, 1.1);
+        }
       }
       const dist = Math.sqrt((n.x - hx) ** 2 + (n.y - hy) ** 2);
       let score = value / (def + 4) / (1 + dist / 420);
       if (n.id === this.focus) score *= 1.25; // stick with a plan
       score *= 1 + (this.rng.next() - 0.5) * this.d.noise;
+      const need = def * margin + 4 + n.level * 2;
       if (score > bestScore) {
         bestScore = score;
         best = n;
-        bestNeed = def * this.d.margin * this.p.margin + 4 + n.level * 2;
+        bestNeed = need;
+      }
+      if (need <= available && score > fallbackScore) {
+        fallbackScore = score;
+        fallback = n;
+        fallbackNeed = need;
       }
     }
 
-    const reserve = threatened ? 0 : Math.floor(total * this.p.reserve);
-    const available = idle.length - used.size - reserve;
+    // Prefer the best target; if we can't afford it, take the best
+    // affordable one when it is at least half as good.
+    if (best && available < bestNeed && fallback && fallbackScore >= bestScore * 0.5) {
+      best = fallback;
+      bestNeed = fallbackNeed;
+    }
     if (best && available >= bestNeed) {
       this.focus = best.id;
       send(take(best.x, best.y, Math.min(available, bestNeed * 1.6 + 8), 1e9), best);

@@ -24,6 +24,8 @@ export interface Nest {
   lastSpawn: number;
   /** true while hostile units stand on it */
   contested: boolean;
+  /** a player's starting nest: built-in turret + stronger home armor */
+  capital: boolean;
 }
 
 export interface FactionStats {
@@ -95,6 +97,8 @@ export class World {
   readonly vy = new Float64Array(MAX_UNITS);
   readonly hp = new Float64Array(MAX_UNITS);
   readonly dmg = new Float64Array(MAX_UNITS);
+  /** damage taken multiplier this tick (home turf, Bastion aura) */
+  readonly armor = new Float64Array(MAX_UNITS);
   /** order point and arrival radius */
   readonly ox = new Float64Array(MAX_UNITS);
   readonly oy = new Float64Array(MAX_UNITS);
@@ -189,6 +193,7 @@ export function spawnUnit(
   w.vy[i] = 0;
   w.hp[i] = UNIT_STATS[kind].hp;
   w.dmg[i] = 0;
+  w.armor[i] = 1;
   w.ox[i] = ox;
   w.oy[i] = oy;
   w.arrive[i] = arrive;

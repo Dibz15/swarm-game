@@ -1,4 +1,4 @@
-import { DOMINATION, DT, ENERGY, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
+import { BALANCE, DOMINATION, DT, ENERGY, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
 import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
@@ -26,9 +26,15 @@ export function step(w: World, commands: readonly Command[]): void {
   resolveDamage(w);
   updateMovement(w);
 
+  // Energy: factions behind the biggest army charge faster.
+  let leader = 1;
+  for (let f = 0; f < NEUTRAL; f++) if (w.factions[f].active) leader = Math.max(leader, w.unitCount[f]);
   for (let f = 0; f < NEUTRAL; f++) {
     const fa = w.factions[f];
-    if (fa.active && !fa.eliminated) fa.energy = Math.min(ENERGY.max, fa.energy + ENERGY.passive * DT);
+    if (!fa.active || fa.eliminated) continue;
+    const behind = 1 - w.unitCount[f] / leader;
+    const rate = ENERGY.passive * (1 + BALANCE.underdogEnergy * behind);
+    fa.energy = Math.min(ENERGY.max, fa.energy + rate * DT);
   }
 
   if (w.tick % TICK_HZ === 0) {

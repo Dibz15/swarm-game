@@ -78,7 +78,8 @@ export function resolveDamage(w: World): void {
   const n = w.n;
   for (let i = 0; i < n; i++) {
     if (!w.alive[i] || w.dmg[i] === 0) continue;
-    w.hp[i] -= w.dmg[i];
+    const surged = w.surge[i] > w.tick ? POWER.surgeArmor : 1;
+    w.hp[i] -= w.dmg[i] * w.armor[i] * surged;
     w.dmg[i] = 0;
     if (w.hp[i] > 0) continue;
     const killer = w.lastHit[i];

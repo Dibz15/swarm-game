@@ -1,10 +1,14 @@
 import {
+  BALANCE,
   BASTION,
+  CAPITAL,
+  bastionTurret,
   DT,
   ENERGY,
   FACTION_UNIT_CAP,
   LEVEL_SPAWN_MULT,
   NEST_KIND,
+  NEST_SPAWN_MULT,
   NEUTRAL,
   NUM_FACTIONS,
   NestType,
@@ -22,10 +26,32 @@ function captureRate(count: number, level: number): number {
 }
 
 export function updateNests(w: World): void {
+  w.armor.fill(1, 0, w.n);
   for (const n of w.nests) {
     updateControl(w, n);
-    if (n.type === NestType.Bastion) bastionFire(w, n);
-    else spawn(w, n);
+    applyArmor(w, n);
+    if (n.owner >= 0) {
+      if (n.type === NestType.Bastion && n.control >= BASTION.minControl) {
+        const t = bastionTurret(n.owner, n.level);
+        turretFire(w, n, BASTION.range + BASTION.rangePerLevel * (n.level - 1), t.targets, t.dps);
+      }
+      if (n.capital && n.owner !== NEUTRAL && n.control >= 1) turretFire(w, n, CAPITAL.range, CAPITAL.targets, CAPITAL.dps);
+    }
+    spawn(w, n);
+  }
+}
+
+/** Defender's advantage: own units near a held nest take less damage. */
+function applyArmor(w: World, n: Nest): void {
+  // Neutral garrisons don't get it, so the early expansion pace stays the same.
+  if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1) return;
+  const bastion = n.type === NestType.Bastion;
+  const r = bastion ? BASTION.range + BASTION.rangePerLevel * (n.level - 1) : n.r + BALANCE.homeRadius;
+  const k = Math.min(bastion ? BASTION.aura : BALANCE.homeArmor, n.capital ? CAPITAL.armor : 1);
+  const team = w.teamOf[n.owner];
+  queryRadius(w, n.x, n.y, r, scratch);
+  for (const s of scratch) {
+    if (w.teamOf[w.owner[s]] === team && w.armor[s] > k) w.armor[s] = k;
   }
 }
 
@@ -121,7 +147,9 @@ function spawn(w: World, n: Nest): void {
   if (kind < 0) return;
   if (w.unitCount[n.owner] >= FACTION_UNIT_CAP) return;
   const f = w.factions[n.owner];
-  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * f.prodMult;
+  // Soft cap: big armies produce slower, which keeps comebacks possible.
+  const soft = 1 / (1 + Math.max(0, w.unitCount[n.owner] - BALANCE.softCap) / BALANCE.softScale);
+  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * soft;
   const interval = UNIT_STATS[kind].interval;
   if (n.spawnAcc < interval) return;
   n.spawnAcc -= interval;
@@ -143,10 +171,8 @@ function spawn(w: World, n: Nest): void {
 const bestSlot = new Int32Array(4);
 const bestD = new Float64Array(4);
 
-function bastionFire(w: World, n: Nest): void {
-  if (n.owner < 0 || n.control < BASTION.minControl) return;
-  const range = BASTION.range + BASTION.rangePerLevel * (n.level - 1);
-  const k = n.owner === NEUTRAL ? 1 : n.level;
+/** Beam turret: hits the k nearest hostile units in range. */
+function turretFire(w: World, n: Nest, range: number, k: number, dps: number): void {
   for (let i = 0; i < k; i++) {
     bestSlot[i] = -1;
     bestD[i] = Infinity;
@@ -171,7 +197,7 @@ function bastionFire(w: World, n: Nest): void {
   for (let i = 0; i < k; i++) {
     const s = bestSlot[i];
     if (s < 0) break;
-    w.dmg[s] += BASTION.dps * DT;
+    w.dmg[s] += dps * DT;
     w.lastHit[s] = n.owner;
     w.beams[w.beamCount * 2] = -(n.id + 1);
     w.beams[w.beamCount * 2 + 1] = s;

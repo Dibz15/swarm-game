@@ -24,13 +24,14 @@ const PERSONA_LABEL: Record<Personality | 'random', string> = {
 export const CONTROLS_HTML = `
   <dl class="controls">
     <dt>Drag</dt><dd>Box-select dots (and your nests)</dd>
-    <dt>Click</dt><dd>Select a blob of dots or a nest</dd>
-    <dt>Double-click / A</dt><dd>Select all your dots</dd>
+    <dt>Hold Space + move</dt><dd>Paint-select dots under the cursor (great on trackpads)</dd>
+    <dt>Click</dt><dd>Select a blob of dots · click a nest's center to select the nest</dd>
+    <dt>Double-click / Z</dt><dd>Select all your dots</dd>
     <dt>Right-click</dt><dd>Send dots / set the rally point of selected nests</dd>
     <dt>Q / E</dt><dd>Surge / Nova on the selected dots</dd>
     <dt>U</dt><dd>Upgrade the selected nest (feeds it nearby dots)</dd>
     <dt>Ctrl+1–5, 1–5</dt><dd>Save / recall control groups</dd>
-    <dt>Wheel, middle-drag, arrows</dt><dd>Zoom and pan · F fits the map · Space centers</dd>
+    <dt>WASD / arrows</dt><dd>Pan · wheel zooms · middle-drag pans · F fits the map · C centers on selection · H goes home</dd>
     <dt>Touch</dt><dd>Drag selects, tap sends, two fingers pan and zoom</dd>
   </dl>`;
 
@@ -65,7 +66,7 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
             <h3>Fighting</h3>
             <p>Dots fight automatically. Any dot near an enemy locks on and shoots. The thin lines are the shots. Your job is to decide where your dots go and when they go there.</p>
             <h3>Capturing</h3>
-            <p>Park dots on a nest while no enemies are on it, and the ring fills. Neutral nests have gray guards, so clear them out first. A nest that's under attack stops spawning.</p>
+            <p>Park dots on a nest while no enemies are on it, and the ring fills. Neutral nests have gray guards, so clear them out first. A nest that's under attack stops spawning. Your dots take less damage near your own nests, and huge armies spawn more slowly, so a comeback is always possible.</p>
           </div>
           <div>
             <h3>Nests</h3>
@@ -74,10 +75,10 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
               <li><i class="n-sq"></i><b>Forge</b> spawns slow, tough tanks</li>
               <li><i class="n-tri"></i><b>Spire</b> spawns long-range lancers</li>
               <li><i class="n-dia"></i><b>Swift</b> spawns fast, fragile dots</li>
-              <li><i class="n-oct"></i><b>Bastion</b> spawns nothing but shoots a beam turret</li>
+              <li><i class="n-oct"></i><b>Bastion</b> spawns slowly, shoots a beam turret, and shields allies in range</li>
             </ul>
             <p><b>Upgrade</b> a nest by feeding it dots (U). That makes it spawn faster. Spend your army now, or grow your production.</p>
-            <p><b>Energy</b> builds up over time, and faster from kills and captures. <b>Surge</b> (35) makes your selected dots faster and stronger for a few seconds. <b>Nova</b> (60) sacrifices some of your dots to blast everything around them.</p>
+            <p><b>Energy</b> builds up over time, and faster from kills and captures. <b>Surge</b> (30) makes your selected dots faster, stronger and tougher for 6 seconds. <b>Nova</b> (60) sacrifices some of your dots to blast everything around them.</p>
           </div>
         </div>
         <h3>Controls</h3>

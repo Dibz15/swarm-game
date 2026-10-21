@@ -43,14 +43,16 @@ export const RETARGET = 6;
 export const NestType = { Hive: 0, Forge: 1, Spire: 2, Swift: 3, Bastion: 4 } as const;
 export const NEST_NAMES = ['Hive', 'Forge', 'Spire', 'Swift', 'Bastion'] as const;
 /** unit kind spawned by each nest type; -1 = spawns nothing */
-export const NEST_KIND: readonly number[] = [Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift, -1];
+export const NEST_KIND: readonly number[] = [Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift, Kind.Dot];
+/** per-type spawn speed multiplier (Bastion trades production for defense) */
+export const NEST_SPAWN_MULT: readonly number[] = [1, 1, 1, 1, 0.5];
 export const NEST_RADIUS: readonly number[] = [26, 28, 26, 24, 25];
 export const NEST_BLURB: readonly string[] = [
   'Spawns standard dots.',
   'Spawns slow, tough tanks.',
   'Spawns long-range lancers.',
   'Spawns fast, fragile swifts.',
-  'Spawns nothing. Fires a defensive beam.',
+  'Spawns dots slowly. Fires a beam turret and shields nearby allies.',
 ];
 export const MAX_LEVEL = 3;
 /** spawn speed multiplier by level (index = level) */
@@ -59,15 +61,48 @@ export const LEVEL_SPAWN_MULT: readonly number[] = [0, 1, 1.5, 2];
 export const UPGRADE_COST: readonly number[] = [0, 20, 35, 0];
 export const UPGRADE_PICK_RADIUS = 240;
 
-export const BASTION = { range: 92, rangePerLevel: 16, dps: 13, minControl: 0.5 };
+export const BASTION = {
+  range: 96,
+  rangePerLevel: 16,
+  /** player-owned turret damage per target */
+  dps: 19,
+  /** neutral Bastions hit softer so they aren't a trap to capture */
+  neutralDps: 10,
+  minControl: 0.5,
+  aura: 0.65,
+};
+
+/** Turret damage per second and target count for a Bastion. */
+export function bastionTurret(owner: number, level: number): { dps: number; targets: number } {
+  return owner === NEUTRAL ? { dps: BASTION.neutralDps, targets: 1 } : { dps: BASTION.dps, targets: level };
+}
+
+/** Each player's starting nest: a built-in turret and stronger home armor, so a fast rush can't knock a player out early. */
+export const CAPITAL = { range: 88, dps: 11, targets: 2, armor: 0.6 };
+
+/**
+ * Anti-snowball tuning.
+ * - Production slows as an army grows: mult = 1 / (1 + max(0, units - softCap) / softScale).
+ * - Units near their own nests take less damage (home turf).
+ * - Factions behind the leader charge energy faster.
+ */
+export const BALANCE = {
+  softCap: 110,
+  softScale: 260,
+  homeRadius: 70,
+  homeArmor: 0.75,
+  underdogEnergy: 1.5,
+};
 
 export const ENERGY = { max: 100, passive: 0.9, kill: 0.2, capture: 15 };
 
 export const POWER = {
-  surgeCost: 35,
-  surgeTicks: 4 * TICK_HZ,
-  surgeSpeed: 1.6,
-  surgeDmg: 1.4,
+  surgeCost: 30,
+  surgeTicks: 6 * TICK_HZ,
+  surgeSpeed: 1.7,
+  surgeDmg: 1.6,
+  /** damage taken multiplier while surged */
+  surgeArmor: 0.7,
   novaCost: 60,
   novaDamage: 22,
   novaSacrifice: 0.2,

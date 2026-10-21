@@ -4,11 +4,12 @@ import { DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ,
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
+  'On a trackpad, hold Space and sweep the cursor to paint-select dots. WASD pans the map.',
   'Click one of your nests, then right-click somewhere to set its rally point.',
   'Select a nest and press U to feed it dots and level it up.',
-  'Surge (Q) speeds up selected dots. Nova (E) blasts enemies but costs some of your own dots.',
+  'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
   'Hold 70% of the nests for 30 seconds to win by domination.',
-  'Ctrl+1–5 saves a control group. Press 1–5 to recall it. Space centers the camera.',
+  'Ctrl+1–5 saves a control group. Press 1–5 to recall it. C centers the camera on your selection.',
 ];
 
 export function formatTime(ticks: number): string {
@@ -58,7 +59,7 @@ export class Hud {
         <div class="selinfo"></div>
         <div class="energy"><div class="fill"></div><span>Energy</span></div>
         <div class="actions">
-          <button data-a="all">All<kbd>A</kbd></button>
+          <button data-a="all">All<kbd>Z</kbd></button>
           <button data-a="surge" class="power">Surge<kbd>Q</kbd><small>${POWER.surgeCost}</small></button>
           <button data-a="nova" class="power">Nova<kbd>E</kbd><small>${POWER.novaCost}</small></button>
           <button data-a="upgrade" style="display:none">Upgrade<kbd>U</kbd><small class="ucost"></small></button>
@@ -199,7 +200,7 @@ export class Hud {
     if (hn) {
       const owner = hn.owner < 0 ? 'Unclaimed' : hn.owner === NEUTRAL ? 'Neutral' : hn.owner === g.human ? 'Yours' : FACTION_NAMES[hn.owner];
       const lvl = hn.level < MAX_LEVEL ? ` · next level ${UPGRADE_COST[hn.level]} dots` : ' · max level';
-      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${NEST_NAMES[hn.type]}</b> Lv${hn.level} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.owner === g.human ? lvl : ''}</small>`;
+      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${hn.owner === g.human ? lvl : ''}</small>`;
       this.nestCard.style.display = 'block';
     } else {
       this.nestCard.style.display = 'none';

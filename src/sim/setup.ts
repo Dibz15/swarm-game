@@ -60,6 +60,7 @@ export function createWorld(setup: MatchSetup): World {
       feedIncoming: 0,
       lastSpawn: -100,
       contested: false,
+      capital: s.player >= 0,
     });
 
     // Garrisons are made of the nest's own unit kind (tanks guard forges...).

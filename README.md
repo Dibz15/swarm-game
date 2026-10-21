@@ -9,16 +9,25 @@ npm test           # determinism, spatial, capture, upgrade, bot-FFA smoke test
 npm run build      # static site in dist/ — host anywhere (GitHub Pages, Netlify, S3…)
 ```
 
+Balance tools (headless bot matches):
+
+```bash
+npx vite-node scripts/balance.ts 4 medium 10   # players, size, games: length, lead changes, stragglers
+npx vite-node scripts/map-mix.ts               # nest-type mix across generated maps
+npx vite-node scripts/bastion-probe.ts         # stress test: every neutral nest is a Bastion
+```
+
 Dev URL flags:
 - `?debug` shows the fps / sim-ms overlay. Press `` ` `` to toggle it.
 - `?bench=5000` runs a stress battle with about 5,000 units.
 
 ## How it plays
 
-- **Nests** spawn dots. **Hive** spawns standard dots, **Forge** spawns tanks, **Spire** spawns long-range lancers, **Swift** spawns fast dots, and **Bastion** spawns nothing but fires a beam turret.
+- **Nests** spawn dots. **Hive** spawns standard dots, **Forge** spawns tanks, **Spire** spawns long-range lancers, **Swift** spawns fast dots, and **Bastion** spawns slowly but fires a beam turret and shields allies in range.
 - **Capture** a nest by standing on it with no enemies present. Neutral nests have gray guards. A contested nest stops spawning.
 - **Upgrade** a nest by feeding it your dots (U). Levels 1–3 spawn faster.
-- **Energy** builds up over time and from kills and captures. **Surge** (Q) costs 35: the selected dots get faster and stronger for 4 seconds. **Nova** (E) costs 60: it sacrifices about 20% of the selected dots and sends out a shockwave.
+- **Energy** builds up over time and from kills and captures. **Surge** (Q) costs 30: the selected dots get faster, stronger and tougher for 6 seconds. **Nova** (E) costs 60: it sacrifices about 20% of the selected dots and sends out a shockwave.
+- **Anti-snowball:** big armies spawn more slowly, dots near their own nests take less damage, factions that are behind charge energy faster, and bots gang up on a runaway leader.
 - **Win** by eliminating every rival, or by holding 70% of the nests for 30 seconds.
 - **Bots** have four personalities (Rusher, Turtler, Expander, Opportunist) and four difficulties (Easy to Brutal). Only Brutal gets a production bonus.
 

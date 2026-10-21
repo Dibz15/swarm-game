@@ -98,12 +98,19 @@ export function generateMap(seed: number, size: MapSize, players: number, portra
     }
   }
 
+  // Keep the mix varied: at most one Bastion and two of any other type per
+  // sector, so a seed can't produce a map that is mostly turrets.
+  const typeCount = new Map<number, number>();
+  const allowed = (t: number) => (typeCount.get(t) ?? 0) < (t === NestType.Bastion ? 1 : 2);
   let placed = 1;
   for (let tries = 0; tries < 400 && placed < perSector; tries++) {
     const r = rng.range(0.28, 1.0);
     const da = rng.range(-0.46, 0.46) * sector;
     if (!fits(r, da)) continue;
-    const type = pickType(rng);
+    let type = pickType(rng);
+    for (let k = 0; k < 6 && !allowed(type); k++) type = pickType(rng);
+    if (!allowed(type)) type = NestType.Hive;
+    typeCount.set(type, (typeCount.get(type) ?? 0) + 1);
     const level = rng.next() < 0.15 ? 2 : 1;
     let g = Math.round(4 + (1 - r) * 9 + rng.int(4) + (level - 1) * 6);
     if (type === NestType.Bastion) g = Math.round(g * 0.6);
