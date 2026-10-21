@@ -5,12 +5,12 @@ import { type NestPower, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAM
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
   'On a trackpad, hold Space and sweep the cursor to paint-select dots. WASD pans the map.',
-  'Picking one type out of a blob: press Tab to cycle types, click a type chip, or double-click a unit to grab all of its type on screen.',
+  'Pick a type out of a blob with 1–4: 1 Swarmers, 2 Shields, 3 Spears, 4 Raiders. Shift+number drops that type.',
   'Click one of your nests, then right-click somewhere to set its rally point.',
   'Select a nest and press U to feed it dots and level it up.',
   'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
   'Hold 70% of the nests (60% on large maps) for 30 seconds to win by domination.',
-  'Ctrl+1–5 saves a control group. Press 1–5 to recall it. C centers the camera on your selection, 0 fits the map.',
+  'Ctrl+5–9 saves a control group, 5–9 recalls it. C centers the camera on your selection, 0 fits the map.',
   'Each nest type you hold unlocks a power: Forge → Fortify (R), Spire → Barrage (F), Den → Blink (G), Bastion → Lockdown (T).',
   'Spears pierce Shields, Shields stop Swarmers, Swarmers overrun Spears. Raiders capture nests three times faster.',
 ];
@@ -99,17 +99,17 @@ export class Hud {
           <path class="arrow" data-from="2" data-to="1" d="M68,20 Q98,30 96,56" marker-end="url(#ah)"></path>
           <path class="arrow" data-from="1" data-to="0" d="M84,76 Q60,90 36,76" marker-end="url(#ah)"></path>
           <path class="arrow" data-from="0" data-to="2" d="M22,58 Q20,30 50,20" marker-end="url(#ah)"></path>
-          <g class="node" data-k="2" transform="translate(60,14)"><polygon points="0,-11 4,0 0,11 -4,0"></polygon></g>
-          <g class="node" data-k="1" transform="translate(98,70)"><rect x="-8" y="-8" width="16" height="16" class="hollow"></rect></g>
-          <g class="node" data-k="0" transform="translate(22,70)"><rect x="-9" y="-7" width="7" height="7"></rect><rect x="1" y="-8" width="7" height="7"></rect><rect x="-4" y="1" width="7" height="7"></rect></g>
-          <g class="node raider" data-k="3" transform="translate(60,52)"><polygon points="7,0 -6,-6 -3,0 -6,6"></polygon></g>
+          <g class="node" data-k="2" transform="translate(60,14)"><polygon points="0,-11 4,0 0,11 -4,0"></polygon><text x="9" y="4">3</text></g>
+          <g class="node" data-k="1" transform="translate(98,70)"><rect x="-8" y="-8" width="16" height="16" class="hollow"></rect><text x="-3" y="20">2</text></g>
+          <g class="node" data-k="0" transform="translate(22,70)"><rect x="-9" y="-7" width="7" height="7"></rect><rect x="1" y="-8" width="7" height="7"></rect><rect x="-4" y="1" width="7" height="7"></rect><text x="-3" y="20">1</text></g>
+          <g class="node raider" data-k="3" transform="translate(60,52)"><polygon points="7,0 -6,-6 -3,0 -6,6"></polygon><text x="10" y="4">4</text></g>
         </svg>
         <div class="counter-cap"></div>
       </div>
       <div class="hud-bottom">
         <div class="selinfo"></div>
         <div class="selchips">${[0, 1, 2, 3]
-          .map((k) => `<button class="kchip" data-k="${k}" title="Click: keep only ${UNIT_STATS[k].name}s · Shift-click: drop them · Tab cycles types">${KIND_ICON[k]}<b></b></button>`)
+          .map((k) => `<button class="kchip" data-k="${k}" title="${k + 1} or click: keep only ${UNIT_STATS[k].name}s · Shift+${k + 1} or Shift-click: drop them">${KIND_ICON[k]}<b></b><kbd>${k + 1}</kbd></button>`)
           .join('')}</div>
         <div class="energy"><div class="fill"></div><span>Energy</span></div>
         <div class="actions">
@@ -298,7 +298,7 @@ export class Hud {
     this.kindChips.forEach((b, k) => {
       b.style.display = mix[k] > 0 ? '' : 'none';
       b.classList.toggle('solo', kinds === 1);
-      (b.lastElementChild as HTMLElement).textContent = String(mix[k]);
+      b.querySelector('b')!.textContent = String(mix[k]);
     });
 
     // Hover card for nests.

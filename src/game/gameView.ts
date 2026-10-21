@@ -390,6 +390,20 @@ export class GameView {
     this.s.sfx.click();
   }
 
+  /**
+   * Number keys 1-4: keep just this type from the current group. The group
+   * is remembered, so 1 then 3 picks Spears from the same blob. If the group
+   * has none of this type, grab that type on screen instead.
+   */
+  selectType(kind: number): void {
+    const base = this.typeCycle?.base ?? [...this.selection.units];
+    const pick = base.filter((u) => this.kindOf(u) === kind);
+    if (!pick.length) return this.selectKindOnScreen(kind);
+    this.selection.set(pick, [], false);
+    this.typeCycle = { base, idx: [0, 1, 2, 3].filter((k) => base.some((u) => this.kindOf(u) === k)).indexOf(kind) };
+    this.s.sfx.click();
+  }
+
   /** Every own unit of `kind` currently on screen. */
   selectKindOnScreen(kind: number): void {
     const cam = this.s.camera;

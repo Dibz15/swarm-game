@@ -288,8 +288,24 @@ export class InputController {
       this.game.cycleType(e.shiftKey ? -1 : 1);
       return;
     }
-    if (k >= '1' && k <= '9') {
-      const n = Number(k);
+    // Number keys by physical position (Shift+1 is '!' as a key).
+    const digit = /^Digit([1-9])$/.exec(e.code);
+    if (digit) {
+      const n = Number(digit[1]);
+      // 1-4: unit types (Swarmer, Shield, Spear, Raider). Shift drops the type.
+      if (n <= 4) {
+        if (mod) return;
+        e.preventDefault();
+        if (e.shiftKey) g.filterSelection(n - 1, true);
+        else {
+          g.selectType(n - 1);
+          if (this.lastGroup === n && performance.now() - this.lastGroupT < 350) this.centerOnSelection();
+          this.lastGroup = n;
+          this.lastGroupT = performance.now();
+        }
+        return;
+      }
+      // 5-9: control groups (Ctrl/Cmd to save).
       if (mod) {
         g.selection.saveGroup(n);
         e.preventDefault();

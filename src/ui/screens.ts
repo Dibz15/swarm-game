@@ -28,12 +28,12 @@ export const CONTROLS_HTML = `
     <dt>Hold Space + move</dt><dd>Paint-select dots under the cursor (great on trackpads)</dd>
     <dt>Click</dt><dd>Select a blob of dots · click a nest's center to select the nest</dd>
     <dt>Double-click / Z</dt><dd>Double-click a unit: all of that type on screen · empty ground or Z: all your dots</dd>
-    <dt>Tab · type chips</dt><dd>Tab cycles the selection through its unit types (Shift+Tab back). Click a type chip to keep only that type, Shift-click to drop it</dd>
+    <dt>1 / 2 / 3 / 4</dt><dd>Keep only Swarmers / Shields / Spears / Raiders from your group (or grab that type on screen). Shift+number drops the type. The type chips do the same; Tab cycles</dd>
     <dt>Right-click</dt><dd>Send dots / set the rally point of selected nests</dd>
     <dt>Q / E</dt><dd>Surge / Nova on the selected dots</dd>
     <dt>R / F / G / T</dt><dd>Nest powers: Fortify, Barrage, Blink, Lockdown (at the cursor). They appear when you hold a Forge, Spire, Den or Bastion</dd>
     <dt>U</dt><dd>Upgrade the selected nest (feeds it nearby dots)</dd>
-    <dt>Ctrl+1–5, 1–5</dt><dd>Save / recall control groups</dd>
+    <dt>Ctrl+5–9, 5–9</dt><dd>Save / recall control groups</dd>
     <dt>WASD / arrows</dt><dd>Pan · wheel zooms · middle-drag pans · 0 fits the map · C centers on selection · H goes home</dd>
     <dt>Touch</dt><dd>Drag selects, tap sends, two fingers pan and zoom</dd>
   </dl>`;

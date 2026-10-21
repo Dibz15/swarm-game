@@ -391,3 +391,6 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .kchip svg rect.hollow { fill: none; stroke: currentColor; stroke-width: 3; }
 .kchip.solo { border-color: var(--accent); }
 .counters .node { cursor: pointer; }
+.kchip kbd { margin-left: 2px; }
+.counters .node text { font: 600 9px var(--font); fill: var(--muted); }
+.counters .node.on text { fill: #fff; }
