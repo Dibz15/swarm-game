@@ -41,6 +41,7 @@ Dev URL flags:
 - **Upgrade** a nest by feeding it your dots (U). Levels 1–3 spawn faster.
 - **Energy** builds up over time and from kills and captures. **Surge** (Q) costs 30: the selected dots get faster, stronger and tougher for 6 seconds. **Nova** (E) costs 60: it sacrifices about 20% of the selected dots and sends out a shockwave.
 - **Anti-snowball:** big armies spawn more slowly, each extra nest adds less production (nests^0.75), dots near their own nests take less damage, factions that are behind charge energy faster, starting nests are defended capitals, and bots gang up on a runaway leader.
+- **Selecting by type:** double-click a unit to grab all of that type on screen; Tab cycles a selection through its unit types; the type chips (and the counter wheel icons) keep or drop a type.
 - **Escalation:** from minute 5, those comeback rules fade out over 3 minutes so every match reaches an endgame.
 - **Win** by eliminating every rival, or by holding 70% of the nests (60% on large maps) for 30 seconds.
 - **Bots** have four difficulties (Easy to Brutal; only Brutal gets a production bonus) and four personalities. Every bot expands for the first 90 seconds, then:

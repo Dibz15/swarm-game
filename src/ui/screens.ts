@@ -27,7 +27,8 @@ export const CONTROLS_HTML = `
     <dt>Drag</dt><dd>Box-select dots (and your nests)</dd>
     <dt>Hold Space + move</dt><dd>Paint-select dots under the cursor (great on trackpads)</dd>
     <dt>Click</dt><dd>Select a blob of dots · click a nest's center to select the nest</dd>
-    <dt>Double-click / Z</dt><dd>Select all your dots</dd>
+    <dt>Double-click / Z</dt><dd>Double-click a unit: all of that type on screen · empty ground or Z: all your dots</dd>
+    <dt>Tab · type chips</dt><dd>Tab cycles the selection through its unit types (Shift+Tab back). Click a type chip to keep only that type, Shift-click to drop it</dd>
     <dt>Right-click</dt><dd>Send dots / set the rally point of selected nests</dd>
     <dt>Q / E</dt><dd>Surge / Nova on the selected dots</dd>
     <dt>R / F / G / T</dt><dd>Nest powers: Fortify, Barrage, Blink, Lockdown (at the cursor). They appear when you hold a Forge, Spire, Den or Bastion</dd>

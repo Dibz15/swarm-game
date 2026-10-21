@@ -219,7 +219,10 @@ export class InputController {
     const dbl = now - this.lastClick.t < 320 && Math.hypot(p.x - this.lastClick.x, p.y - this.lastClick.y) < 20;
     this.lastClick = { t: now, x: p.x, y: p.y };
     if (dbl) {
-      this.game.selectAll();
+      // Double-click a unit: all of that type on screen. Empty ground: everything.
+      const kind = this.game.kindAt(wx, wy, this.pickRadius());
+      if (kind >= 0) this.game.selectKindOnScreen(kind);
+      else this.game.selectAll();
       return;
     }
     this.game.selectAt(wx, wy, this.pickRadius(), additive);
@@ -278,6 +281,11 @@ export class InputController {
     if (mod && k === 'a') {
       e.preventDefault();
       g.selectAll();
+      return;
+    }
+    if (k === 'tab') {
+      e.preventDefault();
+      this.game.cycleType(e.shiftKey ? -1 : 1);
       return;
     }
     if (k >= '1' && k <= '9') {

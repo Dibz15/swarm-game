@@ -382,3 +382,12 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   .counters { width: 96px; bottom: auto; top: 64px; right: 8px; }
   .counter-cap { display: none; }
 }
+
+/* Selection type chips: click to keep a type, shift-click to drop it. */
+.selchips { display: flex; gap: 4px; }
+.kchip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; font-size: 13px; }
+.kchip svg { width: 14px; height: 14px; }
+.kchip svg rect, .kchip svg polygon { fill: currentColor; }
+.kchip svg rect.hollow { fill: none; stroke: currentColor; stroke-width: 3; }
+.kchip.solo { border-color: var(--accent); }
+.counters .node { cursor: pointer; }

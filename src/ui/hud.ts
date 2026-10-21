@@ -1,10 +1,11 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
-import { type NestPower, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
+import { type NestPower, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
   'On a trackpad, hold Space and sweep the cursor to paint-select dots. WASD pans the map.',
+  'Picking one type out of a blob: press Tab to cycle types, click a type chip, or double-click a unit to grab all of its type on screen.',
   'Click one of your nests, then right-click somewhere to set its rally point.',
   'Select a nest and press U to feed it dots and level it up.',
   'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
@@ -12,6 +13,14 @@ const TIPS = [
   'Ctrl+1–5 saves a control group. Press 1–5 to recall it. C centers the camera on your selection, 0 fits the map.',
   'Each nest type you hold unlocks a power: Forge → Fortify (R), Spire → Barrage (F), Den → Blink (G), Bastion → Lockdown (T).',
   'Spears pierce Shields, Shields stop Swarmers, Swarmers overrun Spears. Raiders capture nests three times faster.',
+];
+
+/** Small icons matching the in-game unit shapes. */
+const KIND_ICON = [
+  '<svg viewBox="-9 -9 18 18"><rect x="-7" y="-6" width="6" height="6"/><rect x="1" y="-7" width="6" height="6"/><rect x="-3" y="1" width="6" height="6"/></svg>',
+  '<svg viewBox="-9 -9 18 18"><rect x="-6" y="-6" width="12" height="12" class="hollow"/></svg>',
+  '<svg viewBox="-9 -9 18 18"><polygon points="0,-8 3,0 0,8 -3,0"/></svg>',
+  '<svg viewBox="-9 -9 18 18"><polygon points="7,0 -6,-6 -3,0 -6,6"/></svg>',
 ];
 
 // What beats what, phrased for your own group and for an enemy group.
@@ -52,6 +61,9 @@ export class Hud {
   private nestCard: HTMLDivElement;
   private tip: HTMLDivElement;
   private counters: HTMLDivElement;
+  private kindChips: HTMLButtonElement[] = [];
+  /** the match this HUD is showing (set every update) */
+  private game: GameView | null = null;
   private counterCap: HTMLDivElement;
   private tipIdx = 0;
   private tipTimer = 0;
@@ -96,6 +108,9 @@ export class Hud {
       </div>
       <div class="hud-bottom">
         <div class="selinfo"></div>
+        <div class="selchips">${[0, 1, 2, 3]
+          .map((k) => `<button class="kchip" data-k="${k}" title="Click: keep only ${UNIT_STATS[k].name}s · Shift-click: drop them · Tab cycles types">${KIND_ICON[k]}<b></b></button>`)
+          .join('')}</div>
         <div class="energy"><div class="fill"></div><span>Energy</span></div>
         <div class="actions">
           <button data-a="all">All<kbd>Z</kbd></button>
@@ -112,6 +127,25 @@ export class Hud {
     root.appendChild(this.el);
     const q = <T extends HTMLElement>(s: string) => this.el.querySelector(s) as T;
     this.counters = q('.counters');
+    this.kindChips = [...this.el.querySelectorAll<HTMLButtonElement>('.kchip')];
+    for (const b of this.kindChips) {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.game?.filterSelection(Number(b.dataset.k), e.shiftKey);
+        b.blur();
+      });
+    }
+    // Wheel icons work like chips: narrow the selection, or grab that type on screen.
+    this.counters.querySelectorAll<SVGGElement>('.node').forEach((n) => {
+      n.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const g = this.game;
+        if (!g) return;
+        const k = Number(n.dataset.k);
+        if (g.selectionMix()[k] > 0) g.filterSelection(k, e.shiftKey);
+        else g.selectKindOnScreen(k);
+      });
+    });
     this.counterCap = q('.counter-cap');
     this.bar = q('.strength');
     this.chips = q('.chips');
@@ -170,6 +204,7 @@ export class Hud {
   }
 
   update(g: GameView, dt: number): void {
+    this.game = g;
     this.tipTimer += dt;
     if (this.tipTimer > 9) {
       this.tipTimer = 0;
@@ -256,6 +291,15 @@ export class Hud {
       : '<small>Drag to select your dots</small>';
 
     this.updateCounters(g);
+
+    // Type chips for the current selection.
+    const mix = g.selectionMix();
+    const kinds = mix.filter((c) => c > 0).length;
+    this.kindChips.forEach((b, k) => {
+      b.style.display = mix[k] > 0 ? '' : 'none';
+      b.classList.toggle('solo', kinds === 1);
+      (b.lastElementChild as HTMLElement).textContent = String(mix[k]);
+    });
 
     // Hover card for nests.
     const hn = w.nests[g.hoverNest];

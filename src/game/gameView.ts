@@ -284,6 +284,7 @@ export class GameView {
   }
 
   selectBox(x0: number, y0: number, x1: number, y1: number, additive: boolean): void {
+    this.typeCycle = null;
     const ax = Math.min(x0, x1), bx = Math.max(x0, x1);
     const ay = Math.min(y0, y1), by = Math.max(y0, y1);
     const units = this.ownUnitsIn((x, y) => x >= ax && x <= bx && y >= ay && y <= by);
@@ -299,6 +300,7 @@ export class GameView {
    * center, or when no dots are under the cursor.
    */
   selectAt(wx: number, wy: number, radius: number, additive: boolean): boolean {
+    this.typeCycle = null;
     const n = this.nestAt(wx, wy);
     const own = n && n.owner === this.human ? n : null;
     const units = this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= radius * radius);
@@ -340,6 +342,91 @@ export class GameView {
 
   selectAll(): void {
     this.selection.set(this.ownUnitsIn(() => true), [], false);
+    this.typeCycle = null;
+    this.s.sfx.click();
+  }
+
+  // ---- picking unit types out of a selection ------------------------------
+
+  /** set while Tab-cycling: the selection we started from and where we are */
+  private typeCycle: { base: number[]; idx: number } | null = null;
+
+  /** Selected unit counts by kind. */
+  selectionMix(): number[] {
+    const w = this.world;
+    const counts = [0, 0, 0, 0];
+    for (const u of this.selection.units) {
+      const s = w.uidToSlot.get(u);
+      if (s !== undefined) counts[w.kind[s]]++;
+    }
+    return counts;
+  }
+
+  private kindOf(uid: number): number {
+    const s = this.world.uidToSlot.get(uid);
+    return s === undefined ? -1 : this.world.kind[s];
+  }
+
+  /** Keep only `kind` in the selection (or drop it, when `remove`). */
+  filterSelection(kind: number, remove = false): void {
+    const keep = [...this.selection.units].filter((u) => (this.kindOf(u) === kind) !== remove);
+    if (!keep.length) return;
+    this.selection.set(keep, [], false);
+    this.typeCycle = null;
+    this.s.sfx.click();
+  }
+
+  /** Every own unit of `kind` inside the given world rect (the screen). */
+  selectKindIn(kind: number, x0: number, y0: number, x1: number, y1: number): void {
+    const w = this.world;
+    const units: number[] = [];
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.owner[i] !== this.human || w.kind[i] !== kind || w.state[i] === UNIT_FEEDING) continue;
+      if (w.x[i] >= x0 && w.x[i] <= x1 && w.y[i] >= y0 && w.y[i] <= y1) units.push(w.uid[i]);
+    }
+    if (!units.length) return;
+    this.selection.set(units, [], false);
+    this.typeCycle = null;
+    this.s.sfx.click();
+  }
+
+  /** Every own unit of `kind` currently on screen. */
+  selectKindOnScreen(kind: number): void {
+    const cam = this.s.camera;
+    const [x0, y0] = cam.toWorld(0, 0);
+    const [x1, y1] = cam.toWorld(cam.viewW, cam.viewH);
+    this.selectKindIn(kind, x0, y0, x1, y1);
+  }
+
+  /** Own unit kind under a world point, or -1. */
+  kindAt(wx: number, wy: number, radius: number): number {
+    const w = this.world;
+    let best = -1, bd = radius * radius;
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.owner[i] !== this.human) continue;
+      const d = (w.x[i] - wx) ** 2 + (w.y[i] - wy) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = w.kind[i];
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Tab: narrow the selection to one unit type at a time, cycling through the
+   * types it started with; after the last, back to the whole group.
+   */
+  cycleType(dir: 1 | -1): void {
+    const base = this.typeCycle?.base ?? [...this.selection.units];
+    const kinds = [0, 1, 2, 3].filter((k) => base.some((u) => this.kindOf(u) === k));
+    if (kinds.length < 2) return;
+    // Steps: each kind, then "all" (index kinds.length).
+    const n = kinds.length + 1;
+    const idx = ((this.typeCycle ? this.typeCycle.idx : kinds.length) + dir + n) % n;
+    const units = idx === kinds.length ? base : base.filter((u) => this.kindOf(u) === kinds[idx]);
+    this.selection.set(units, [], false);
+    this.typeCycle = { base, idx };
     this.s.sfx.click();
   }
 
