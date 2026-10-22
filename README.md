@@ -111,3 +111,7 @@ src/audio/    procedural WebAudio sound effects
 3. Campaign: about 10 levels in JSON, a level-select screen, progress in localStorage
 4. Multiplayer: a `LockstepSession` over WebRTC data channels or a small WebSocket relay, with bots filling empty slots
 5. Replay viewer and map editor
+
+## License
+
+[MIT](LICENSE) © 2026 Dibz15
