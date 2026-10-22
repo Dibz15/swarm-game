@@ -26,6 +26,7 @@ export function worldHash(w: World): number {
     mix(n.feedProgress);
   }
   for (const f of w.factions) mix(Math.round(f.energy * 100));
+  for (const c of w.crystals) mix(c.holder);
   for (const b of w.barrages) {
     mix(Math.round(b.x * 64));
     mix(Math.round(b.y * 64));

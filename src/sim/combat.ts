@@ -8,10 +8,21 @@ const TAUNT2 = TRAITS.taunt * TRAITS.taunt;
 const pierceScratch: number[] = [];
 
 /**
+ * Nearest hostile unit within radius that isn't behind a wall, or -1.
+ * Line of sight is only checked on the winner; if a wall blocks it, scan
+ * again checking every candidate (rare: only right next to walls).
+ */
+function findTarget(w: World, i: number, radius: number): number {
+  const best = scanTarget(w, i, radius, false);
+  if (best < 0 || !w.terrain.hasWalls || w.terrain.los(w.x[i], w.y[i], w.x[best], w.y[best])) return best;
+  return scanTarget(w, i, radius, true);
+}
+
+/**
  * Nearest hostile unit within radius, or -1. Tanks draw fire: they count as
  * closer than they are. Scan is capped for dense blobs.
  */
-function findTarget(w: World, i: number, radius: number): number {
+function scanTarget(w: World, i: number, radius: number, walls: boolean): number {
   const g = w.grid;
   const x = w.x[i], y = w.y[i];
   const myTeam = w.teamOf[w.owner[i]];
@@ -30,7 +41,7 @@ function findTarget(w: World, i: number, radius: number): number {
         const raw = dx * dx + dy * dy;
         if (raw > radius * radius) continue;
         const d = w.kind[j] === Kind.Tank ? raw * TAUNT2 : raw;
-        if (d < bestD) {
+        if (d < bestD && (!walls || w.terrain.los(x, y, w.x[j], w.y[j]))) {
           bestD = d;
           best = j;
         }
@@ -68,7 +79,7 @@ export function updateCombat(w: World): void {
         const a = w.attacker[i];
         if (a >= 0 && w.alive[a] && w.uid[a] === w.attackerUid[i]) {
           const ax = w.x[a] - w.x[i], ay = w.y[a] - w.y[i];
-          if (ax * ax + ay * ay <= reach * reach) nt = a;
+          if (ax * ax + ay * ay <= reach * reach && (!w.terrain.hasWalls || w.terrain.los(w.x[i], w.y[i], w.x[a], w.y[a]))) nt = a;
         }
       }
       if (nt !== t) {

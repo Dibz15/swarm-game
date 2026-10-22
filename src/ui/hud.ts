@@ -256,7 +256,9 @@ export class Hud {
     const me = w.factions[g.human];
     const e = me ? me.energy : 0;
     this.energyFill.style.width = `${e}%`;
-    this.energyText.textContent = `Energy ${Math.floor(e)}`;
+    let crystals = 0;
+    for (const c of w.crystals) if (c.holder === g.human) crystals++;
+    this.energyText.textContent = `Energy ${Math.floor(e)}${crystals ? `  ◆ crystal${crystals > 1 ? ` ×${crystals}` : ''}` : ''}`;
     const nUnits = g.selection.units.size;
     this.btn.surge.disabled = e < POWER.surgeCost || nUnits === 0;
     this.btn.nova.disabled = e < POWER.novaCost || nUnits < 4;

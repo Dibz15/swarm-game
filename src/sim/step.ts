@@ -1,4 +1,4 @@
-import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, POWER, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
+import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, POWER, TERRAIN, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
 import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
@@ -27,6 +27,7 @@ export function step(w: World, commands: readonly Command[]): void {
   updateCombat(w);
   resolveDamage(w);
   updateMovement(w);
+  updateCrystals(w);
 
   // Energy: factions behind the biggest army charge faster.
   let leader = 1;
@@ -49,6 +50,40 @@ export function step(w: World, commands: readonly Command[]): void {
 }
 
 const blast: number[] = [];
+const CRYSTAL_EVERY = 6;
+
+/** Crystals charge energy for the only team standing on them. */
+function updateCrystals(w: World): void {
+  if (w.crystals.length === 0) return;
+  if (w.tick % CRYSTAL_EVERY === 0) {
+    for (const c of w.crystals) {
+      queryRadius(w, c.x, c.y, c.r, blast);
+      let lead = -1, team = -1, mixed = false;
+      for (const s of blast) {
+        const o = w.owner[s];
+        if (o === NEUTRAL) continue;
+        if (team < 0) {
+          team = w.teamOf[o];
+          lead = o;
+        } else if (w.teamOf[o] !== team) {
+          mixed = true;
+          break;
+        }
+      }
+      const holder = mixed ? -1 : lead;
+      if (holder >= 0 && holder !== c.last) {
+        pushFx(w, 'crystal', c.x, c.y, holder, c.r);
+        c.last = holder;
+      }
+      c.holder = holder;
+    }
+  }
+  for (const c of w.crystals) {
+    if (c.holder < 0) continue;
+    const f = w.factions[c.holder];
+    if (!f.eliminated) f.energy = Math.min(ENERGY.max, f.energy + TERRAIN.crystalEnergy * DT);
+  }
+}
 
 /** Barrage strikes that land this tick. */
 function resolveBarrages(w: World): void {

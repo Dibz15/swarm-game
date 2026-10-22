@@ -1,5 +1,6 @@
 // A bot that does nothing until `wake`, then plays normally (Expander, Normal).
 // Compares its finishing place with an identical bot that plays from the start.
+import { TERRAIN } from './env';
 import { PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -17,7 +18,7 @@ for (const [name, cfg] of econ) {
     Object.assign(BALANCE, base, cfg);
     let placeSum = 0, wins = 0;
     for (let g = 0; g < games; g++) {
-      const w = createWorld({
+      const w = createWorld({ terrain: TERRAIN, 
         seed: 8000 + g, size: 'medium',
         players: [0, 1, 2, 3].map((f, i) => ({ faction: f, team: f, human: false, bot: { difficulty: 1, personality: i === 0 ? 'expander' : PERSONALITIES[(i + g) % 4] } })),
       });

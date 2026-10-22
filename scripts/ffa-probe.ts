@@ -1,6 +1,7 @@
 // Why do FFAs collapse to two players? Logs who bots attack (by victim size
 // rank), who actually takes nests from whom, and when each player drops out.
 // Usage: npx vite-node scripts/ffa-probe.ts [players] [size] [games]
+import { TERRAIN } from './env';
 import { Bot, PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -42,7 +43,7 @@ const origIssue = (Bot.prototype as any).issue;
 };
 
 for (let g = 0; g < games; g++) {
-  const w = (current = createWorld({
+  const w = (current = createWorld({ terrain: TERRAIN, 
     seed: 3000 + g,
     size,
     players: Array.from({ length: players }, (_, i) => ({

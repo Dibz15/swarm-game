@@ -1,6 +1,6 @@
 import { DOMINATION, Kind, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
-import { generateMap, type MapSize } from './mapgen';
+import { generateMap, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
 import { TAU, dcos, dsin } from './mathx';
 import { spawnUnit, World } from './world';
 
@@ -18,13 +18,21 @@ export interface MatchSetup {
   players: PlayerSetup[];
   /** tall map for portrait screens */
   portrait?: boolean;
+  /** terrain preset or explicit amounts (default: none) */
+  terrain?: TerrainLevel | TerrainParams;
 }
 
 export const START_UNITS = 10;
 
 export function createWorld(setup: MatchSetup): World {
-  const map = generateMap(setup.seed, setup.size, setup.players.length, setup.portrait);
-  const w = new World(setup.seed, map.width, map.height);
+  const map = generateMap({
+    seed: setup.seed,
+    size: setup.size,
+    players: setup.players.length,
+    portrait: setup.portrait,
+    terrain: setup.terrain,
+  });
+  const w = new World(setup.seed, map.width, map.height, map.terrain);
   w.domShare = DOMINATION.share[setup.size] ?? 0.7;
 
   // Inactive factions get unique teams so they never count as allies.

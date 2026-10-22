@@ -109,6 +109,7 @@ class App {
     const setup: MatchSetup = {
       seed,
       size: 'medium',
+      terrain: 'standard',
       portrait: window.innerHeight > window.innerWidth * 1.15,
       players: Array.from({ length: n }, (_, i) => ({
         faction: [0, 1, 2, 3, 4, 5][(i + seed) % 6],

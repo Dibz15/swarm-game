@@ -51,13 +51,15 @@ interface PersonalityKnobs {
   eagerSurge: boolean;
   /** distance penalty multiplier: higher keeps fights closer to home */
   reach: number;
+  /** appetite for holding energy crystals */
+  crystal: number;
 }
 
 const PERSONALITY: Record<Personality, PersonalityKnobs> = {
-  rusher: { neutral: 1.3, enemy: 1.5, margin: 1.0, upgrade: 0.45, reserve: 0.15, weakest: 1, bastion: 0.6, vulture: 1, eagerSurge: true, reach: 1.3 },
-  turtler: { neutral: 1.0, enemy: 0.8, margin: 1.3, upgrade: 1.9, reserve: 0.35, weakest: 1, bastion: 1.8, vulture: 1, eagerSurge: false, reach: 1 },
-  expander: { neutral: 1.5, enemy: 0.9, margin: 1.0, upgrade: 0.9, reserve: 0.18, weakest: 1, bastion: 0.9, vulture: 1, eagerSurge: false, reach: 1 },
-  opportunist: { neutral: 1.0, enemy: 1.2, margin: 1.0, upgrade: 1.0, reserve: 0.2, weakest: 1.8, bastion: 1, vulture: 2.2, eagerSurge: false, reach: 1 },
+  rusher: { neutral: 1.3, enemy: 1.5, margin: 1.0, upgrade: 0.45, reserve: 0.15, weakest: 1, bastion: 0.6, vulture: 1, eagerSurge: true, reach: 1.3, crystal: 0.6 },
+  turtler: { neutral: 1.0, enemy: 0.8, margin: 1.3, upgrade: 1.9, reserve: 0.35, weakest: 1, bastion: 1.8, vulture: 1, eagerSurge: false, reach: 1, crystal: 1.2 },
+  expander: { neutral: 1.5, enemy: 0.9, margin: 1.0, upgrade: 0.9, reserve: 0.18, weakest: 1, bastion: 0.9, vulture: 1, eagerSurge: false, reach: 1, crystal: 1 },
+  opportunist: { neutral: 1.0, enemy: 1.2, margin: 1.0, upgrade: 1.0, reserve: 0.2, weakest: 1.8, bastion: 1, vulture: 2.2, eagerSurge: false, reach: 1, crystal: 0.8 },
 };
 
 const scratch: number[] = [];
@@ -70,6 +72,9 @@ const OPENING = { ticks: 90 * 30, neutral: 1.6, enemy: 0.35 };
 
 /** Energy bots keep banked for a Nova once their army is this big. */
 const NOVA_RESERVE = { minArmy: 30, energy: 25 };
+
+/** Crystal squads: how many units hold one, and how far bots will walk for it. */
+const CRYSTAL = { guard: 5, maxTrip: 650 };
 
 /** When bots start ganging up on the leader. */
 const RUNAWAY = {
@@ -174,6 +179,19 @@ export class Bot {
       threatened = true;
       const need = h * 1.3 + 3 - friendly[n.id];
       if (need > 0) send(take(n.x, n.y, need * 1.3, 480), n);
+    }
+
+    // Units holding a crystal for us stay put (unless needed for defense above).
+    for (const c of w.crystals) {
+      if (c.holder !== me) continue;
+      let kept = 0;
+      for (const s of idle) {
+        if (kept >= CRYSTAL.guard || used.has(s)) continue;
+        if ((w.x[s] - c.x) ** 2 + (w.y[s] - c.y) ** 2 <= c.r * c.r) {
+          used.add(s);
+          kept++;
+        }
+      }
     }
 
     // 2) Pick a target: value / (defense) / distance.
@@ -292,7 +310,8 @@ export class Bot {
           margin = Math.min(margin, 1.1);
         }
       }
-      const dist = Math.sqrt((n.x - hx) ** 2 + (n.y - hy) ** 2);
+      // Walking distance, so a nest behind a wall counts as far as it is.
+      const dist = w.terrain.pathDist(hx, hy, n.x, n.y, w.tick);
       let score = value / (def + 4) / (1 + (dist / 420) * this.p.reach);
       if (n.id === this.focus) score *= 1.25; // stick with a plan
       score *= 1 + (this.rng.next() - 0.5) * this.d.noise;
@@ -320,6 +339,37 @@ export class Bot {
       const group = take(best.x, best.y, Math.min(available, bestNeed * 1.6 + 8), 1e9);
       send(group, best);
       if (this.d.powers && group.length > 0) this.supportAttack(w, group, best);
+    }
+
+    // 2b) Crystals: send a small squad to a nearby crystal nobody on our team holds.
+    if (w.crystals.length > 0 && mine.length > 0 && this.rng.next() < 0.6 * this.p.crystal) {
+      let pick = -1, pickScore = 0, pickNeed = 0;
+      for (let k = 0; k < w.crystals.length; k++) {
+        const c = w.crystals[k];
+        if (c.holder >= 0 && w.teamOf[c.holder] === myTeam) continue;
+        const d = w.terrain.pathDist(hx, hy, c.x, c.y, w.tick);
+        if (d > CRYSTAL.maxTrip) continue;
+        queryRadius(w, c.x, c.y, c.r + 60, scratch);
+        let h = 0, f = 0;
+        for (const s of scratch) {
+          const wt = UNIT_STATS[w.kind[s]].weight;
+          if (w.teamOf[w.owner[s]] === myTeam) f += wt;
+          else h += wt;
+        }
+        if (f >= CRYSTAL.guard) continue; // already on the way
+        const score = 1 / (1 + d / 300) / (1 + h * 0.3);
+        if (score > pickScore) {
+          pickScore = score;
+          pick = k;
+          pickNeed = h * this.d.margin * 1.2 + CRYSTAL.guard;
+        }
+      }
+      const spare = idle.length - used.size - reserve;
+      if (pick >= 0 && spare >= pickNeed + 4) {
+        const c = w.crystals[pick];
+        const squad = take(c.x, c.y, pickNeed, 1e9);
+        if (squad.length) this.issue(w, { t: 'move', p: me, units: squad.map((s) => w.uid[s]), x: c.x, y: c.y, nest: -1 });
+      }
     }
 
     // Rally: easy bots idle new spawns at home; better bots stream them to
@@ -390,10 +440,11 @@ export class Bot {
       }
       cx /= group.length;
       cy /= group.length;
-      // Only worth it for long trips; land short of the nest, not on its turret.
+      // Only worth it for long walks (walls make walks longer, and Blink jumps
+      // them); land short of the nest, not on its turret.
       const d = Math.hypot(target.x - cx, target.y - cy);
-      if (d > POWER.blinkRange + 120) {
-        const k = POWER.blinkRange / d;
+      if (w.terrain.pathDist(cx, cy, target.x, target.y, w.tick) > POWER.blinkRange + 120 && d > 110) {
+        const k = Math.min(POWER.blinkRange, d - 50) / d;
         this.issue(w, { t: 'blink', p: me, units: group.map((s) => w.uid[s]), x: cx + (target.x - cx) * k, y: cy + (target.y - cy) * k });
       }
     }

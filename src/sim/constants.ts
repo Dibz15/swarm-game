@@ -189,3 +189,23 @@ export const DOMINATION = {
   share: { small: 0.7, medium: 0.7, large: 0.6 } as Record<string, number>,
   ticks: 30 * TICK_HZ,
 };
+
+/** Terrain: walls block movement and line of fire; fields change movement and fights. */
+export const TERRAIN = {
+  /** pathing keeps tile centers this far from walls */
+  wallMargin: 6,
+  /** largest unit radius, for bucketing walls by cell */
+  maxUnitRadius: 4,
+  /** shots may graze this far into a wall's edge */
+  losGrace: 3,
+  /** flow-field cost multipliers: units route around slow or dangerous ground when it pays */
+  nebulaCost: 1.6,
+  riftCost: 3,
+  maxFields: 96,
+  /** Nebula: movement speed multiplier */
+  nebulaSlow: 0.55,
+  /** Rift: damage per second to anything standing in it */
+  riftDps: 2.4,
+  /** Crystal: energy per second for the only team standing on it */
+  crystalEnergy: 1.1,
+};
