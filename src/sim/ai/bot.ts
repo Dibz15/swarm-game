@@ -1,5 +1,5 @@
-import { EVENTS, Kind, MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
-import { applyCommand, hasPower, type Command } from '../commands';
+import { ESCALATION, EVENTS, Kind, LEVEL, MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
+import { applyCommand, feedNeed, hasPower, type Command } from '../commands';
 import { Rng } from '../rng';
 import { queryRadius } from '../spatial';
 import { UNIT_FEEDING, WILD_COLOSSUS, type Nest, type World } from '../world';
@@ -58,8 +58,8 @@ interface PersonalityKnobs {
 }
 
 const PERSONALITY: Record<Personality, PersonalityKnobs> = {
-  rusher: { neutral: 1.3, enemy: 1.5, margin: 1.0, upgrade: 0.45, reserve: 0.15, weakest: 1, bastion: 0.6, vulture: 1, eagerSurge: true, reach: 1.3, crystal: 0.6, colossus: 1.2 },
-  turtler: { neutral: 1.0, enemy: 0.8, margin: 1.3, upgrade: 1.9, reserve: 0.35, weakest: 1, bastion: 1.8, vulture: 1, eagerSurge: false, reach: 1, crystal: 1.2, colossus: 0.7 },
+  rusher: { neutral: 1.3, enemy: 1.5, margin: 1.0, upgrade: 0.9, reserve: 0.15, weakest: 1, bastion: 0.6, vulture: 1, eagerSurge: true, reach: 1.3, crystal: 0.6, colossus: 1.2 },
+  turtler: { neutral: 1.0, enemy: 0.8, margin: 1.3, upgrade: 1.3, reserve: 0.28, weakest: 1, bastion: 1.8, vulture: 1, eagerSurge: false, reach: 1, crystal: 1.2, colossus: 0.7 },
   expander: { neutral: 1.5, enemy: 0.9, margin: 1.0, upgrade: 0.9, reserve: 0.18, weakest: 1, bastion: 0.9, vulture: 1, eagerSurge: false, reach: 1, crystal: 1, colossus: 0.9 },
   opportunist: { neutral: 1.0, enemy: 1.2, margin: 1.0, upgrade: 1.0, reserve: 0.2, weakest: 1.8, bastion: 1, vulture: 2.2, eagerSurge: false, reach: 1, crystal: 0.8, colossus: 1.6 },
 };
@@ -74,6 +74,16 @@ const OPENING = { ticks: 90 * 30, neutral: 1.6, enemy: 0.35 };
 
 /** Energy bots keep banked for a Nova once their army is this big. */
 const NOVA_RESERVE = { minArmy: 30, energy: 25 };
+
+/** Feeding nests. */
+const UPGRADE_BOT = {
+  /** repair an owned nest below this control once nobody threatens it */
+  repairBelow: 0.75,
+  /** idle dots nearby, as a multiple of the cost, before levelling up */
+  slack: 1.3,
+  /** stop levelling up this far into escalation: it won't pay back */
+  lateRamp: 0.5,
+};
 
 /** Supply drops and the Colossus. */
 const EVENT_BOT = {
@@ -168,6 +178,10 @@ export class Bot {
         h += t.dps * t.targets * 0.5;
       }
       if (n.capital && n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] !== myTeam) h += 10;
+      // Upgraded nests shoot back too.
+      else if (n.level >= 2 && n.type !== NestType.Bastion && n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] !== myTeam) {
+        h += LEVEL.turret.dps * LEVEL.turret.targets * 0.5;
+      }
       hostile.push(h);
       friendly.push(f);
     }
@@ -439,23 +453,39 @@ export class Bot {
       if (toRally.length) this.issue(w, { t: 'rally', p: me, nests: toRally, x: rx, y: ry });
     }
 
-    // 3) Upgrade when there is slack.
-    if (!threatened && mine.length > 0 && this.rng.next() < this.d.upgradeSkill * this.p.upgrade * 0.5) {
-      const cand = mine.filter((n) => n.level < MAX_LEVEL && n.control >= 1 && n.feedIncoming === 0);
-      if (cand.length > 0) {
-        cand.sort((a, b) => {
-          const pa = a.level - (a.type === NestType.Bastion ? this.p.bastion - 1 : 0);
-          const pb = b.level - (b.type === NestType.Bastion ? this.p.bastion - 1 : 0);
-          return pa - pb || a.id - b.id;
-        });
-        const n = cand[0];
-        const cost = UPGRADE_COST[n.level] - n.feedProgress;
-        let near = 0;
-        for (const s of idle) {
-          if (!used.has(s) && (w.x[s] - n.x) ** 2 + (w.y[s] - n.y) ** 2 <= UPGRADE_PICK_RADIUS ** 2) near++;
-        }
-        if (near >= cost * 1.4) this.issue(w, { t: 'upgrade', p: me, nest: n.id });
+    // 3) Feed nests when there is slack: repair a damaged nest once the
+    // threat is gone, or level up a safe one while the match is young enough
+    // for it to pay back. Pick the nest that has idle dots close by.
+    const nearIdle = (n: Nest) => {
+      let k = 0;
+      for (const s of idle) {
+        if (!used.has(s) && (w.x[s] - n.x) ** 2 + (w.y[s] - n.y) ** 2 <= UPGRADE_PICK_RADIUS ** 2) k++;
       }
+      return k;
+    };
+    for (const n of mine) {
+      if (n.control < UPGRADE_BOT.repairBelow && hostile[n.id] === 0 && n.feedIncoming === 0 && nearIdle(n) >= feedNeed(n)) {
+        this.issue(w, { t: 'upgrade', p: me, nest: n.id });
+      }
+    }
+    const young = w.tick < ESCALATION.start + ESCALATION.ramp * UPGRADE_BOT.lateRamp;
+    if (!threatened && young && mine.length > 0 && this.rng.next() < this.d.upgradeSkill * this.p.upgrade * 0.5) {
+      let pick: Nest | null = null, pickScore = 0;
+      for (const n of mine) {
+        if (n.level >= MAX_LEVEL || n.control < 1 || n.feedIncoming > 0 || hostile[n.id] > 0) continue;
+        const cost = UPGRADE_COST[n.level] - n.feedProgress;
+        const near = nearIdle(n);
+        if (near < cost * UPGRADE_BOT.slack) continue;
+        // Cheap levels first; Turtlers favor Bastions; a level-3 power nest is a bonus.
+        let score = 1 / cost;
+        if (n.type === NestType.Bastion) score *= this.p.bastion;
+        if (n.level === 2 && n.type !== NestType.Hive) score *= 1.2;
+        if (score > pickScore) {
+          pickScore = score;
+          pick = n;
+        }
+      }
+      if (pick) this.issue(w, { t: 'upgrade', p: me, nest: pick.id });
     }
 
     // 4) Powers at the biggest fight.

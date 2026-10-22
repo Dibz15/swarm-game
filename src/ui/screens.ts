@@ -81,7 +81,7 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
               <li><i class="n-oct"></i><b>Bastion</b> turret, shields allies · power <b>Lockdown</b></li>
             </ul>
             <p><b>Spears pierce Shields. Shields stop Swarmers. Swarmers overrun Spears.</b> Mix your army, and take the nests that counter what you're facing. The counter wheel in the corner reminds you when you select dots.</p>
-            <p><b>Upgrade</b> a nest by feeding it dots (U). That makes it spawn faster. Spend your army now, or grow your production.</p>
+            <p><b>Upgrade</b> a nest by feeding it dots (U). Level 2 spawns faster and adds a turret; level 3 spawns tougher veterans and strengthens the nest's power. Levels survive capture, so upgraded nests are worth taking. Feeding a damaged nest repairs it first.</p>
             <h3>Terrain</h3>
             <ul class="terrain">
               <li><i class="t-wall"></i><b>Rock</b> blocks movement and shots. Gaps make chokepoints</li>

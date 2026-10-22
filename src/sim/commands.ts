@@ -1,4 +1,4 @@
-import { MAX_LEVEL, NEUTRAL, POWER, POWER_NEST, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, type NestPower } from './constants';
+import { LEVEL, MAX_LEVEL, NEUTRAL, POWER, POWER_NEST, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, type NestPower } from './constants';
 import { clamp } from './mathx';
 import { queryRadius } from './spatial';
 import { pushFx, removeUnit, UNIT_FEEDING, type World } from './world';
@@ -24,6 +24,20 @@ export function hasPower(w: World, p: number, power: NestPower): boolean {
   const type = POWER_NEST[power];
   for (const n of w.nests) if (n.owner === p && n.type === type && n.control >= 1) return true;
   return false;
+}
+
+/** Power multiplier from the best nest of its type held: level 3 boosts it. */
+export function powerBoost(w: World, p: number, power: NestPower): number {
+  const type = POWER_NEST[power];
+  for (const n of w.nests) if (n.owner === p && n.type === type && n.control >= 1 && n.level >= 3) return LEVEL.powerBoost;
+  return 1;
+}
+
+/** Dots still needed to repair a nest's control and finish its next level. */
+export function feedNeed(n: { control: number; level: number; feedProgress: number; feedIncoming: number }): number {
+  const repair = n.control < 1 ? Math.ceil((1 - n.control) / LEVEL.repair - 1e-9) : 0;
+  const grow = n.level < MAX_LEVEL ? UPGRADE_COST[n.level] - n.feedProgress : 0;
+  return repair + grow - n.feedIncoming;
 }
 
 const scratch: number[] = [];
@@ -90,8 +104,9 @@ export function applyCommand(w: World, c: Command): void {
 
     case 'upgrade': {
       const n = w.nests[c.nest];
-      if (!n || n.owner !== c.p || n.level >= MAX_LEVEL || n.control < 1) return;
-      const need = UPGRADE_COST[n.level] - n.feedProgress - n.feedIncoming;
+      // Feeding repairs a damaged nest's control first, then levels it up.
+      if (!n || n.owner !== c.p) return;
+      const need = feedNeed(n);
       if (need <= 0) return;
       queryRadius(w, n.x, n.y, UPGRADE_PICK_RADIUS, scratch);
       const cand: number[] = [];
@@ -164,7 +179,7 @@ export function applyCommand(w: World, c: Command): void {
       const slots = resolve(w, c.p, c.units);
       if (slots.length === 0) return;
       f.energy -= POWER.fortifyCost;
-      const until = w.tick + POWER.fortifyTicks;
+      const until = w.tick + Math.round(POWER.fortifyTicks * powerBoost(w, c.p, 'fortify'));
       for (const s of slots) w.fortify[s] = until;
       const [cx, cy] = centroid(w, slots);
       pushFx(w, 'fortify', cx, cy, c.p, groupArrive(slots.length) + 14);
@@ -175,8 +190,9 @@ export function applyCommand(w: World, c: Command): void {
       if (f.energy < POWER.barrageCost || !hasPower(w, c.p, 'barrage')) return;
       f.energy -= POWER.barrageCost;
       const x = clamp(c.x, 0, w.width), y = clamp(c.y, 0, w.height);
-      w.barrages.push({ x, y, owner: c.p, impact: w.tick + POWER.barrageDelay });
-      pushFx(w, 'barrage', x, y, c.p, POWER.barrageRadius);
+      const r = POWER.barrageRadius * powerBoost(w, c.p, 'barrage');
+      w.barrages.push({ x, y, owner: c.p, impact: w.tick + POWER.barrageDelay, r });
+      pushFx(w, 'barrage', x, y, c.p, r);
       return;
     }
 
@@ -188,9 +204,10 @@ export function applyCommand(w: World, c: Command): void {
       const [cx, cy] = centroid(w, slots);
       let dx = c.x - cx, dy = c.y - cy;
       const d = Math.sqrt(dx * dx + dy * dy);
-      if (d > POWER.blinkRange) {
-        dx *= POWER.blinkRange / d;
-        dy *= POWER.blinkRange / d;
+      const range = POWER.blinkRange * powerBoost(w, c.p, 'blink');
+      if (d > range) {
+        dx *= range / d;
+        dy *= range / d;
       }
       const ar = groupArrive(slots.length);
       // Blink jumps walls, but nobody lands inside one.
@@ -215,7 +232,7 @@ export function applyCommand(w: World, c: Command): void {
       const n = w.nests[c.nest];
       if (!n || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, c.p)) return;
       f.energy -= POWER.lockdownCost;
-      n.lockedUntil = w.tick + POWER.lockdownTicks;
+      n.lockedUntil = w.tick + Math.round(POWER.lockdownTicks * powerBoost(w, c.p, 'lockdown'));
       pushFx(w, 'lockdown', n.x, n.y, c.p, n.r, n.id, n.owner);
       return;
     }

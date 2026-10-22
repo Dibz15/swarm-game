@@ -100,6 +100,8 @@ export interface Barrage {
   owner: number;
   /** tick the strike lands */
   impact: number;
+  /** blast radius (bigger from a level-3 Spire) */
+  r: number;
 }
 
 /** An energy crystal; `holder` is the faction charging from it, or -1. */
@@ -208,6 +210,8 @@ export class World {
   readonly alertTick = new Int32Array(MAX_UNITS);
   /** nearby friendly Dots last tick (pack bonus) */
   readonly pack = new Uint8Array(MAX_UNITS);
+  /** spawned by a level-3 nest: extra HP */
+  readonly vet = new Uint8Array(MAX_UNITS);
   /** neutral event units: WILD_SWARM or WILD_COLOSSUS, else 0 */
   readonly wild = new Uint8Array(MAX_UNITS);
 
@@ -315,6 +319,7 @@ export function spawnUnit(
   w.fortify[i] = 0;
   w.pack[i] = 0;
   w.wild[i] = 0;
+  w.vet[i] = 0;
   w.attacker[i] = -1;
   w.attackerUid[i] = 0;
   w.alertTick[i] = -1000;

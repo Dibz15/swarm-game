@@ -16,6 +16,9 @@ const TIPS = [
 ];
 
 /** Small icons matching the in-game unit shapes. */
+/** What each level adds (index = level). */
+const LEVEL_PERKS = ['', '', '×1.5 spawns, a turret, faster recovery', '×2 spawns, veteran units (+35% HP), stronger nest power'];
+
 const KIND_ICON = [
   '<svg viewBox="-9 -9 18 18"><rect x="-7" y="-6" width="6" height="6"/><rect x="1" y="-7" width="6" height="6"/><rect x="-3" y="1" width="6" height="6"/></svg>',
   '<svg viewBox="-9 -9 18 18"><rect x="-6" y="-6" width="12" height="12" class="hollow"/></svg>',
@@ -120,7 +123,7 @@ export class Hud {
           <button data-a="barrage" class="power nest" title="Artillery strike at the cursor after a short warning. From a Spire.">Barrage<kbd>F</kbd><small>${POWER.barrageCost}</small></button>
           <button data-a="blink" class="power nest" title="Teleport the selected dots toward the cursor. From a Den.">Blink<kbd>G</kbd><small>${POWER.blinkCost}</small></button>
           <button data-a="lockdown" class="power nest" title="Stop an enemy nest spawning for a while. From a Bastion.">Lockdown<kbd>T</kbd><small>${POWER.lockdownCost}</small></button>
-          <button data-a="upgrade" style="display:none">Upgrade<kbd>U</kbd><small class="ucost"></small></button>
+          <button data-a="upgrade" style="display:none"><span class="ulabel">Upgrade</span><kbd>U</kbd><small class="ucost"></small></button>
           <button data-a="clear" class="touch">✕</button>
         </div>
       </div>`;
@@ -281,7 +284,10 @@ export class Hud {
     this.btn.nova.classList.toggle('ready', e >= POWER.novaCost);
     const up = g.upgradeInfo();
     this.btn.upgrade.style.display = up ? '' : 'none';
-    if (up) (this.btn.upgrade.querySelector('.ucost') as HTMLElement).textContent = `${Math.max(0, up.cost)} dots`;
+    if (up) {
+      (this.btn.upgrade.querySelector('.ucost') as HTMLElement).textContent = `${Math.max(0, up.cost)} dots`;
+      (this.btn.upgrade.querySelector('.ulabel') as HTMLElement).textContent = up.repair ? 'Repair' : 'Upgrade';
+    }
     this.btn.clear.style.visibility = g.selection.empty ? 'hidden' : 'visible';
 
     const nNests = g.selection.nests.size;
@@ -307,8 +313,9 @@ export class Hud {
     const hn = w.nests[g.hoverNest];
     if (hn) {
       const owner = hn.owner < 0 ? 'Unclaimed' : hn.owner === NEUTRAL ? 'Neutral' : hn.owner === g.human ? 'Yours' : FACTION_NAMES[hn.owner];
-      const lvl = hn.level < MAX_LEVEL ? ` · next level ${UPGRADE_COST[hn.level]} dots` : ' · max level';
-      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${hn.owner === g.human ? lvl : ''}</small>`;
+      const next = hn.level < MAX_LEVEL ? `<br>Next: <b>Lv${hn.level + 1}</b> for ${UPGRADE_COST[hn.level]} dots (U): ${LEVEL_PERKS[hn.level + 1]}` : '';
+      const has = hn.level > 1 ? `<br>Lv${hn.level}: ${LEVEL_PERKS.slice(2, hn.level + 1).join('; ')}` : '';
+      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${has}${hn.owner === g.human ? next : ''}</small>`;
       this.nestCard.style.display = 'block';
     } else {
       this.nestCard.style.display = 'none';
