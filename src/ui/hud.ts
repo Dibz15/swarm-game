@@ -1,6 +1,6 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
-import { type NestPower, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
+import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
@@ -60,7 +60,9 @@ export class Hud {
   private energyText: HTMLSpanElement;
   private btn: Record<string, HTMLButtonElement> = {};
   private toasts: HTMLDivElement;
-  private banner: HTMLDivElement;
+  private dom: HTMLDivElement;
+  private nestShare: HTMLDivElement;
+  private domMark: HTMLElement;
   private nestCard: HTMLDivElement;
   private tip: HTMLDivElement;
   private counters: HTMLDivElement;
@@ -80,7 +82,8 @@ export class Hud {
     this.el.className = 'hud';
     this.el.innerHTML = `
       <div class="hud-top">
-        <div class="strength"></div>
+        <div class="strength" title="Army size"></div>
+        <div class="nestshare" title="Nests held. Hold past the marker for 30s to win by domination"><div class="segs"></div><span class="mark"></span></div>
         <div class="chips"></div>
       </div>
       <div class="hud-tr">
@@ -88,7 +91,7 @@ export class Hud {
         <button class="icon" data-a="mute" title="Mute (M)">♪</button>
         <button class="icon" data-a="pause" title="Pause (Esc)">❚❚</button>
       </div>
-      <div class="banner"></div>
+      <div class="dom"><div class="dom-time"></div><div class="dom-text"></div><div class="dom-bar"><i></i></div></div>
       <div class="toasts"></div>
       <div class="nestcard"></div>
       <div class="tip"><span></span><button class="x" title="Hide tips">✕</button></div>
@@ -157,7 +160,9 @@ export class Hud {
     this.energyFill = q('.energy .fill');
     this.energyText = q('.energy span');
     this.toasts = q('.toasts');
-    this.banner = q('.banner');
+    this.dom = q('.dom');
+    this.nestShare = q('.nestshare .segs');
+    this.domMark = q('.nestshare .mark');
     this.nestCard = q('.nestcard');
     this.tip = q('.tip');
     this.el.querySelectorAll<HTMLButtonElement>('button[data-a]').forEach((b) => {
@@ -241,19 +246,31 @@ export class Hud {
       chip.title = `${FACTION_NAMES[f.id]}${f.id === g.human ? ' (you)' : ''}`;
     });
 
-    // Domination warning.
-    let dom = '';
-    for (const f of active) {
-      const t = w.domTicks[f.team];
-      if (t > 0 && !f.eliminated) {
-        const left = Math.max(0, DOMINATION.ticks - t);
-        const mine = f.team === w.teamOf[g.human];
-        dom = `<span style="color:${hex(f.id)}">${mine ? 'You are' : FACTION_NAMES[f.id] + ' is'} dominating</span> — ${formatTime(left)} left`;
-        break;
-      }
+    // Nest share: one segment per faction, unheld nests left empty.
+    if (this.nestShare.children.length !== active.length) {
+      this.nestShare.innerHTML = active.map((f) => `<i style="background:${hex(f.id)}"></i>`).join('');
     }
-    this.banner.innerHTML = dom;
-    this.banner.style.display = dom ? 'block' : 'none';
+    this.domMark.style.left = `${w.domShare * 100}%`;
+    active.forEach((f, k) => {
+      (this.nestShare.children[k] as HTMLElement).style.width = `${(100 * nestsOf(f.id)) / Math.max(1, w.nests.length)}%`;
+    });
+
+    // Domination: a big countdown nobody can miss, with what to do about it.
+    const ds = dominationStatus(w);
+    this.dom.style.display = ds ? 'block' : 'none';
+    if (ds) {
+      const mine = ds.team === w.teamOf[g.human];
+      const secs = Math.ceil(ds.left / TICK_HZ);
+      const col = hex(ds.face);
+      this.dom.style.setProperty('--c', col);
+      this.dom.classList.toggle('urgent', secs <= 10);
+      this.dom.classList.toggle('mine', mine);
+      (this.dom.children[0] as HTMLElement).textContent = `0:${String(secs).padStart(2, '0')}`;
+      (this.dom.children[1] as HTMLElement).innerHTML = mine
+        ? `<b>You are dominating</b> · hold ${ds.need} of ${w.nests.length} nests`
+        : `<b>${FACTION_NAMES[ds.face]} is dominating</b> · take back ${ds.toBreak} nest${ds.toBreak > 1 ? 's' : ''} to stop it`;
+      ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${(100 * ds.left) / DOMINATION.ticks}%`;
+    }
 
     // Energy and buttons.
     const me = w.factions[g.human];

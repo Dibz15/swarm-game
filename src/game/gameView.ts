@@ -5,7 +5,7 @@ import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
-import { DAMAGE_VS, MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, type MatchSetup, type NestPower } from '../sim/index';
+import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, type MatchSetup, type NestPower } from '../sim/index';
 import { feedNeed, hasPower, powerBoost } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { LocalSession } from './session';
@@ -41,6 +41,7 @@ export class GameView {
   resultTime = 0;
   private mask = new Uint8Array(MAX_UNITS);
   private spawnSeen: number[] = [];
+  private domSecs = -1;
   private frame = 0;
 
   constructor(
@@ -70,6 +71,13 @@ export class GameView {
       else if (w.over) this.finish(w.winnerTeam === w.teamOf[this.human] ? 'victory' : 'defeat', time);
     }
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
+    // Domination countdown ticks in the last ten seconds.
+    const ds = this.result ? null : dominationStatus(w);
+    const secs = ds ? Math.ceil(ds.left / TICK_HZ) : -1;
+    if (secs !== this.domSecs) {
+      if (ds && secs <= 10 && secs > 0) this.s.sfx.domTick(1 - secs / 10, ds.team === w.teamOf[this.human]);
+      this.domSecs = secs;
+    }
     // Soft ticks for your own nests spawning, if they are on screen.
     for (const n of w.nests) {
       if (n.owner === this.human && n.lastSpawn !== this.spawnSeen[n.id]) {
@@ -328,6 +336,24 @@ export class GameView {
           sfx.colossusDown(e.x, e.y, e.f === this.human);
           if (e.f === this.human) toast('You felled the Colossus! Full energy and a free upgrade', hex(e.f));
           else if (e.f >= 0 && e.f < NEUTRAL) toast(`${FACTION_NAMES[e.f]} felled the Colossus`, hex(e.f));
+          break;
+        }
+        case 'domStart': {
+          const mine = w.teamOf[e.f] === w.teamOf[this.human];
+          sfx.domStart(mine);
+          if (mine) toast(`You are dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
+          else toast(`${FACTION_NAMES[e.f]} is dominating! Take back a nest to stop them`, '#ff5d73');
+          for (const n of w.nests) {
+            if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === w.teamOf[e.f]) {
+              rings.add({ x: n.x, y: n.y, r0: n.r, r1: n.r * 3, dur: 0.8, c: FACTION_RGB[n.owner], thick: 3 });
+            }
+          }
+          break;
+        }
+        case 'domBreak': {
+          const mine = w.teamOf[e.f] === w.teamOf[this.human];
+          sfx.domBreak(mine);
+          toast(mine ? 'Your domination was broken' : `${FACTION_NAMES[e.f]}'s domination is broken`, mine ? '#ff5d73' : '#9aa4c7');
           break;
         }
         case 'crystal':

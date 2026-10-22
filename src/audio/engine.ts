@@ -513,6 +513,35 @@ export class AudioEngine {
     if (mine) [0, 7, 12, 19, 24].forEach((s, i) => this.tone(this.ui, note(s + 12), 0.7, 'triangle', 0.05, { delay: 0.4 + i * 0.08 }));
   }
 
+  // ---- domination -------------------------------------------------------------
+
+  /** Someone starts dominating: a rising fanfare if it's you, an alarm if not. */
+  domStart(mine: boolean): void {
+    if (!this.ctx) return;
+    if (mine) {
+      [0, 4, 7, 12].forEach((s, i) => this.tone(this.ui, note(s + 12), 0.7, 'triangle', 0.06, { delay: i * 0.1 }));
+    } else {
+      for (let k = 0; k < 3; k++) {
+        this.tone(this.ui, note(7), 0.22, 'square', 0.045, { delay: k * 0.32 });
+        this.tone(this.ui, note(6), 0.22, 'square', 0.045, { delay: k * 0.32 + 0.16 });
+      }
+    }
+    this.tone(this.reverbIn, 55, 1.6, 'sawtooth', 0.07, { attack: 0.2 });
+  }
+
+  /** Domination broken: a falling sweep, relief for the rest. */
+  domBreak(mine: boolean): void {
+    if (!this.ctx) return;
+    const notes = mine ? [12, 10, 7, 3] : [0, 7, 12];
+    notes.forEach((s, i) => this.tone(this.ui, note(s), 0.5, mine ? 'sawtooth' : 'triangle', 0.045, { delay: i * 0.09 }));
+  }
+
+  /** Countdown tick in the last seconds; urgency 0..1 raises the pitch. */
+  domTick(urgency: number, mine: boolean): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, note((mine ? 19 : 12) + Math.round(urgency * 7)), 0.09, 'square', 0.035 + 0.025 * urgency);
+  }
+
   eliminated(): void {
     if (!this.ctx) return;
     this.tone(this.ui, note(12), 1.4, 'sine', 0.05, { slide: 0.5 });
@@ -550,7 +579,7 @@ export class AudioEngine {
     this.deathLimit.refill(dt);
     this.spawnLimit.refill(dt);
 
-    let near = 0, far = 0, danger = 0, escal = 0;
+    let near = 0, far = 0, danger = 0, escal = 0, dom = 0;
     if (w && active && this.listener) {
       // Sample beams: weight by placement. Cap work for huge fights.
       const step = Math.max(1, Math.floor(w.beamCount / 400));
@@ -564,6 +593,7 @@ export class AudioEngine {
         for (const n of w.nests) if (n.owner === human && n.contested) danger = 1;
       }
       escal = escalation(w.tick);
+      for (let t = 0; t < w.domTicks.length; t++) if (w.domTicks[t] > 0) dom = 1;
     }
     const k = 1 - Math.exp(-dt * 3);
     this.nearLevel += (Math.min(1, near / 220) - this.nearLevel) * k;
@@ -576,6 +606,6 @@ export class AudioEngine {
     this.tension += (Math.min(1, this.nearLevel * 0.8 + this.farLevel * 0.35 + danger * 0.35) - this.tension) * (1 - Math.exp(-dt * 0.8));
     const musicOn = mode === 'ended' || this.muted ? 0 : Math.min(1, this.volumes.music * 1.5);
     this.ambience?.update(dt, { tension: this.tension, danger, escalation: escal, inGame: human >= 0, music: musicOn });
-    this.music?.update(dt, { mode, tension: this.tension, danger, escalation: escal });
+    this.music?.update(dt, { mode, tension: this.tension, danger, escalation: escal, domination: dom });
   }
 }

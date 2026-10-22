@@ -136,20 +136,65 @@ function checkVictory(w: World): void {
   if (aliveTeams.size <= 1) {
     w.over = true;
     w.winnerTeam = aliveTeams.size === 1 ? [...aliveTeams][0] : -1;
+    w.winReason = 'elimination';
     return;
   }
 
   const need = Math.ceil(w.nests.length * w.domShare);
   for (const t of aliveTeams) {
     if (nestsByTeam[t] >= need) {
+      if (w.domTicks[t] === 0) pushFx(w, 'domStart', 0, 0, teamFace(w, t));
       w.domTicks[t] += 15;
       if (w.domTicks[t] >= DOMINATION.ticks) {
         w.over = true;
         w.winnerTeam = t;
+        w.winReason = 'domination';
         return;
       }
     } else {
+      if (w.domTicks[t] > 0) pushFx(w, 'domBreak', 0, 0, teamFace(w, t));
       w.domTicks[t] = 0;
     }
   }
+}
+
+/** The faction that stands for a team: the live member holding the most nests. */
+function teamFace(w: World, team: number): number {
+  let best = -1, bestN = -1;
+  for (let f = 0; f < NEUTRAL; f++) {
+    const fa = w.factions[f];
+    if (!fa.active || fa.eliminated || fa.team !== team) continue;
+    let n = 0;
+    for (const nest of w.nests) if (nest.owner === f) n++;
+    if (n > bestN) {
+      bestN = n;
+      best = f;
+    }
+  }
+  return best;
+}
+
+export interface DominationStatus {
+  team: number;
+  /** faction to show for the team */
+  face: number;
+  /** ticks until the team wins */
+  left: number;
+  /** nests the team holds, and how many it needs */
+  held: number;
+  need: number;
+  /** nests rivals must take back to break it */
+  toBreak: number;
+}
+
+/** The team currently dominating, or null. */
+export function dominationStatus(w: World): DominationStatus | null {
+  for (let t = 0; t < w.domTicks.length; t++) {
+    if (w.domTicks[t] <= 0) continue;
+    let held = 0;
+    for (const n of w.nests) if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === t) held++;
+    const need = Math.ceil(w.nests.length * w.domShare);
+    return { team: t, face: teamFace(w, t), left: Math.max(0, DOMINATION.ticks - w.domTicks[t]), held, need, toBreak: Math.max(1, held - need + 1) };
+  }
+  return null;
 }

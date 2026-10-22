@@ -1,5 +1,5 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { BASTION, DAMAGE_VS, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
+import { BASTION, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
 import type { World } from '../sim/world';
 import type { Renderer } from './renderer';
 
@@ -93,6 +93,14 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
       const a = o.time * (0.8 + 0.4 * l) * (l % 2 ? 1 : -1) + n.id;
       const rr = R * (1.12 + 0.13 * l);
       r.unit(n.x + Math.cos(a) * rr, n.y + Math.sin(a) * rr, 4, c[0], c[1], c[2], 255);
+    }
+
+    // Nests of a dominating team throb, faster as the clock runs down.
+    if (n.owner >= 0 && n.owner !== NEUTRAL && w.domTicks[w.teamOf[n.owner]] > 0) {
+      const k = w.domTicks[w.teamOf[n.owner]] / DOMINATION.ticks;
+      const beat = 0.5 + 0.5 * Math.sin(o.time * (4 + 10 * k));
+      r.shape(true, n.x, n.y, R * (1.6 + 0.25 * beat), 0, 1, 0, 0.05, c, Math.round(90 + 140 * beat));
+      r.shape(false, n.x, n.y, R * 1.9, 7, 1, 0, 0, c, Math.round(18 + 30 * beat));
     }
 
     // Capitals wear a second, slowly counter-rotating ring.

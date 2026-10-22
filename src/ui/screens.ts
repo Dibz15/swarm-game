@@ -406,7 +406,7 @@ export function endScreen(
     <div class="screen modal dim">
       <div class="card wide end ${victory ? 'win' : 'lose'}">
         <h1 class="result">${victory ? 'Victory' : 'Defeat'}</h1>
-        <p class="sub">Match time ${formatTime(w.tick)}</p>
+        <p class="sub">${how(w, human)} · match time ${formatTime(w.tick)}</p>
         <canvas class="chart"></canvas>
         <table class="stats">
           <thead><tr><th></th><th>Spawned</th><th>Kills</th><th>Lost</th><th>Captures</th><th>Peak</th><th>Out at</th></tr></thead>
@@ -424,6 +424,15 @@ export function endScreen(
   m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
   requestAnimationFrame(() => drawChart(m.querySelector('.chart') as HTMLCanvasElement, w));
   return m;
+}
+
+/** "You won by domination", "Magenta won by elimination", ... */
+function how(w: World, human: number): string {
+  if (w.winnerTeam < 0 || !w.winReason) return w.factions[human]?.eliminated ? 'You were eliminated' : 'Match over';
+  const mine = w.winnerTeam === w.teamOf[human];
+  const face = w.factions.find((f) => f.active && f.id !== NEUTRAL && f.team === w.winnerTeam && !f.eliminated) ?? w.factions.find((f) => f.team === w.winnerTeam);
+  const who = mine ? (w.factions.filter((f) => f.active && f.team === w.winnerTeam).length > 1 ? 'Your team' : 'You') : face ? FACTION_NAMES[face.id] : 'A rival';
+  return `${who} won by <b>${w.winReason}</b>`;
 }
 
 /** Army size over time per faction. */

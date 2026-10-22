@@ -35,7 +35,7 @@ TERRAIN=heavy node $TMPDIR/bench.mjs 5000
 ```
 
 Dev URL flags:
-- `?debug` shows the fps / sim-ms overlay. Press `` ` `` to toggle it.
+- `?debug` shows the fps / sim-ms overlay (press `` ` `` to toggle it) and exposes the app as `window.swarm` for console poking.
 - `?bench=5000` runs a stress battle with about 5,000 units.
 - `?eventdemo` starts a small match where the wild swarm, a supply drop and the Colossus all arrive in the first seconds.
 
