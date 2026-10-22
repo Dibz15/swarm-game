@@ -2,7 +2,7 @@
 // marching into each other on a large map. Bundle it first, since vite-node
 // adds its own overhead:
 //   npx esbuild scripts/bench.ts --bundle --platform=node --outfile=$TMPDIR/bench.mjs --format=esm && TERRAIN=heavy node $TMPDIR/bench.mjs 5000
-import { TERRAIN } from './env';
+import { EVENTS, TERRAIN } from './env';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
 import { Kind, MAX_UNITS } from '../src/sim/constants';
@@ -12,6 +12,7 @@ const n = Number(process.argv[2] ?? 5000);
 const ticks = Number(process.argv[3] ?? 600);
 const w = createWorld({
   terrain: TERRAIN,
+  events: EVENTS,
   seed: 99,
   size: 'large',
   players: [

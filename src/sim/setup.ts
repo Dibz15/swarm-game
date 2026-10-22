@@ -1,6 +1,7 @@
 import { DOMINATION, Kind, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
-import { generateMap, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
+import { generateMap, type EventLevel, type EventParams, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
+import { initEvents } from './events';
 import { TAU, dcos, dsin } from './mathx';
 import { spawnUnit, World } from './world';
 
@@ -20,6 +21,8 @@ export interface MatchSetup {
   portrait?: boolean;
   /** terrain preset or explicit amounts (default: none) */
   terrain?: TerrainLevel | TerrainParams;
+  /** neutral map events preset or explicit schedule (default: off) */
+  events?: EventLevel | EventParams;
 }
 
 export const START_UNITS = 10;
@@ -31,6 +34,7 @@ export function createWorld(setup: MatchSetup): World {
     players: setup.players.length,
     portrait: setup.portrait,
     terrain: setup.terrain,
+    events: setup.events,
   });
   const w = new World(setup.seed, map.width, map.height, map.terrain);
   w.domShare = DOMINATION.share[setup.size] ?? 0.7;
@@ -71,11 +75,14 @@ export function createWorld(setup: MatchSetup): World {
       contested: false,
       lockedUntil: 0,
       capital: s.player >= 0,
+      garrison: 0,
+      visited: 0,
     });
 
     // Garrisons are made of the nest's own unit kind (tanks guard forges...).
     const gk = s.player >= 0 || NEST_KIND[s.type] < 0 ? Kind.Dot : NEST_KIND[s.type];
     const count = s.player >= 0 ? START_UNITS : gk === Kind.Tank ? Math.ceil(s.garrison / 2.2) : s.garrison;
+    if (s.player < 0) w.nests[id].garrison = count;
     for (let k = 0; k < count; k++) {
       const a = (k / count) * TAU + w.rng.next() * 0.4;
       const rr = r * (0.5 + w.rng.next() * 0.6);
@@ -84,6 +91,8 @@ export function createWorld(setup: MatchSetup): World {
       spawnUnit(w, owner, gk, x, y, s.player >= 0 ? s.x : x, s.player >= 0 ? s.y : y, ar);
     }
   });
+
+  initEvents(w, map.events);
 
   for (const p of setup.players) {
     const fs = w.factions[p.faction].stats;

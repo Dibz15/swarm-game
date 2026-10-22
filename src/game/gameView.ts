@@ -3,7 +3,7 @@ import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
 import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
-import { drawWorld } from '../render/scene';
+import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, UPGRADE_COST, type MatchSetup, type NestPower } from '../sim/index';
 import { hasPower } from '../sim/commands';
@@ -99,6 +99,7 @@ export class GameView {
       human: this.human,
     });
     this.drawAim();
+    this.drawEdgeMarkers(time);
     if (this.brush) {
       const b = this.brush;
       this.s.renderer.shape(true, b.x, b.y, b.r, 0, 1, 0, 1.5 / b.r, WHITE, 120);
@@ -122,6 +123,44 @@ export class GameView {
       } else if (eff <= 0.75 && Math.random() < 0.2) {
         particles.burst(w.x[t], w.y[t], [170, 176, 196], 1, 50, 1.2, 0.15);
       }
+    }
+  }
+
+  /** Arrows at the screen edge pointing to off-screen drops, Colossi and swarms. */
+  private drawEdgeMarkers(time: number): void {
+    const ev = this.world.events;
+    if (!ev) return;
+    const w = this.world;
+    const marks: [number, number, readonly number[]][] = [];
+    for (const d of ev.drops) marks.push([d.x, d.y, DROP_MARK]);
+    for (const c of ev.colossi) {
+      const s = w.uidToSlot.get(c.uid);
+      if (s !== undefined) marks.push([w.x[s], w.y[s], FERAL]);
+    }
+    for (const sw of ev.swarms) {
+      let x = 0, y = 0, n = 0;
+      for (const u of sw.uids) {
+        const s = w.uidToSlot.get(u);
+        if (s === undefined) continue;
+        x += w.x[s];
+        y += w.y[s];
+        n++;
+      }
+      if (n >= 6) marks.push([x / n, y / n, FERAL]);
+    }
+    const { camera, renderer } = this.s;
+    const pad = 28;
+    const pulse = 0.6 + 0.4 * Math.sin(time * 5);
+    for (const [x, y, c] of marks) {
+      const [sx, sy] = camera.toScreen(x, y);
+      if (sx >= 0 && sy >= 0 && sx <= camera.viewW && sy <= camera.viewH) continue;
+      const cx = camera.viewW / 2, cy = camera.viewH / 2;
+      const dx = sx - cx, dy = sy - cy;
+      const k = Math.min((cx - pad) / Math.abs(dx || 1e-6), (cy - pad) / Math.abs(dy || 1e-6));
+      const [wx, wy] = camera.toWorld(cx + dx * k, cy + dy * k);
+      // Triangle shape points "up" at rotation 0; turn it toward the target.
+      const rot = Math.atan2(dx, -dy);
+      renderer.shape(true, wx, wy, (11 * renderer.dpr) / camera.zoom, 3, 0, -rot, 0.6, c, Math.round(230 * pulse));
     }
   }
 
@@ -249,6 +288,45 @@ export class GameView {
           break;
         case 'absorb':
           break;
+        case 'swarmSpawn':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 2.5, r1: e.r * 0.5, dur: 0.8, c: FERAL, thick: 3 });
+          sfx.swarmHorn();
+          toast('A wild swarm is coming! It hunts the biggest army', '#d65c4e');
+          break;
+        case 'dropIncoming':
+          sfx.dropIncoming();
+          toast('Supply drop incoming: hold it alone for energy and a free upgrade', '#ffe28c');
+          break;
+        case 'dropTaken':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.4, r1: e.r * 2.4, dur: 0.7, c, thick: 3 });
+          particles.burst(e.x, e.y, c, 30, 110, 2.4, 0.8);
+          sfx.dropTaken(e.x, e.y, e.f === this.human);
+          if (e.f === this.human) toast(e.nest >= 0 ? 'Supply drop: +energy and a free upgrade' : 'Supply drop: +energy', hex(e.f));
+          else toast(`${FACTION_NAMES[e.f]} took the supply drop`, hex(e.f));
+          break;
+        case 'colossusSpawn':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r * 0.5, dur: 1.2, c: FERAL, thick: 4 });
+          sfx.colossus();
+          toast('The Colossus wakes. Land the killing blow for full energy and a free upgrade', '#d65c4e');
+          break;
+        case 'stomp': {
+          rings.add({ x: e.x, y: e.y, r0: 8, r1: e.r, dur: 0.35, c: FERAL, thick: 3 });
+          const [sx, sy] = camera.toScreen(e.x, e.y);
+          if (sx > -50 && sy > -50 && sx < camera.viewW + 50 && sy < camera.viewH + 50) camera.shake = Math.min(1, camera.shake + 0.15);
+          sfx.stomp(e.x, e.y);
+          break;
+        }
+        case 'colossusDown': {
+          const kc = e.f >= 0 && e.f < NEUTRAL ? c : FERAL;
+          rings.add({ x: e.x, y: e.y, r0: 10, r1: e.r * 2, dur: 0.9, c: WHITE, thick: 5 });
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 1.5, dur: 0.5, c: kc, thick: 0, disc: true });
+          particles.burst(e.x, e.y, FERAL, 70, 180, 3, 1.1);
+          camera.shake = Math.min(1, camera.shake + 0.6);
+          sfx.colossusDown(e.x, e.y, e.f === this.human);
+          if (e.f === this.human) toast('You felled the Colossus! Full energy and a free upgrade', hex(e.f));
+          else if (e.f >= 0 && e.f < NEUTRAL) toast(`${FACTION_NAMES[e.f]} felled the Colossus`, hex(e.f));
+          break;
+        }
         case 'crystal':
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.4, r1: e.r * 1.5, dur: 0.6, c, thick: 2 });
           particles.burst(e.x, e.y, c, 14, 70, 2, 0.6);

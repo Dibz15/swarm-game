@@ -15,7 +15,9 @@ export const CELL = 32;
  * Dot = Swarmer, Tank = Shield, Lancer = Spear, Swift = Raider.
  * "Spears pierce Shields, Shields stop Swarmers, Swarmers overrun Spears."
  */
-export const Kind = { Dot: 0, Tank: 1, Lancer: 2, Swift: 3 } as const;
+export const Kind = { Dot: 0, Tank: 1, Lancer: 2, Swift: 3, Colossus: 4 } as const;
+/** kinds a player can field (the Colossus is a neutral event unit) */
+export const PLAYER_KINDS = 4;
 
 export interface UnitStats {
   name: string;
@@ -37,17 +39,19 @@ export const UNIT_STATS: readonly UnitStats[] = [
   { name: 'Shield', hp: 34, dps: 4.5, range: 20, speed: 28, size: 6.6, interval: 3.4, sep: 9, weight: 3 },
   { name: 'Spear', hp: 8, dps: 4.4, range: 52, speed: 32, size: 4.2, interval: 2.2, sep: 6.5, weight: 1.4 },
   { name: 'Raider', hp: 6, dps: 3.2, range: 18, speed: 72, size: 3.6, interval: 0.9, sep: 5.5, weight: 0.65 },
+  { name: 'Colossus', hp: 1100, dps: 26, range: 34, speed: 13, size: 18, interval: 0, sep: 20, weight: 40 },
 ];
 /**
  * Rock-paper-scissors damage multipliers: DAMAGE_VS[attacker][target].
  * Lancers beat Tanks, Tanks beat Dots, Dots beat Lancers; Swifts are raiders.
  */
 export const DAMAGE_VS: readonly (readonly number[])[] = [
-  //  Dot  Tank Lancer Swift
-  [1.0, 0.6, 1.7, 1.0], // Dot
-  [1.4, 1.0, 0.8, 1.2], // Tank
-  [0.75, 1.2, 1.0, 0.8], // Lancer
-  [1.0, 0.5, 1.0, 1.0], // Swift
+  //  Dot  Tank Lancer Swift Colossus
+  [1.0, 0.6, 1.7, 1.0, 0.8], // Dot
+  [1.4, 1.0, 0.8, 1.2, 1.0], // Tank
+  [0.75, 1.2, 1.0, 0.8, 1.5], // Lancer: Spears pierce giants too
+  [1.0, 0.5, 1.0, 1.0, 0.6], // Swift
+  [1.0, 1.0, 1.0, 1.0, 1.0], // Colossus
 ];
 
 /** Signature traits, one per unit kind. */
@@ -60,6 +64,8 @@ export const TRAITS = {
   pierce: { radius: 14, extra: 2, damage: 0.3 },
   /** Swifts: count this many times when capturing or draining a nest */
   raidCapture: 3,
+  /** Colossus: area stomp around itself every `every` ticks */
+  stomp: { radius: 46, damage: 14, every: 2 * 30 },
 };
 
 /** units notice enemies this far beyond their attack range */
@@ -208,4 +214,28 @@ export const TERRAIN = {
   riftDps: 2.4,
   /** Crystal: energy per second for the only team standing on it */
   crystalEnergy: 1.1,
+};
+
+/** Living-map events: mechanics shared by every intensity preset (see EVENT_PRESETS in mapgen). */
+export const EVENTS = {
+  /** wild swarm: how often it picks a new target, and how far it looks */
+  swarmRethink: 2 * TICK_HZ,
+  swarmSense: 120,
+  /** a swarm is skipped while this many wild units are already out, as a multiple of its size */
+  swarmMaxOut: 1.5,
+  /** Supply drop */
+  dropTelegraph: 8 * TICK_HZ,
+  dropLifetime: 60 * TICK_HZ,
+  dropRadius: 34,
+  /** capture progress per second: base + perUnit * min(units, 20) */
+  dropBase: 0.05,
+  dropPerUnit: 0.006,
+  dropEnergy: 40,
+  /** chance a drop lands at the spot nearest the weakest player */
+  dropNearWeakest: 0.6,
+  /** extra energy instead of a free upgrade when no nest can level up */
+  dropEnergyNoUpgrade: 30,
+  /** Garrison regrowth: an unowned nest nobody visits this long goes wild again */
+  revertAfter: 45 * TICK_HZ,
+  revertGarrison: 4,
 };

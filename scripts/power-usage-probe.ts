@@ -1,6 +1,6 @@
 // How often do bots use each power, and what do armies end up made of?
 // Usage: npx vite-node scripts/power-usage-probe.ts [games] [players] [size]
-import { TERRAIN } from './env';
+import { EVENTS, TERRAIN } from './env';
 import { Bot, PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -25,7 +25,7 @@ const orig = (Bot.prototype as any).issue;
 const spawned = [0, 0, 0, 0];
 let minutes = 0;
 for (let g = 0; g < games; g++) {
-  const w = createWorld({ terrain: TERRAIN, 
+  const w = createWorld({ terrain: TERRAIN, events: EVENTS, 
     seed: 9000 + g, size,
     players: Array.from({ length: players }, (_, i) => ({ faction: i, team: i, human: false, bot: { difficulty: 2, personality: PERSONALITIES[(i + g) % 4] } })),
   });

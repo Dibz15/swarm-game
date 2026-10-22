@@ -23,9 +23,10 @@ npx vite-node scripts/collapse-probe.ts        # how the first-out player loses
 npx vite-node scripts/kill-matrix.ts           # winner vs loser kill shares
 npx vite-node scripts/trace.ts 5 large 1005    # 30s timeline of one match
 npx vite-node scripts/terrain-probe.ts heavy 40 7 3   # terrain amounts, connectivity, gen time (+ ASCII map)
+EVENTS=normal npx vite-node scripts/event-probe.ts 4 medium 20   # events per game, who profits, drop/winner correlation
 ```
 
-Every probe takes `TERRAIN=none|light|standard|heavy` (default `none`), e.g. `TERRAIN=standard npx vite-node scripts/balance.ts 4 medium 40`. For sim timing without vite-node overhead:
+Every probe takes `TERRAIN=none|light|standard|heavy` and `EVENTS=off|calm|normal|wild` (defaults `none` / `off`), e.g. `TERRAIN=standard npx vite-node scripts/balance.ts 4 medium 40`. For sim timing without vite-node overhead:
 
 ```bash
 npx esbuild scripts/bench.ts --bundle --platform=node --format=esm --outfile=$TMPDIR/bench.mjs
@@ -35,6 +36,7 @@ TERRAIN=heavy node $TMPDIR/bench.mjs 5000
 Dev URL flags:
 - `?debug` shows the fps / sim-ms overlay. Press `` ` `` to toggle it.
 - `?bench=5000` runs a stress battle with about 5,000 units.
+- `?eventdemo` starts a small match where the wild swarm, a supply drop and the Colossus all arrive in the first seconds.
 
 ## How it plays
 
@@ -50,6 +52,11 @@ Dev URL flags:
   - **Nebula** slows everything inside: ambush ground.
   - **Rift** burns anything standing in it: a risky shortcut that Raiders cross fastest.
   - **Crystal** charges energy for the only team standing on it.
+- **Map events** (skirmish setup: Off / Calm / Normal / Wild, seeded like the map):
+  - **Wild swarm:** a neutral red-gray swarm that hunts the biggest army nearby. It can contest nests but never capture them. Lure it into a rival.
+  - **Supply drop:** lands at fair spots, usually near the weakest player. Hold it alone for energy plus a free nest upgrade; the biggest army only gets the energy.
+  - **Colossus:** a slow giant walking across the map. Spears hurt it most. The killing blow earns full energy and a free upgrade.
+  - **Regrowth:** neutral nests rebuild their guards, and unowned nests left alone for 45 s go wild again.
 - **Capture** a nest by standing on it with no enemies present. Neutral nests have gray guards. A contested nest stops spawning.
 - **Upgrade** a nest by feeding it your dots (U). Levels 1–3 spawn faster.
 - **Energy** builds up over time and from kills and captures. **Surge** (Q) costs 30: the selected dots get faster, stronger and tougher for 6 seconds. **Nova** (E) costs 60: it sacrifices about 20% of the selected dots and sends out a shockwave.
@@ -77,6 +84,7 @@ src/sim/      deterministic simulation — no DOM, no Math.random, no clock
   ai/bot.ts     bot players — run inside the sim and issue the same Commands as humans
   mapgen.ts     MapParams → MapSpec: rotationally symmetric nests + terrain from a seed (portrait variant for phones)
   terrain.ts    walls/fields as capsules; tile flags, exact collision, line of sight, cached flow fields
+  events.ts     living-map director: wild swarms, supply drops, the Colossus, garrison regrowth
   mathx.ts      table-based deterministic sin/cos
   hash.ts       state checksum
 src/game/     LocalSession (fixed-timestep driver + command log), GameView (match + feedback)
