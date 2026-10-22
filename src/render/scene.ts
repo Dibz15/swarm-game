@@ -1,5 +1,5 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { BASTION, DAMAGE_VS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
+import { BASTION, DAMAGE_VS, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
 import type { World } from '../sim/world';
 import type { Renderer } from './renderer';
 
@@ -18,6 +18,9 @@ export interface SceneOpts {
 const NEST_SHAPE = [1, 2, 4, 3, 5];
 const NEST_SPIN = [0.22, 0.1, -0.28, 0.7, 0.12];
 const UNOWNED: RGB = [70, 76, 96];
+/** wild event units: ash red, so they don't read as gray garrisons */
+export const FERAL: RGB = [214, 92, 78];
+export const DROP_RGB: RGB = [255, 226, 140];
 const SELECT_MIX = 0.5;
 
 export function drawWorld(r: Renderer, w: World, o: SceneOpts): void {
@@ -27,6 +30,7 @@ export function drawWorld(r: Renderer, w: World, o: SceneOpts): void {
   drawBeams(r, w, o);
   drawUnits(r, w, o);
   drawBarrages(r, w, o);
+  drawEvents(r, w, o);
 }
 
 const CRYSTAL_RGB: RGB = [170, 225, 255];
@@ -184,7 +188,7 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
     const y = w.py[i] + (w.y[i] - w.py[i]) * a;
     const owner = w.owner[i];
     const kind = w.kind[i];
-    let c = sel && sel[i] ? lit[owner] : FACTION_RGB[owner];
+    let c = sel && sel[i] ? lit[owner] : w.wild[i] ? FERAL : FACTION_RGB[owner];
     let size = UNIT_STATS[kind].size;
     let alpha = owner === NEUTRAL ? 200 : 255;
     if (w.surge[i] > w.tick) {
@@ -195,7 +199,8 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
 
     // Heading: face the target while fighting, else the direction of travel.
     let angle = 0;
-    if (kind === Kind.Lancer || kind === Kind.Swift) {
+    if (kind === Kind.Colossus) angle = o.time * 0.4 + i;
+    else if (kind === Kind.Lancer || kind === Kind.Swift) {
       const t = w.tgt[i];
       if (w.engaged[i] && t >= 0) angle = Math.atan2(w.y[t] - w.y[i], w.x[t] - w.x[i]);
       else angle = Math.atan2(w.vy[i], w.vx[i]);
@@ -207,6 +212,36 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
     }
     const shape = kind + (w.fortify[i] > w.tick ? 10 : 0);
     r.unit(x, y, size, c[0], c[1], c[2], alpha, shape, angle);
+  }
+}
+
+/** Supply drops (falling beacon, then a capture ring) and Colossus health rings. */
+function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
+  const ev = w.events;
+  if (!ev) return;
+  const R = EVENTS.dropRadius;
+  for (const d of ev.drops) {
+    const left = (d.lands - w.tick - o.alpha) / EVENTS.dropTelegraph;
+    if (left > 0) {
+      // Incoming: a ring closing in, and a column of light.
+      r.shape(true, d.x, d.y, R * (1 + left * 2.5), 0, 1, o.time, 0.03, DROP_RGB, Math.round(90 + 120 * (1 - left)));
+      r.shape(false, d.x, d.y, R, 7, 1, 0, 0, DROP_RGB, Math.round(30 * (1 - left)));
+      r.beam(d.x, d.y - 260 * left - 20, d.x, d.y, DROP_RGB[0], DROP_RGB[1], DROP_RGB[2], Math.round(160 * (1 - left)), 3);
+      continue;
+    }
+    const pulse = 0.5 + 0.5 * Math.sin(o.time * 4);
+    const hc = d.holder >= 0 ? FACTION_RGB[d.holder] : DROP_RGB;
+    r.shape(false, d.x, d.y, 11, 2, 0, o.time * 1.5, 0.5, DROP_RGB, 240);
+    r.shape(false, d.x, d.y, R, 7, 1, 0, 0, DROP_RGB, Math.round(14 + 14 * pulse));
+    r.shape(true, d.x, d.y, R, 0, 1, 0, 0.02, DROP_RGB, Math.round(70 + 60 * pulse));
+    if (d.progress > 0) r.shape(true, d.x, d.y, R + 6, 0, d.progress, 0, 0.07, hc, 235);
+  }
+  for (const c of ev.colossi) {
+    const s = w.uidToSlot.get(c.uid);
+    if (s === undefined) continue;
+    const x = w.px[s] + (w.x[s] - w.px[s]) * o.alpha, y = w.py[s] + (w.y[s] - w.py[s]) * o.alpha;
+    r.shape(true, x, y, 30, 0, w.hp[s] / c.maxHp, 0, 0.06, FERAL, 220);
+    r.shape(true, x, y, 30, 0, 1, 0, 0.03, FERAL, 50);
   }
 }
 

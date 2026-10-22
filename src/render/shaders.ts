@@ -109,7 +109,12 @@ void main(){
   float sq = max(abs(p.x), abs(p.y));
   float d = sq;
   float inner = 1.0;
-  if (shape > 2.5) {
+  if (shape > 3.5) {
+    // Colossus: a spiked, slowly turning star with a dark heart.
+    float L = length(p);
+    d = L * (1.0 + 0.2 * cos(atan(p.y, p.x) * 7.0 + v_s.y));
+    inner = L < 0.45 ? 0.3 : 1.0;
+  } else if (shape > 2.5) {
     d = max(abs(r.y) * 1.8 + r.x, -r.x / 0.8);
   } else if (shape > 1.5) {
     d = abs(r.x) / 1.45 + abs(r.y) / 0.38;

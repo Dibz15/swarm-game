@@ -16,7 +16,7 @@ function arena(): World {
 function nest(w: World, type: number, owner: number, x = 400, y = 250) {
   w.nests.push({
     id: w.nests.length, x, y, r: 26, type, owner, level: 1, control: 1, controller: owner, spawnAcc: 0,
-    rallyX: x, rallyY: y, feedProgress: 0, feedIncoming: 0, lastSpawn: 0, contested: false, capital: false, lockedUntil: 0,
+    rallyX: x, rallyY: y, feedProgress: 0, feedIncoming: 0, lastSpawn: 0, contested: false, capital: false, lockedUntil: 0, garrison: 0, visited: 0,
   });
   return w.nests[w.nests.length - 1];
 }

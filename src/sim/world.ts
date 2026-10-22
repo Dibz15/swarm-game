@@ -2,6 +2,7 @@ import { MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './co
 import { Rng } from './rng';
 import { Grid } from './spatial';
 import { Terrain, emptyTerrain, type TerrainSpec } from './terrain';
+import type { EventSpec } from './mapgen';
 import type { Bot } from './ai/bot';
 
 export interface Nest {
@@ -29,6 +30,10 @@ export interface Nest {
   lockedUntil: number;
   /** a player's starting nest: built-in turret + stronger home armor */
   capital: boolean;
+  /** neutral guards this nest regrows toward (living-map events) */
+  garrison: number;
+  /** last tick anyone stood on it (unowned nests go wild again when left alone) */
+  visited: number;
 }
 
 export interface FactionStats {
@@ -66,7 +71,13 @@ export type FxType =
   | 'barrageHit'
   | 'blink'
   | 'lockdown'
-  | 'crystal';
+  | 'crystal'
+  | 'swarmSpawn'
+  | 'dropIncoming'
+  | 'dropTaken'
+  | 'colossusSpawn'
+  | 'colossusDown'
+  | 'stomp';
 
 export interface FxEvent {
   type: FxType;
@@ -100,6 +111,48 @@ export interface Crystal {
   /** last faction to hold it, so passers-by don't re-announce it */
   last: number;
 }
+
+/** A supply drop: lands after a telegraph, then the only team on it fills `progress`. */
+export interface Drop {
+  x: number;
+  y: number;
+  lands: number;
+  expires: number;
+  /** 0..1, owned by `holder` (faction), -1 = nobody yet */
+  progress: number;
+  holder: number;
+}
+
+/** A wild swarm: neutral units hunting the biggest army nearby. */
+export interface Swarm {
+  uids: number[];
+  tx: number;
+  ty: number;
+}
+
+/** A Colossus walking its path; `leg` is the waypoint it heads for. */
+export interface Colossus {
+  uid: number;
+  path: [number, number][];
+  leg: number;
+  maxHp: number;
+}
+
+/** Runtime state of the map's events (schedule in `spec.params`). */
+export interface EventState {
+  spec: EventSpec;
+  rng: Rng;
+  nextSwarm: number;
+  nextDrop: number;
+  swarmCount: number;
+  dropCount: number;
+  swarms: Swarm[];
+  drops: Drop[];
+  colossi: Colossus[];
+}
+
+export const WILD_SWARM = 1;
+export const WILD_COLOSSUS = 2;
 
 export const UNIT_FEEDING = 1;
 
@@ -155,6 +208,8 @@ export class World {
   readonly alertTick = new Int32Array(MAX_UNITS);
   /** nearby friendly Dots last tick (pack bonus) */
   readonly pack = new Uint8Array(MAX_UNITS);
+  /** neutral event units: WILD_SWARM or WILD_COLOSSUS, else 0 */
+  readonly wild = new Uint8Array(MAX_UNITS);
 
   readonly free: number[] = [];
   readonly uidToSlot = new Map<number, number>();
@@ -166,6 +221,8 @@ export class World {
   readonly grid: Grid;
   readonly terrain: Terrain;
   crystals: Crystal[] = [];
+  /** living-map events, or null when they're off */
+  events: EventState | null = null;
   bots: Bot[] = [];
 
   /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
@@ -257,6 +314,7 @@ export function spawnUnit(
   w.surge[i] = 0;
   w.fortify[i] = 0;
   w.pack[i] = 0;
+  w.wild[i] = 0;
   w.attacker[i] = -1;
   w.attackerUid[i] = 0;
   w.alertTick[i] = -1000;

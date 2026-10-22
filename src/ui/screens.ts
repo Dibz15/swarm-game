@@ -1,6 +1,6 @@
 import { FACTION_HEX, FACTION_NAMES } from '../content/factions';
 import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
-import { TERRAIN_LEVELS, type MapSize, type TerrainLevel } from '../sim/mapgen';
+import { EVENT_LEVELS, TERRAIN_LEVELS, type EventLevel, type MapSize, type TerrainLevel } from '../sim/mapgen';
 import { hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import type { World } from '../sim/world';
@@ -89,6 +89,8 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
               <li><i class="t-rift"></i><b>Rift</b> burns dots standing in it: a risky shortcut</li>
               <li><i class="t-crys"></i><b>Crystal</b> charges energy for whoever holds it alone</li>
             </ul>
+            <h3>Map events</h3>
+            <p>A <b>wild swarm</b> (red-gray) hunts the biggest army nearby, so lead it into a rival. <b>Supply drops</b> pay energy and a free nest upgrade to whoever holds them alone (the biggest army only gets the energy). The <b>Colossus</b> wanders across the map: whoever lands the killing blow gets full energy and an upgrade. Neutral nests regrow their guards, and nests nobody holds go wild again.</p>
             <p><b>Energy</b> builds up over time, and faster from kills and captures. <b>Surge</b> (30) makes your selected dots faster, stronger and tougher for 6 seconds. <b>Nova</b> (60) sacrifices some of your dots to blast everything around them.</p>
           </div>
         </div>
@@ -112,6 +114,7 @@ export interface SetupPrefs {
   color: number;
   size: MapSize;
   terrain: TerrainLevel;
+  events: EventLevel;
   teams: boolean;
   bots: BotRow[];
 }
@@ -120,6 +123,7 @@ const DEFAULT_PREFS: SetupPrefs = {
   color: 0,
   size: 'medium',
   terrain: 'standard',
+  events: 'normal',
   teams: false,
   bots: [
     { faction: 1, difficulty: 1, personality: 'random', team: 1 },
@@ -164,6 +168,7 @@ export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
     seed,
     size: p.size,
     terrain: p.terrain,
+    events: p.events,
     portrait: window.innerHeight > window.innerWidth * 1.15,
     players: [
       { faction: p.color, team: 0, human: true },
@@ -211,9 +216,17 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
             </div>
           </div>
         </div>
-        <div class="field">
-          <label>Map seed</label>
-          <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
+        <div class="field two">
+          <div>
+            <label>Events <small>wild swarms, drops, the Colossus</small></label>
+            <div class="seg" data-a="events">
+              ${EVENT_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
+            </div>
+          </div>
+          <div>
+            <label>Map seed</label>
+            <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
+          </div>
         </div>
         <div class="row end">
           <button data-a="back">Back</button>
@@ -251,6 +264,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
     (m.querySelector('[data-a=add]') as HTMLButtonElement).disabled = prefs.bots.length >= 5;
     m.querySelectorAll<HTMLButtonElement>('[data-a=size] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.size));
     m.querySelectorAll<HTMLButtonElement>('[data-a=terrain] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.terrain));
+    m.querySelectorAll<HTMLButtonElement>('[data-a=events] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.events));
   };
 
   swatches.addEventListener('click', (e) => {
@@ -317,6 +331,13 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
     const v = (e.target as HTMLElement).dataset.v as TerrainLevel | undefined;
     if (v) {
       prefs.terrain = v;
+      render();
+    }
+  });
+  m.querySelector('[data-a=events]')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).dataset.v as EventLevel | undefined;
+    if (v) {
+      prefs.events = v;
       render();
     }
   });

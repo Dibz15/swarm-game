@@ -466,6 +466,53 @@ export class AudioEngine {
     this.tone(out, 55, 0.9, 'sine', 0.12, { slide: 0.8, delay: 0.25 });
   }
 
+  // ---- living-map events -----------------------------------------------------
+
+  /** Wild swarm arrives: a low, rough two-note horn. */
+  swarmHorn(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, note(-24), 1.6, 'sawtooth', 0.05, { attack: 0.25, slide: 0.94 });
+    this.tone(this.ui, note(-17), 1.4, 'sawtooth', 0.035, { attack: 0.25, delay: 0.5, slide: 0.94 });
+    this.noise(this.reverbIn, 1.4, 0.08, 'lowpass', 900, 200);
+  }
+
+  /** Supply drop incoming: a bright falling chime. */
+  dropIncoming(): void {
+    if (!this.ctx) return;
+    [24, 19, 16, 12].forEach((s, i) => this.tone(this.ui, note(s), 0.5, 'sine', 0.035, { delay: i * 0.09 }));
+  }
+
+  dropTaken(x: number, y: number, mine: boolean): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, mine ? 1.2 : 0.6, 1.2, 0.03);
+    if (!out) return;
+    [12, 16, 19, 24].forEach((s, i) => this.tone(out, note(s + 12), 0.6, 'triangle', 0.05, { delay: i * 0.06 }));
+  }
+
+  /** The Colossus: a distant, heavy drum roll. */
+  colossus(): void {
+    if (!this.ctx) return;
+    [0, 0.45, 0.9].forEach((d) => this.tone(this.reverbIn, 41.2, 0.9, 'sine', 0.22, { delay: d, slide: 0.7 }));
+    this.tone(this.ui, note(-21), 2.4, 'sawtooth', 0.04, { attack: 0.8 });
+  }
+
+  stomp(x: number, y: number): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, 0.9, 0.6, 0.05);
+    if (!out) return;
+    this.tone(out, 55, 0.5, 'sine', 0.2, { slide: 0.6 });
+    this.noise(out, 0.3, 0.08, 'lowpass', 600, 80);
+  }
+
+  colossusDown(x: number, y: number, mine: boolean): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, 1.3, 2.5, 0.0);
+    if (!out) return;
+    this.tone(out, 82.4, 2.2, 'sawtooth', 0.12, { slide: 0.5 });
+    this.noise(out, 1.8, 0.2, 'lowpass', 1800, 60);
+    if (mine) [0, 7, 12, 19, 24].forEach((s, i) => this.tone(this.ui, note(s + 12), 0.7, 'triangle', 0.05, { delay: 0.4 + i * 0.08 }));
+  }
+
   eliminated(): void {
     if (!this.ctx) return;
     this.tone(this.ui, note(12), 1.4, 'sine', 0.05, { slide: 0.5 });

@@ -3,6 +3,7 @@ import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
 import { updateNests } from './nests';
+import { updateEvents } from './events';
 import { pushFx, type World } from './world';
 import { queryRadius } from './spatial';
 
@@ -21,6 +22,7 @@ export function step(w: World, commands: readonly Command[]): void {
   w.grid.build(w);
   for (const c of commands) applyCommand(w, c);
   for (const b of w.bots) b.update(w);
+  updateEvents(w);
 
   updateNests(w);
   resolveBarrages(w);

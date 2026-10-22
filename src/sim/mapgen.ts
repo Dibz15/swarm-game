@@ -32,6 +32,44 @@ export const TERRAIN_PRESETS: Record<TerrainLevel, TerrainParams> = {
   heavy: { walls: 1.6, nebula: 1.4, rifts: 1.5, crystals: 1 },
 };
 
+/** Neutral map events (seconds). null / empty / 0 turns one off. */
+export interface EventParams {
+  /** wild swarms: first arrival, then every `every`; size grows with escalation */
+  swarm: { first: number; every: number; size: number } | null;
+  /** supply drops */
+  drop: { first: number; every: number } | null;
+  /** Colossus arrival times */
+  colossus: number[];
+  /** seconds per regrown guard on neutral nests (0 = off) */
+  regrow: number;
+}
+
+export type EventLevel = 'off' | 'calm' | 'normal' | 'wild';
+export const EVENT_LEVELS: readonly EventLevel[] = ['off', 'calm', 'normal', 'wild'];
+
+export const EVENT_PRESETS: Record<EventLevel, EventParams> = {
+  off: { swarm: null, drop: null, colossus: [], regrow: 0 },
+  calm: { swarm: { first: 200, every: 240, size: 22 }, drop: { first: 120, every: 150 }, colossus: [], regrow: 20 },
+  normal: { swarm: { first: 150, every: 150, size: 25 }, drop: { first: 105, every: 120 }, colossus: [240], regrow: 12 },
+  wild: { swarm: { first: 100, every: 90, size: 40 }, drop: { first: 75, every: 80 }, colossus: [200, 420], regrow: 7 },
+};
+
+export function eventParams(e: MapParams['events']): EventParams {
+  if (!e) return EVENT_PRESETS.off;
+  return typeof e === 'string' ? EVENT_PRESETS[e] : e;
+}
+
+/** Where events happen, decided with the map so every start is treated alike. */
+export interface EventSpec {
+  params: EventParams;
+  /** on the borders between sectors, at the map edge: away from every capital */
+  swarmSpawns: [number, number][];
+  /** open ground about equally far (walking) from every capital */
+  dropSpots: [number, number][];
+  /** Colossus walks: entry, the middle, then out the opposite side */
+  colossusPaths: [number, number][][];
+}
+
 /** Everything that shapes a generated map. Same params + seed = same map. */
 export interface MapParams {
   seed: number;
@@ -40,6 +78,7 @@ export interface MapParams {
   /** tall map for portrait screens, player 0 at the bottom */
   portrait?: boolean;
   terrain?: TerrainLevel | TerrainParams;
+  events?: EventLevel | EventParams;
   /** nests per player sector, including the natural expansion (default by size) */
   nestsPerSector?: number;
   /** relative odds of each nest type, indexed by NestType */
@@ -61,6 +100,7 @@ export interface MapSpec {
   height: number;
   nests: NestSpec[];
   terrain: TerrainSpec;
+  events: EventSpec;
 }
 
 /** Hive, Forge, Spire, Den, Bastion */
@@ -166,7 +206,46 @@ export function generateMap(p: MapParams): MapSpec {
   const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), terrainParams(p.terrain), {
     w, h, P, sector, base, pos, nests, size: p.size,
   });
-  return { width: w, height: h, nests, terrain };
+  const frame = { w, h, P, sector, base, pos, nests, size: p.size };
+  const events = generateEvents(new Rng(p.seed ^ 0x3c9d17), eventParams(p.events), terrain, frame);
+  return { width: w, height: h, nests, terrain, events };
+}
+
+function generateEvents(rng: Rng, params: EventParams, terrain: TerrainSpec, f: Frame): EventSpec {
+  const spec: EventSpec = { params, swarmSpawns: [], dropSpots: [], colossusPaths: [] };
+  if (!params.swarm && !params.drop && params.colossus.length === 0) return spec;
+  const { w, h, P, sector, base, pos, nests } = f;
+  const t = new Terrain(terrain, w, h);
+  const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+
+  // Swarm entries: one per sector border, pushed to the map edge.
+  for (let k = 0; k < P; k++) {
+    const [x, y] = pos(1.08, base + (k + 0.5) * sector);
+    spec.swarmSpawns.push(t.freePoint(clamp(x, 30, w - 30), clamp(y, 30, h - 30), 20));
+  }
+  // The Colossus enters at one border and leaves by the one across the map.
+  for (let k = 0; k < P; k++) {
+    const to = spec.swarmSpawns[(k + Math.floor(P / 2)) % P];
+    spec.colossusPaths.push([spec.swarmSpawns[k], t.freePoint(w / 2, h / 2, 30), to]);
+  }
+
+  // Drop spots: open ground, scored by how evenly far it is from every start.
+  const capitals = nests.slice(0, P);
+  const cand: { x: number; y: number; spread: number }[] = [];
+  for (let tries = 0; tries < 80 && cand.length < 24; tries++) {
+    const x = rng.range(w * 0.12, w * 0.88), y = rng.range(h * 0.12, h * 0.88);
+    if (terrain.walls.some((c) => capsuleDist(c, x, y) < 34)) continue;
+    if (terrain.fields.some((c) => c.kind === 'rift' && capsuleDist(c, x, y) < 40)) continue;
+    if (nests.some((n) => (n.x - x) ** 2 + (n.y - y) ** 2 < (NEST_RADIUS[n.type] + 70) ** 2)) continue;
+    if (terrain.crystals.some((c) => (c.x - x) ** 2 + (c.y - y) ** 2 < (c.r + 60) ** 2)) continue;
+    const d = capitals.map((n) => t.pathDist(n.x, n.y, x, y, 0));
+    const spread = (Math.max(...d) - Math.min(...d)) / Math.max(1, Math.min(...d));
+    if (Number.isFinite(spread)) cand.push({ x, y, spread });
+  }
+  cand.sort((a, b) => a.spread - b.spread);
+  for (const c of cand.slice(0, 6)) spec.dropSpots.push([c.x, c.y]);
+  if (spec.dropSpots.length === 0) spec.dropSpots.push(t.freePoint(w / 2, h / 2, 30));
+  return spec;
 }
 
 interface Frame {

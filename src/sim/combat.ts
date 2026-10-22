@@ -1,6 +1,7 @@
 import { AGGRO_EXTRA, ALERT_EVERY, ALERT_RADIUS, DAMAGE_VS, RETALIATE_EXTRA, DT, ENERGY, Kind, NEUTRAL, POWER, RETARGET, TRAITS, UNIT_STATS } from './constants';
 import { queryRadius } from './spatial';
 import { removeUnit, type World } from './world';
+import { colossusSlain } from './events';
 
 const MAX_SCAN = 420;
 
@@ -156,6 +157,7 @@ export function resolveDamage(w: World): void {
     }
     w.factions[w.owner[i]].stats.lost++;
     w.deaths.push(w.x[i], w.y[i], w.owner[i]);
+    if (w.kind[i] === Kind.Colossus) colossusSlain(w, w.x[i], w.y[i], killer);
     removeUnit(w, i);
   }
 }

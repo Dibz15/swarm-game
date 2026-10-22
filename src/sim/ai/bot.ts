@@ -1,8 +1,8 @@
-import { Kind, MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
+import { EVENTS, Kind, MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
 import { applyCommand, hasPower, type Command } from '../commands';
 import { Rng } from '../rng';
 import { queryRadius } from '../spatial';
-import { UNIT_FEEDING, type Nest, type World } from '../world';
+import { UNIT_FEEDING, WILD_COLOSSUS, type Nest, type World } from '../world';
 
 export type Personality = 'rusher' | 'turtler' | 'expander' | 'opportunist';
 export const PERSONALITIES: readonly Personality[] = ['rusher', 'turtler', 'expander', 'opportunist'];
@@ -53,13 +53,15 @@ interface PersonalityKnobs {
   reach: number;
   /** appetite for holding energy crystals */
   crystal: number;
+  /** appetite for finishing a Colossus */
+  colossus: number;
 }
 
 const PERSONALITY: Record<Personality, PersonalityKnobs> = {
-  rusher: { neutral: 1.3, enemy: 1.5, margin: 1.0, upgrade: 0.45, reserve: 0.15, weakest: 1, bastion: 0.6, vulture: 1, eagerSurge: true, reach: 1.3, crystal: 0.6 },
-  turtler: { neutral: 1.0, enemy: 0.8, margin: 1.3, upgrade: 1.9, reserve: 0.35, weakest: 1, bastion: 1.8, vulture: 1, eagerSurge: false, reach: 1, crystal: 1.2 },
-  expander: { neutral: 1.5, enemy: 0.9, margin: 1.0, upgrade: 0.9, reserve: 0.18, weakest: 1, bastion: 0.9, vulture: 1, eagerSurge: false, reach: 1, crystal: 1 },
-  opportunist: { neutral: 1.0, enemy: 1.2, margin: 1.0, upgrade: 1.0, reserve: 0.2, weakest: 1.8, bastion: 1, vulture: 2.2, eagerSurge: false, reach: 1, crystal: 0.8 },
+  rusher: { neutral: 1.3, enemy: 1.5, margin: 1.0, upgrade: 0.45, reserve: 0.15, weakest: 1, bastion: 0.6, vulture: 1, eagerSurge: true, reach: 1.3, crystal: 0.6, colossus: 1.2 },
+  turtler: { neutral: 1.0, enemy: 0.8, margin: 1.3, upgrade: 1.9, reserve: 0.35, weakest: 1, bastion: 1.8, vulture: 1, eagerSurge: false, reach: 1, crystal: 1.2, colossus: 0.7 },
+  expander: { neutral: 1.5, enemy: 0.9, margin: 1.0, upgrade: 0.9, reserve: 0.18, weakest: 1, bastion: 0.9, vulture: 1, eagerSurge: false, reach: 1, crystal: 1, colossus: 0.9 },
+  opportunist: { neutral: 1.0, enemy: 1.2, margin: 1.0, upgrade: 1.0, reserve: 0.2, weakest: 1.8, bastion: 1, vulture: 2.2, eagerSurge: false, reach: 1, crystal: 0.8, colossus: 1.6 },
 };
 
 const scratch: number[] = [];
@@ -72,6 +74,21 @@ const OPENING = { ticks: 90 * 30, neutral: 1.6, enemy: 0.35 };
 
 /** Energy bots keep banked for a Nova once their army is this big. */
 const NOVA_RESERVE = { minArmy: 30, energy: 25 };
+
+/** Supply drops and the Colossus. */
+const EVENT_BOT = {
+  /** start walking this many ticks before a drop lands */
+  dropLead: 10 * 30,
+  dropValue: 2.5,
+  dropTrip: 900,
+  leaderDropValue: 0.6,
+  leaderDropTrip: 450,
+  dropSquad: 8,
+  /** go for a Colossus below this hp fraction (times personality appetite) */
+  colossusFinish: 0.35,
+  colossusValue: 3,
+  colossusTrip: 700,
+};
 
 /** Crystal squads: how many units hold one, and how far bots will walk for it. */
 const CRYSTAL = { guard: 5, maxTrip: 650 };
@@ -181,9 +198,10 @@ export class Bot {
       if (need > 0) send(take(n.x, n.y, need * 1.3, 480), n);
     }
 
-    // Units holding a crystal for us stay put (unless needed for defense above).
-    for (const c of w.crystals) {
-      if (c.holder !== me) continue;
+    // Units holding a crystal or taking a drop for us stay put (unless needed for defense above).
+    const holds = w.crystals.filter((c) => c.holder === me).map((c) => ({ x: c.x, y: c.y, r: c.r }));
+    if (w.events) for (const d of w.events.drops) if (d.lands <= w.tick) holds.push({ x: d.x, y: d.y, r: EVENTS.dropRadius });
+    for (const c of holds) {
       let kept = 0;
       for (const s of idle) {
         if (kept >= CRYSTAL.guard || used.has(s)) continue;
@@ -341,34 +359,65 @@ export class Bot {
       if (this.d.powers && group.length > 0) this.supportAttack(w, group, best);
     }
 
-    // 2b) Crystals: send a small squad to a nearby crystal nobody on our team holds.
-    if (w.crystals.length > 0 && mine.length > 0 && this.rng.next() < 0.6 * this.p.crystal) {
+    // 2b) Map objectives: crystals nobody on our team holds, supply drops
+    // (worth more, and every personality wants them), and a weakened Colossus.
+    const objectives: { x: number; y: number; r: number; value: number; trip: number; min: number }[] = [];
+    if (this.rng.next() < 0.6 * this.p.crystal) {
+      for (const c of w.crystals) {
+        if (c.holder < 0 || w.teamOf[c.holder] !== myTeam) objectives.push({ x: c.x, y: c.y, r: c.r, value: 1, trip: CRYSTAL.maxTrip, min: CRYSTAL.guard });
+      }
+    }
+    const ev = w.events;
+    if (ev) {
+      // Drops are a comeback tool: the biggest army only gets energy from
+      // them, so it cares less; players who are behind want them badly.
+      let top = 0;
+      for (let f = 0; f < NEUTRAL; f++) if (w.factions[f].active && !w.factions[f].eliminated) top = Math.max(top, w.unitCount[f]);
+      const behind = 1 - w.unitCount[me] / Math.max(1, top);
+      const isLeader = w.unitCount[me] >= top;
+      const dropValue = isLeader ? EVENT_BOT.leaderDropValue : EVENT_BOT.dropValue * (1 + 2 * behind);
+      const dropTrip = isLeader ? EVENT_BOT.leaderDropTrip : EVENT_BOT.dropTrip;
+      for (const d of ev.drops) {
+        // Head out during the telegraph so we arrive as it lands.
+        if (d.lands - w.tick < EVENT_BOT.dropLead) objectives.push({ x: d.x, y: d.y, r: EVENTS.dropRadius, value: dropValue, trip: dropTrip, min: EVENT_BOT.dropSquad });
+      }
+      for (const c of ev.colossi) {
+        const s = w.uidToSlot.get(c.uid);
+        if (s === undefined) continue;
+        // Finish a giant others have worn down; leave a fresh one alone.
+        const frac = w.hp[s] / c.maxHp;
+        if (frac < EVENT_BOT.colossusFinish * this.p.colossus) {
+          objectives.push({ x: w.x[s], y: w.y[s], r: 40, value: EVENT_BOT.colossusValue, trip: EVENT_BOT.colossusTrip, min: Math.ceil(w.hp[s] / 25) + 8 });
+        }
+      }
+    }
+    if (objectives.length > 0 && mine.length > 0) {
       let pick = -1, pickScore = 0, pickNeed = 0;
-      for (let k = 0; k < w.crystals.length; k++) {
-        const c = w.crystals[k];
-        if (c.holder >= 0 && w.teamOf[c.holder] === myTeam) continue;
-        const d = w.terrain.pathDist(hx, hy, c.x, c.y, w.tick);
-        if (d > CRYSTAL.maxTrip) continue;
-        queryRadius(w, c.x, c.y, c.r + 60, scratch);
+      for (let k = 0; k < objectives.length; k++) {
+        const o = objectives[k];
+        const d = w.terrain.pathDist(hx, hy, o.x, o.y, w.tick);
+        if (d > o.trip) continue;
+        queryRadius(w, o.x, o.y, o.r + 60, scratch);
         let h = 0, f = 0;
         for (const s of scratch) {
+          if (w.wild[s] === WILD_COLOSSUS) continue; // its own toughness is in o.min
           const wt = UNIT_STATS[w.kind[s]].weight;
           if (w.teamOf[w.owner[s]] === myTeam) f += wt;
           else h += wt;
         }
-        if (f >= CRYSTAL.guard) continue; // already on the way
-        const score = 1 / (1 + d / 300) / (1 + h * 0.3);
+        if (f >= o.min) continue; // already on it
+        const score = o.value / (1 + d / 300) / (1 + h * 0.3);
         if (score > pickScore) {
           pickScore = score;
           pick = k;
-          pickNeed = h * this.d.margin * 1.2 + CRYSTAL.guard;
+          pickNeed = h * this.d.margin * 1.2 + o.min;
         }
       }
       const spare = idle.length - used.size - reserve;
       if (pick >= 0 && spare >= pickNeed + 4) {
-        const c = w.crystals[pick];
-        const squad = take(c.x, c.y, pickNeed, 1e9);
-        if (squad.length) this.issue(w, { t: 'move', p: me, units: squad.map((s) => w.uid[s]), x: c.x, y: c.y, nest: -1 });
+        const o = objectives[pick];
+        const squad = take(o.x, o.y, pickNeed, 1e9);
+        if (squad.length) this.issue(w, { t: 'move', p: me, units: squad.map((s) => w.uid[s]), x: o.x, y: o.y, nest: -1 });
       }
     }
 

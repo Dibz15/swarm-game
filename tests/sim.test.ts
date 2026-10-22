@@ -54,7 +54,7 @@ describe('nests', () => {
     spawnUnit(w, 1, 0, 580, 380, 580, 380, 4);
     w.nests.push({
       id: 0, x: 300, y: 200, r: 26, type: 0, owner: NEUTRAL, level: 1, control: 1, controller: NEUTRAL,
-      spawnAcc: 0, rallyX: 300, rallyY: 200, feedProgress: 0, feedIncoming: 0, lastSpawn: 0, contested: false, capital: false, lockedUntil: 0,
+      spawnAcc: 0, rallyX: 300, rallyY: 200, feedProgress: 0, feedIncoming: 0, lastSpawn: 0, contested: false, capital: false, lockedUntil: 0, garrison: 0, visited: 0,
     });
     return w;
   }

@@ -67,8 +67,10 @@ class App {
   start(): void {
     this.renderer.resize();
     this.camera.setView(this.renderer.width, this.renderer.height);
-    const bench = Number(new URLSearchParams(location.search).get('bench'));
+    const q = new URLSearchParams(location.search);
+    const bench = Number(q.get('bench'));
     if (bench > 0) this.startBench(bench);
+    else if (q.has('eventdemo')) this.startEventDemo();
     else this.showMenu();
     requestAnimationFrame((t) => this.loop(t));
   }
@@ -110,6 +112,7 @@ class App {
       seed,
       size: 'medium',
       terrain: 'standard',
+      events: 'normal',
       portrait: window.innerHeight > window.innerWidth * 1.15,
       players: Array.from({ length: n }, (_, i) => ({
         faction: [0, 1, 2, 3, 4, 5][(i + seed) % 6],
@@ -234,6 +237,20 @@ class App {
       spawnUnit(w, side, Kind.Dot, x, y, w.width / 2, w.height / 2, 60);
     }
     this.camera.fit();
+  }
+
+  /** `?eventdemo`: a match where every map event fires within seconds. */
+  private startEventDemo(): void {
+    this.startGame({
+      seed: 7,
+      size: 'small',
+      terrain: 'standard',
+      events: { swarm: { first: 3, every: 40, size: 30 }, drop: { first: 2, every: 30 }, colossus: [5], regrow: 5 },
+      players: [
+        { faction: 0, team: 0, human: true },
+        { faction: 1, team: 1, human: false, bot: { difficulty: 1, personality: 'expander' } },
+      ],
+    });
   }
 
   // ---- frame loop --------------------------------------------------------
