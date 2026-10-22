@@ -77,7 +77,9 @@ export type FxType =
   | 'dropTaken'
   | 'colossusSpawn'
   | 'colossusDown'
-  | 'stomp';
+  | 'stomp'
+  | 'domStart'
+  | 'domBreak';
 
 export interface FxEvent {
   type: FxType;
@@ -242,6 +244,8 @@ export class World {
   domShare = 0.7;
   over = false;
   winnerTeam = -1;
+  /** how the match ended */
+  winReason: '' | 'elimination' | 'domination' = '';
   /** consecutive ticks each team has held the domination share */
   readonly domTicks = new Int32Array(NEUTRAL_TEAM + 1);
   /** per-faction unit counts sampled once a second */

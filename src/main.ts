@@ -68,6 +68,8 @@ class App {
     this.renderer.resize();
     this.camera.setView(this.renderer.width, this.renderer.height);
     const q = new URLSearchParams(location.search);
+    // Dev: poke at the running app from the console.
+    if (q.has('debug')) (window as unknown as { swarm: App }).swarm = this;
     const bench = Number(q.get('bench'));
     if (bench > 0) this.startBench(bench);
     else if (q.has('eventdemo')) this.startEventDemo();

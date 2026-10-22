@@ -75,6 +75,9 @@ const OPENING = { ticks: 90 * 30, neutral: 1.6, enemy: 0.35 };
 /** Energy bots keep banked for a Nova once their army is this big. */
 const NOVA_RESERVE = { minArmy: 30, energy: 25 };
 
+/** Breaking a rival's domination. */
+const DOM_BOT = { value: 3, margin: 1.05 };
+
 /** Feeding nests. */
 const UPGRADE_BOT = {
   /** repair an owned nest below this control once nobody threatens it */
@@ -337,6 +340,11 @@ export class Bot {
         // Third-party: a nest under attack by someone else is softened up.
         if (n.contested && hostileNotOwner(n)) value *= this.p.vulture;
         if (n.owner === leader) value *= leaderBonus;
+        // A team about to win by domination is everyone's problem.
+        if (w.domTicks[w.teamOf[n.owner]] > 0) {
+          value *= DOM_BOT.value;
+          margin = Math.min(margin, DOM_BOT.margin);
+        }
         if (straggler(n.owner)) {
           value *= 2.4;
           margin = Math.min(margin, 1.1);

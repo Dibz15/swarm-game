@@ -16,6 +16,8 @@ export interface MusicState {
   tension: number;
   danger: number;
   escalation: number;
+  /** 1 while any team is dominating */
+  domination: number;
 }
 
 type Mood = 'calm' | 'tense' | 'drive';
@@ -59,7 +61,7 @@ export class Music {
   private mood: Mood = 'calm';
   private chordIdx = -1;
   private intensity = 0;
-  private state: MusicState = { mode: 'menu', tension: 0, danger: 0, escalation: 0 };
+  private state: MusicState = { mode: 'menu', tension: 0, danger: 0, escalation: 0, domination: 0 };
   private phrase: number[] = [];
 
   constructor(private readonly ctx: AudioContext, bus: AudioNode, reverb: AudioNode) {
@@ -156,7 +158,7 @@ export class Music {
 
   private pickMood(): Mood {
     const s = this.state;
-    if (s.mode === 'play' && s.escalation > 0.3) return 'drive';
+    if (s.mode === 'play' && (s.escalation > 0.3 || s.domination > 0)) return 'drive';
     if (s.mode === 'play' && s.danger > 0.5) return 'tense';
     return 'calm';
   }
