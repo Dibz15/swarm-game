@@ -96,14 +96,14 @@ function resolveBarrages(w: World): void {
       keep.push(b);
       continue;
     }
-    queryRadius(w, b.x, b.y, POWER.barrageRadius, blast);
+    queryRadius(w, b.x, b.y, b.r, blast);
     for (const j of blast) {
       if (!w.hostile(w.owner[j], b.owner)) continue;
       const d = Math.sqrt((w.x[j] - b.x) ** 2 + (w.y[j] - b.y) ** 2);
-      w.dmg[j] += POWER.barrageDamage * (1 - 0.4 * (d / POWER.barrageRadius));
+      w.dmg[j] += POWER.barrageDamage * (1 - 0.4 * (d / b.r));
       w.lastHit[j] = b.owner;
     }
-    pushFx(w, 'barrageHit', b.x, b.y, b.owner, POWER.barrageRadius);
+    pushFx(w, 'barrageHit', b.x, b.y, b.owner, b.r);
   }
   w.barrages = keep;
 }

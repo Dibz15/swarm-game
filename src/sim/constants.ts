@@ -98,7 +98,25 @@ export const MAX_LEVEL = 3;
 /** spawn speed multiplier by level (index = level) */
 export const LEVEL_SPAWN_MULT: readonly number[] = [0, 1, 1.5, 2];
 /** dots consumed to go from level L to L+1 (index = L) */
-export const UPGRADE_COST: readonly number[] = [0, 20, 35, 0];
+export const UPGRADE_COST: readonly number[] = [0, 12, 24, 0];
+
+/**
+ * What nest levels add beyond spawn rate, so upgrading is a real choice
+ * against expanding. Levels are kept when a nest changes hands: upgraded
+ * nests are prizes.
+ */
+export const LEVEL = {
+  /** level 2+: a light turret (Bastions and capitals already have one) */
+  turret: { range: 70, dps: 5, targets: 1 },
+  /** level 2+: control recovers this many times faster */
+  recovery: 2,
+  /** level 3: units spawn as veterans with this much HP */
+  veteranHp: 1.35,
+  /** level 3: the nest's power is this much stronger (duration, radius or range) */
+  powerBoost: 1.35,
+  /** each dot fed to a damaged nest restores this much control before counting toward a level */
+  repair: 0.1,
+};
 export const UPGRADE_PICK_RADIUS = 240;
 
 export const BASTION = {

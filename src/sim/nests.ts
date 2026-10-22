@@ -7,6 +7,7 @@ import {
   DT,
   ENERGY,
   FACTION_UNIT_CAP,
+  LEVEL,
   LEVEL_SPAWN_MULT,
   NEST_KIND,
   NEST_SPAWN_MULT,
@@ -43,6 +44,9 @@ export function updateNests(w: World): void {
         turretFire(w, n, BASTION.range + BASTION.rangePerLevel * (n.level - 1), t.targets, t.dps);
       }
       if (n.capital && n.owner !== NEUTRAL && n.control >= 1) turretFire(w, n, CAPITAL.range, CAPITAL.targets, CAPITAL.dps);
+      else if (n.level >= 2 && n.type !== NestType.Bastion && n.owner !== NEUTRAL && n.control >= 1) {
+        turretFire(w, n, LEVEL.turret.range, LEVEL.turret.targets, LEVEL.turret.dps);
+      }
     }
     spawn(w, n);
   }
@@ -101,7 +105,7 @@ function updateControl(w: World, n: Nest): void {
   if (teamA === -1) {
     // Nobody here: owned nests recover, unowned ones decay.
     if (n.owner < 0) n.control = Math.max(0, n.control - DT * 0.08);
-    else if (n.lockedUntil <= w.tick) n.control = Math.min(1, n.control + DT * 0.08);
+    else if (n.lockedUntil <= w.tick) n.control = Math.min(1, n.control + DT * 0.08 * (n.level >= 2 ? LEVEL.recovery : 1));
     return;
   }
 
@@ -110,7 +114,7 @@ function updateControl(w: World, n: Nest): void {
 
   const rate = captureRate(totalA, n.level);
   if (n.owner >= 0 && teamA === ownerTeam) {
-    if (n.lockedUntil <= w.tick) n.control = Math.min(1, n.control + rate);
+    if (n.lockedUntil <= w.tick) n.control = Math.min(1, n.control + rate * (n.level >= 2 ? LEVEL.recovery : 1));
     return;
   }
 
@@ -119,7 +123,6 @@ function updateControl(w: World, n: Nest): void {
     n.control -= rate;
     if (n.control <= 0) {
       const prev = n.owner;
-      if (prev !== NEUTRAL) n.level = Math.max(1, n.level - 1);
       n.owner = -1;
       n.control = 0;
       n.controller = leadA;
@@ -179,6 +182,10 @@ function spawn(w: World, n: Nest): void {
   const atHome = n.rallyX === n.x && n.rallyY === n.y;
   const s = spawnUnit(w, n.owner, kind, sx, sy, n.rallyX, n.rallyY, atHome ? n.r + 14 : 28);
   if (s < 0) return;
+  if (n.level >= 3) {
+    w.vet[s] = 1;
+    w.hp[s] *= LEVEL.veteranHp;
+  }
   // Give it an outward nudge so it visibly pops out of the nest.
   w.vx[s] = dcos(a) * 30;
   w.vy[s] = dsin(a) * 30;

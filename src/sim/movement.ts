@@ -1,4 +1,4 @@
-import { DT, Kind, LEASH, MAX_LEVEL, POWER, TERRAIN, TRAITS, UNIT_STATS, UPGRADE_COST } from './constants';
+import { DT, Kind, LEASH, LEVEL, MAX_LEVEL, POWER, TERRAIN, TRAITS, UNIT_STATS, UPGRADE_COST } from './constants';
 import { T_NEBULA, T_RIFT } from './terrain';
 import { pushFx, removeUnit, UNIT_FEEDING, type World } from './world';
 
@@ -26,7 +26,7 @@ export function updateMovement(w: World): void {
 
     if (w.state[i] === UNIT_FEEDING) {
       const nest = w.nests[w.feedNest[i]];
-      if (!nest || nest.owner !== w.owner[i] || nest.level >= MAX_LEVEL) {
+      if (!nest || nest.owner !== w.owner[i] || (nest.level >= MAX_LEVEL && nest.control >= 1)) {
         // Nest lost or maxed while en route: stand down where we are.
         nest && nest.feedIncoming--;
         w.state[i] = 0;
@@ -38,6 +38,11 @@ export function updateMovement(w: World): void {
         const d = Math.sqrt(dx * dx + dy * dy);
         if (d < nest.r * 0.35) {
           removeUnit(w, i);
+          // Repair first, then grow.
+          if (nest.control < 1) {
+            nest.control = Math.min(1, nest.control + LEVEL.repair);
+            continue;
+          }
           nest.feedProgress++;
           if (nest.feedProgress >= UPGRADE_COST[nest.level]) {
             nest.level++;

@@ -24,6 +24,7 @@ npx vite-node scripts/kill-matrix.ts           # winner vs loser kill shares
 npx vite-node scripts/trace.ts 5 large 1005    # 30s timeline of one match
 npx vite-node scripts/terrain-probe.ts heavy 40 7 3   # terrain amounts, connectivity, gen time (+ ASCII map)
 EVENTS=normal npx vite-node scripts/event-probe.ts 4 medium 20   # events per game, who profits, drop/winner correlation
+npx vite-node scripts/upgrade-probe.ts turtler medium 40   # mirror match: eager upgrader vs never-upgrader
 ```
 
 Every probe takes `TERRAIN=none|light|standard|heavy` and `EVENTS=off|calm|normal|wild` (defaults `none` / `off`), e.g. `TERRAIN=standard npx vite-node scripts/balance.ts 4 medium 40`. For sim timing without vite-node overhead:
@@ -58,7 +59,11 @@ Dev URL flags:
   - **Colossus:** a slow giant walking across the map. Spears hurt it most. The killing blow earns full energy and a free upgrade.
   - **Regrowth:** neutral nests rebuild their guards, and unowned nests left alone for 45 s go wild again.
 - **Capture** a nest by standing on it with no enemies present. Neutral nests have gray guards. A contested nest stops spawning.
-- **Upgrade** a nest by feeding it your dots (U). Levels 1–3 spawn faster.
+- **Upgrade** a nest by feeding it your dots (U): 12 dots for level 2, 24 more for level 3. Each level is shown as an extra orbit ring and a bigger body.
+  - **Level 2:** ×1.5 spawns, a light turret, control recovers twice as fast.
+  - **Level 3:** ×2 spawns, veteran units (+35% HP, drawn brighter), and the nest's power is 35% stronger (longer Fortify and Lockdown, wider Barrage, longer Blink).
+  - Nests keep their level when captured, so upgraded nests are prizes.
+  - Feeding a damaged nest repairs its control first (the button reads **Repair**).
 - **Energy** builds up over time and from kills and captures. **Surge** (Q) costs 30: the selected dots get faster, stronger and tougher for 6 seconds. **Nova** (E) costs 60: it sacrifices about 20% of the selected dots and sends out a shockwave.
 - **Anti-snowball:** big armies spawn more slowly, each extra nest adds less production (nests^0.9), dots near their own nests take less damage, factions that are behind charge energy faster, starting nests are defended capitals, and bots gang up on a runaway leader.
 - **Selecting by type:** 1–4 keep Swarmers / Shields / Spears / Raiders from your group (or grab that type on screen), and Shift+1–4 drops a type. Double-click a unit to grab all of its type on screen. The type chips and counter wheel icons work the same way, and Tab cycles. Control groups are Ctrl+5–9 / 5–9.

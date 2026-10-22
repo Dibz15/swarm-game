@@ -5,8 +5,8 @@ import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
-import { DAMAGE_VS, MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, UPGRADE_COST, type MatchSetup, type NestPower } from '../sim/index';
-import { hasPower } from '../sim/commands';
+import { DAMAGE_VS, MAX_LEVEL, MAX_UNITS, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, type MatchSetup, type NestPower } from '../sim/index';
+import { feedNeed, hasPower, powerBoost } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { LocalSession } from './session';
 
@@ -170,19 +170,22 @@ export class GameView {
     if (!power || !cur) return;
     const r = this.s.renderer;
     const c = FACTION_RGB[this.human];
+    const boost = powerBoost(this.world, this.human, power);
     if (power === 'barrage') {
-      r.shape(true, cur[0], cur[1], POWER.barrageRadius, 0, 1, 0, 0.03, c, 200);
-      r.shape(true, cur[0], cur[1], POWER.barrageRadius, 7, 1, 0, 0, c, 40);
+      const R = POWER.barrageRadius * boost;
+      r.shape(true, cur[0], cur[1], R, 0, 1, 0, 0.03, c, 200);
+      r.shape(true, cur[0], cur[1], R, 7, 1, 0, 0, c, 40);
     } else if (power === 'blink') {
       const from = this.selectionCenter();
       if (!from) return;
       let dx = cur[0] - from[0], dy = cur[1] - from[1];
       const d = Math.hypot(dx, dy);
-      if (d > POWER.blinkRange) {
-        dx *= POWER.blinkRange / d;
-        dy *= POWER.blinkRange / d;
+      const range = POWER.blinkRange * boost;
+      if (d > range) {
+        dx *= range / d;
+        dy *= range / d;
       }
-      r.shape(true, from[0], from[1], POWER.blinkRange, 0, 1, 0, 0.01, c, 90);
+      r.shape(true, from[0], from[1], range, 0, 1, 0, 0.01, c, 90);
       r.beam(from[0], from[1], from[0] + dx, from[1] + dy, c[0], c[1], c[2], 160, 1.5);
       r.shape(true, from[0] + dx, from[1] + dy, 16, 0, 1, 0, 0.12, WHITE, 220);
     } else if (power === 'lockdown') {
@@ -617,17 +620,17 @@ export class GameView {
   upgrade(): void {
     const ids = [...this.selection.nests].filter((id) => {
       const n = this.world.nests[id];
-      return n.level < MAX_LEVEL;
+      return n.owner === this.human && (n.level < MAX_LEVEL || n.control < 1);
     });
     if (!ids.length) return this.s.toast('Select one of your nests to upgrade', '#9aa4c7');
     for (const id of ids) this.session.issue({ t: 'upgrade', p: this.human, nest: id });
   }
 
-  /** remaining cost for the first selected upgradable nest */
-  upgradeInfo(): { nest: Nest; cost: number } | null {
+  /** Remaining dots for the first selected nest that can be fed (repair first, then level). */
+  upgradeInfo(): { nest: Nest; cost: number; repair: boolean } | null {
     for (const id of this.selection.nests) {
       const n = this.world.nests[id];
-      if (n && n.level < MAX_LEVEL) return { nest: n, cost: UPGRADE_COST[n.level] - n.feedProgress - n.feedIncoming };
+      if (n && n.owner === this.human && (n.level < MAX_LEVEL || n.control < 1)) return { nest: n, cost: feedNeed(n), repair: n.control < 1 };
     }
     return null;
   }

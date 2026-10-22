@@ -79,9 +79,21 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
     let ringA = n.contested ? Math.round(120 + 135 * pulseT) : 235;
     if (n.owner === NEUTRAL && !n.contested) ringA = 110;
 
-    const spawnPulse = Math.max(0, 1 - (w.tick - n.lastSpawn) / 8) * 0.6;
+    // Levels read at any zoom: a bigger, brighter body, harder spawn pulses,
+    // and one extra orbit ring per level.
+    const lv = n.level - 1;
+    const R = n.r * (1 + 0.1 * lv);
+    const spawnPulse = Math.max(0, 1 - (w.tick - n.lastSpawn) / 8) * (0.6 + 0.3 * lv);
     const bodyA = n.owner < 0 ? 170 : n.owner === NEUTRAL ? 200 : 255;
-    r.shape(false, n.x, n.y, n.r, NEST_SHAPE[n.type], progress, o.time * NEST_SPIN[n.type], spawnPulse, c, bodyA, ringC, ringA);
+    r.shape(false, n.x, n.y, R, NEST_SHAPE[n.type], progress, o.time * NEST_SPIN[n.type], spawnPulse + 0.12 * lv, c, bodyA, ringC, ringA);
+    for (let l = 1; l <= lv; l++) {
+      const tierA = n.owner < 0 ? 90 : 170;
+      r.shape(false, n.x, n.y, R * (1.12 + 0.13 * l), 0, 1, 0, 0.035 + 0.01 * l, c, tierA);
+      // A bead orbiting each tier ring, so upgraded nests visibly turn.
+      const a = o.time * (0.8 + 0.4 * l) * (l % 2 ? 1 : -1) + n.id;
+      const rr = R * (1.12 + 0.13 * l);
+      r.unit(n.x + Math.cos(a) * rr, n.y + Math.sin(a) * rr, 4, c[0], c[1], c[2], 255);
+    }
 
     // Capitals wear a second, slowly counter-rotating ring.
     if (n.capital && n.owner >= 0 && n.owner !== NEUTRAL) {
@@ -89,16 +101,19 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
     }
 
     // Level pips under the nest.
+    const pipY = n.y + R * (1.25 + 0.13 * lv) + 6;
     for (let l = 0; l < n.level; l++) {
-      const px = n.x + (l - (n.level - 1) / 2) * 7;
-      r.unit(px, n.y + n.r * 1.32, 3.2, c[0], c[1], c[2], n.owner < 0 ? 140 : 255);
+      const px = n.x + (l - (n.level - 1) / 2) * 8;
+      r.unit(px, pipY, 4, c[0], c[1], c[2], n.owner < 0 ? 140 : 255);
     }
 
-    // Upgrade progress arc.
+    // Feeding meter: solid for dots delivered, faint for dots on the way.
     if (n.feedProgress > 0 || n.feedIncoming > 0) {
       const cost = UPGRADE_COST[n.level] || 1;
-      r.shape(true, n.x, n.y, n.r * 1.22, 0, n.feedProgress / cost, 0, 0.05, WHITE, 220);
-      r.shape(true, n.x, n.y, n.r * 1.22, 0, 1, 0, 0.03, WHITE, 40);
+      const mr = R * (1.12 + 0.13 * (lv + 1));
+      r.shape(true, n.x, n.y, mr, 0, 1, 0, 0.04, WHITE, 45);
+      r.shape(true, n.x, n.y, mr, 0, Math.min(1, (n.feedProgress + n.feedIncoming) / cost), 0, 0.08, WHITE, 70);
+      r.shape(true, n.x, n.y, mr, 0, n.feedProgress / cost, 0, 0.08, WHITE, 235);
     }
 
     if (n.type === NestType.Bastion && n.owner >= 0) {
@@ -115,7 +130,7 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
 
     // Lockdown: a white ring that drains as the lock runs out.
     if (n.lockedUntil > w.tick) {
-      const left = (n.lockedUntil - w.tick) / POWER.lockdownTicks;
+      const left = Math.min(1, (n.lockedUntil - w.tick) / POWER.lockdownTicks);
       r.shape(true, n.x, n.y, n.r * 1.3, 0, left, -o.time * 2, 0.07, WHITE, 230);
       r.shape(true, n.x, n.y, n.r * 0.9, 4, 0, o.time * 3, 0.5, WHITE, 120);
     }
@@ -196,6 +211,11 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
       size *= 1.15;
     }
     if (w.state[i] === UNIT_FEEDING) alpha = 190;
+    // Veterans from level-3 nests: a touch bigger and brighter.
+    if (w.vet[i]) {
+      size *= 1.15;
+      c = mixRgb(c, WHITE, 0.18);
+    }
 
     // Heading: face the target while fighting, else the direction of travel.
     let angle = 0;
@@ -250,7 +270,7 @@ function drawBarrages(r: Renderer, w: World, o: SceneOpts): void {
   for (const b of w.barrages) {
     const c = FACTION_RGB[b.owner] ?? WHITE;
     const left = Math.max(0, (b.impact - w.tick - o.alpha) / POWER.barrageDelay);
-    const R = POWER.barrageRadius;
+    const R = b.r;
     r.shape(true, b.x, b.y, R, 0, 1, 0, 0.025, c, 150);
     r.shape(true, b.x, b.y, R * (1 + left * 1.2), 0, 1, 0, 0.04, c, Math.round(220 * (1 - left * 0.5)));
     r.shape(true, b.x, b.y, R, 7, 1, 0, 0, c, Math.round(40 + 60 * (1 - left)));

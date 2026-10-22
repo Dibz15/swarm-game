@@ -4,7 +4,7 @@ import { step } from '../src/sim/step';
 import { worldHash } from '../src/sim/hash';
 import { queryRadius } from '../src/sim/spatial';
 import { applyCommand } from '../src/sim/commands';
-import { NEUTRAL, TICK_HZ } from '../src/sim/constants';
+import { NEUTRAL, TICK_HZ, UPGRADE_COST } from '../src/sim/constants';
 import { spawnUnit, World } from '../src/sim/world';
 import { botMatch } from './helpers';
 
@@ -83,7 +83,7 @@ describe('nests', () => {
     for (let k = 0; k < 25; k++) uids.push(w.uid[spawnUnit(w, 0, 0, 200 + k * 3, 150, 200, 150, 30)]);
     w.grid.build(w);
     applyCommand(w, { t: 'upgrade', p: 0, nest: 0 });
-    expect(w.nests[0].feedIncoming).toBe(20);
+    expect(w.nests[0].feedIncoming).toBe(UPGRADE_COST[1]);
     for (let t = 0; t < 10 * TICK_HZ; t++) step(w, []);
     expect(w.nests[0].level).toBe(2);
     expect(w.nests[0].feedIncoming).toBe(0);
