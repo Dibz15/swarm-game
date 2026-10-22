@@ -1,4 +1,5 @@
-import { DT, Kind, LEASH, MAX_LEVEL, POWER, TRAITS, UNIT_STATS, UPGRADE_COST } from './constants';
+import { DT, Kind, LEASH, MAX_LEVEL, POWER, TERRAIN, TRAITS, UNIT_STATS, UPGRADE_COST } from './constants';
+import { T_NEBULA, T_RIFT } from './terrain';
 import { pushFx, removeUnit, UNIT_FEEDING, type World } from './world';
 
 const MAX_SEP_SCAN = 22;
@@ -8,12 +9,19 @@ export function updateMovement(w: World): void {
   const g = w.grid;
   const n = w.n;
   const W = w.width, H = w.height;
+  const tr = w.terrain;
   for (let i = 0; i < n; i++) {
     if (!w.alive[i]) continue;
     const st = UNIT_STATS[w.kind[i]];
-    const spd =
-      st.speed * (w.surge[i] > w.tick ? POWER.surgeSpeed : 1) * (w.fortify[i] > w.tick ? POWER.fortifySlow : 1);
     const x = w.x[i], y = w.y[i];
+    let spd =
+      st.speed * (w.surge[i] > w.tick ? POWER.surgeSpeed : 1) * (w.fortify[i] > w.tick ? POWER.fortifySlow : 1);
+    if (tr.hasFields) {
+      const fl = tr.flagsAt(x, y);
+      if (fl & T_NEBULA) spd *= TERRAIN.nebulaSlow;
+      // Rift damage lands with everything else next tick.
+      if (fl & T_RIFT) w.dmg[i] += TERRAIN.riftDps * DT;
+    }
     let desX = 0, desY = 0;
 
     if (w.state[i] === UNIT_FEEDING) {
@@ -38,9 +46,14 @@ export function updateMovement(w: World): void {
           }
           continue;
         }
-        const s = (spd * 1.3) / (d || 1);
-        desX = dx * s;
-        desY = dy * s;
+        if (tr.hasPaths && d > nest.r && tr.steer(x, y, nest.x, nest.y, w.tick)) {
+          desX = tr.ox * spd * 1.3;
+          desY = tr.oy * spd * 1.3;
+        } else {
+          const s = (spd * 1.3) / (d || 1);
+          desX = dx * s;
+          desY = dy * s;
+        }
       }
     }
 
@@ -50,8 +63,14 @@ export function updateMovement(w: World): void {
       const ar = w.arrive[i];
       if (d > ar) {
         const f = Math.min(1, (d - ar) / 12);
-        desX = (dx / d) * spd * f;
-        desY = (dy / d) * spd * f;
+        // Route around walls and bad ground; straight when nothing is in the way.
+        if (tr.hasPaths && d > ar + 8 && tr.steer(x, y, w.ox[i], w.oy[i], w.tick)) {
+          desX = tr.ox * spd * f;
+          desY = tr.oy * spd * f;
+        } else {
+          desX = (dx / d) * spd * f;
+          desY = (dy / d) * spd * f;
+        }
       }
       const t = w.tgt[i];
       if (w.engaged[i]) {
@@ -129,6 +148,10 @@ export function updateMovement(w: World): void {
     else if (nx > W - 2) nx = W - 2;
     if (ny < 2) ny = 2;
     else if (ny > H - 2) ny = H - 2;
+    if (tr.hasWalls && tr.collide(nx, ny, st.size * 0.5)) {
+      nx = tr.ox;
+      ny = tr.oy;
+    }
     w.x[i] = nx;
     w.y[i] = ny;
   }

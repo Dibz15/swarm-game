@@ -197,9 +197,11 @@ function turretFire(w: World, n: Nest, range: number, k: number, dps: number): v
     bestD[i] = Infinity;
   }
   queryRadius(w, n.x, n.y, range, scratch);
+  const walls = w.terrain.hasWalls && w.terrain.wallsNear(n.x - range, n.y - range, n.x + range, n.y + range);
   for (const s of scratch) {
     if (!w.hostile(w.owner[s], n.owner)) continue;
     const d = (w.x[s] - n.x) ** 2 + (w.y[s] - n.y) ** 2;
+    if (walls && d < bestD[k - 1] && !w.terrain.los(n.x, n.y, w.x[s], w.y[s])) continue;
     // insertion into the k nearest
     for (let i = 0; i < k; i++) {
       if (d < bestD[i]) {

@@ -11,7 +11,16 @@ uniform vec2 u_res;
 uniform vec3 u_view; // cx, cy, world units per pixel
 uniform vec2 u_map;
 uniform float u_time;
+uniform sampler2D u_ter;
+uniform float u_terOn;
+uniform vec4 u_texel; // terrain texture: uv per world px, half-texel offset
 out vec4 o;
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
 float gridLine(vec2 w, float step, float px){
   vec2 g = abs(fract(w / step - 0.5) - 0.5) * step / px;
   return 1.0 - min(min(g.x, g.y), 1.0);
@@ -30,6 +39,31 @@ void main(){
   float minor = gridLine(w, 40.0, px) * smoothstep(3.0, 1.2, px);
   float major = gridLine(w, 200.0, px);
   vec3 col = base + vec3(0.05, 0.07, 0.13) * (minor * 0.45 + major * 0.7) * mix(0.25, 1.0, inside);
+  if (u_terOn > 0.5 && inside > 0.0) {
+    // Terrain baked to a texture: r = wall distance, g = nebula, b = rift distance.
+    vec4 t = texture(u_ter, w * u_texel.xy + u_texel.zw);
+    float wd = t.r * 64.0 - 24.0;
+    float neb = t.g;
+    float rd = t.b * 32.0 - 16.0;
+    float n1 = vnoise(w * 0.011 + vec2(u_time * 0.025, 0.0));
+    float n2 = vnoise(w * 0.029 - vec2(0.0, u_time * 0.04));
+    // Nebula: drifting violet haze.
+    col += vec3(0.15, 0.07, 0.28) * neb * (0.35 + 0.5 * n1 + 0.3 * n2);
+    col += vec3(0.30, 0.20, 0.55) * neb * smoothstep(0.82, 0.95, n2) * 0.25;
+    // Rift: a glowing red seam with embers flowing along it.
+    float rin = 1.0 - smoothstep(-px, px, rd);
+    float flow = vnoise(vec2(w.x * 0.05 + u_time * 1.2, w.y * 0.05 - u_time * 0.8));
+    col = mix(col, vec3(0.10, 0.012, 0.025), rin * 0.85);
+    col += vec3(0.85, 0.14, 0.10) * (rin * (0.12 + 0.45 * flow * flow) + exp(-abs(rd) / (px * 2.0 + 1.2)) * 0.55);
+    // Walls: dark slate rock, hatched, with a beveled cool rim and a drop shadow.
+    float win = 1.0 - smoothstep(-px, px, wd);
+    col *= 1.0 - 0.45 * exp(-max(wd, 0.0) / 9.0) * (1.0 - win);
+    float hatch = step(abs(fract((w.x + w.y) / 13.0) - 0.5), 0.07);
+    vec3 rock = vec3(0.030, 0.034, 0.055) + vec3(0.045, 0.055, 0.09) * smoothstep(-12.0, 0.0, wd) + vec3(0.010, 0.013, 0.024) * hatch;
+    rock *= 0.85 + 0.3 * vnoise(w * 0.05);
+    col = mix(col, rock, win);
+    col += vec3(0.28, 0.40, 0.72) * exp(-abs(wd) / (px * 1.3 + 0.6)) * 0.85;
+  }
   // glowing map border
   float edge = exp(-abs(db) / (px * 2.5 + 2.0));
   col += vec3(0.18, 0.26, 0.5) * edge * 0.6;

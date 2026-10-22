@@ -21,10 +21,34 @@ const UNOWNED: RGB = [70, 76, 96];
 const SELECT_MIX = 0.5;
 
 export function drawWorld(r: Renderer, w: World, o: SceneOpts): void {
+  r.useTerrain(w.terrain);
+  drawCrystals(r, w, o);
   drawNests(r, w, o);
   drawBeams(r, w, o);
   drawUnits(r, w, o);
   drawBarrages(r, w, o);
+}
+
+const CRYSTAL_RGB: RGB = [170, 225, 255];
+
+/** Energy crystals: a spinning shard cluster that takes the holder's color. */
+function drawCrystals(r: Renderer, w: World, o: SceneOpts): void {
+  for (let k = 0; k < w.crystals.length; k++) {
+    const c = w.crystals[k];
+    const held = c.holder >= 0;
+    const col = held ? mixRgb(FACTION_RGB[c.holder], WHITE, 0.25) : CRYSTAL_RGB;
+    const pulse = 0.5 + 0.5 * Math.sin(o.time * 3 + k);
+    // Zone ring: dim when free, the holder's color while charging.
+    r.shape(false, c.x, c.y, c.r, 0, 1, 0, 0.025, col, held ? Math.round(110 + 70 * pulse) : 55);
+    r.shape(false, c.x, c.y, c.r, 7, 1, 0, 0, col, held ? 22 : 10);
+    // Core: a slow hex with shards orbiting it.
+    r.shape(false, c.x, c.y, 9, 1, 0, o.time * 0.6 + k, 0.6, col, 230);
+    for (let s = 0; s < 3; s++) {
+      const a = o.time * (held ? 1.6 : 0.5) + (s * Math.PI * 2) / 3 + k;
+      const d = 14 + 2 * Math.sin(o.time * 2 + s);
+      r.unit(c.x + Math.cos(a) * d, c.y + Math.sin(a) * d, 4.2, col[0], col[1], col[2], 235, 2, a + Math.PI / 2);
+    }
+  }
 }
 
 function nestColor(owner: number): RGB {

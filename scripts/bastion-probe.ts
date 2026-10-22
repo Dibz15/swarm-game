@@ -1,11 +1,12 @@
 // Repro: a medium map where every neutral nest is a Bastion. Do bots expand?
+import { TERRAIN } from './env';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
 import { PERSONALITIES } from '../src/sim/ai/bot';
 import { NEST_RADIUS, NEUTRAL, NestType, TICK_HZ } from '../src/sim/constants';
 
 for (let g = 0; g < 4; g++) {
-  const w = createWorld({
+  const w = createWorld({ terrain: TERRAIN, 
     seed: 2000 + g,
     size: 'medium',
     players: Array.from({ length: 4 }, (_, i) => ({

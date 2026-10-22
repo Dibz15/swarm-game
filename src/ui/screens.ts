@@ -1,6 +1,6 @@
 import { FACTION_HEX, FACTION_NAMES } from '../content/factions';
 import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
-import type { MapSize } from '../sim/mapgen';
+import { TERRAIN_LEVELS, type MapSize, type TerrainLevel } from '../sim/mapgen';
 import { hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import type { World } from '../sim/world';
@@ -82,6 +82,13 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
             </ul>
             <p><b>Spears pierce Shields. Shields stop Swarmers. Swarmers overrun Spears.</b> Mix your army, and take the nests that counter what you're facing. The counter wheel in the corner reminds you when you select dots.</p>
             <p><b>Upgrade</b> a nest by feeding it dots (U). That makes it spawn faster. Spend your army now, or grow your production.</p>
+            <h3>Terrain</h3>
+            <ul class="terrain">
+              <li><i class="t-wall"></i><b>Rock</b> blocks movement and shots. Gaps make chokepoints</li>
+              <li><i class="t-neb"></i><b>Nebula</b> slows everything inside: ambush ground</li>
+              <li><i class="t-rift"></i><b>Rift</b> burns dots standing in it: a risky shortcut</li>
+              <li><i class="t-crys"></i><b>Crystal</b> charges energy for whoever holds it alone</li>
+            </ul>
             <p><b>Energy</b> builds up over time, and faster from kills and captures. <b>Surge</b> (30) makes your selected dots faster, stronger and tougher for 6 seconds. <b>Nova</b> (60) sacrifices some of your dots to blast everything around them.</p>
           </div>
         </div>
@@ -104,6 +111,7 @@ interface BotRow {
 export interface SetupPrefs {
   color: number;
   size: MapSize;
+  terrain: TerrainLevel;
   teams: boolean;
   bots: BotRow[];
 }
@@ -111,6 +119,7 @@ export interface SetupPrefs {
 const DEFAULT_PREFS: SetupPrefs = {
   color: 0,
   size: 'medium',
+  terrain: 'standard',
   teams: false,
   bots: [
     { faction: 1, difficulty: 1, personality: 'random', team: 1 },
@@ -154,6 +163,7 @@ export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
   return {
     seed,
     size: p.size,
+    terrain: p.terrain,
     portrait: window.innerHeight > window.innerWidth * 1.15,
     players: [
       { faction: p.color, team: 0, human: true },
@@ -195,9 +205,15 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
             </div>
           </div>
           <div>
-            <label>Map seed</label>
-            <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
+            <label>Terrain</label>
+            <div class="seg" data-a="terrain">
+              ${TERRAIN_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
+            </div>
           </div>
+        </div>
+        <div class="field">
+          <label>Map seed</label>
+          <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
         </div>
         <div class="row end">
           <button data-a="back">Back</button>
@@ -234,6 +250,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
       .join('');
     (m.querySelector('[data-a=add]') as HTMLButtonElement).disabled = prefs.bots.length >= 5;
     m.querySelectorAll<HTMLButtonElement>('[data-a=size] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.size));
+    m.querySelectorAll<HTMLButtonElement>('[data-a=terrain] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.terrain));
   };
 
   swatches.addEventListener('click', (e) => {
@@ -293,6 +310,13 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
     const v = (e.target as HTMLElement).dataset.v as MapSize | undefined;
     if (v) {
       prefs.size = v;
+      render();
+    }
+  });
+  m.querySelector('[data-a=terrain]')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).dataset.v as TerrainLevel | undefined;
+    if (v) {
+      prefs.terrain = v;
       render();
     }
   });

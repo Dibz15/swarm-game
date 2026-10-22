@@ -380,6 +380,14 @@ export class AudioEngine {
     this.noise(out, 0.6, 0.05, 'bandpass', 6000, 1500);
   }
 
+  /** Crystal taken: a glassy two-note shimmer. */
+  crystal(x: number, y: number, mine: boolean): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, mine ? 0.9 : 0.4, 1.2, 0.04);
+    if (!out) return;
+    [19, 26, 31].forEach((s, i) => this.tone(out, note(s + 12), 0.9, 'sine', 0.03, { delay: i * 0.06 }));
+  }
+
   lost(x: number, y: number): void {
     if (!this.ctx) return;
     const out = this.at(x, y, 1.2, 1.2, 0.0);

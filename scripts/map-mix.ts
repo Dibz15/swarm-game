@@ -5,7 +5,7 @@ const counts = [0, 0, 0, 0, 0];
 let worst = 0;
 for (let s = 0; s < 200; s++) {
   for (const size of ['small', 'medium', 'large'] as const) {
-    const m = generateMap(s, size, 2 + (s % 5));
+    const m = generateMap({ seed: s, size, players: 2 + (s % 5) });
     const neutral = m.nests.filter((n) => n.player < 0);
     neutral.forEach((n) => counts[n.type]++);
     worst = Math.max(worst, neutral.filter((n) => n.type === 4).length / neutral.length);

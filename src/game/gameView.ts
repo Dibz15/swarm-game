@@ -249,6 +249,11 @@ export class GameView {
           break;
         case 'absorb':
           break;
+        case 'crystal':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.4, r1: e.r * 1.5, dur: 0.6, c, thick: 2 });
+          particles.burst(e.x, e.y, c, 14, 70, 2, 0.6);
+          sfx.crystal(e.x, e.y, e.f === this.human);
+          break;
         case 'escalation':
           toast('Escalation: comeback bonuses are fading. Time to close it out!', '#ffb627');
           sfx.escalation();

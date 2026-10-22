@@ -1,4 +1,6 @@
 import type { Camera } from './camera';
+import type { Terrain } from '../sim/terrain';
+import { bakeTerrain, TEX_SCALE } from './terrainTex';
 import { BEAM_FS, BEAM_VS, BG_FS, BG_VS, SHAPE_FS, SHAPE_VS, UNIT_FS, UNIT_VS } from './shaders';
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
@@ -86,7 +88,20 @@ export class Renderer {
   readonly overlay: InstanceBuffer;
 
   private quad: WebGLBuffer;
-  private bg: { prog: WebGLProgram; vao: WebGLVertexArrayObject; uRes: WebGLUniformLocation | null; uView: WebGLUniformLocation | null; uMap: WebGLUniformLocation | null; uTime: WebGLUniformLocation | null };
+  private bg: {
+    prog: WebGLProgram;
+    vao: WebGLVertexArrayObject;
+    uRes: WebGLUniformLocation | null;
+    uView: WebGLUniformLocation | null;
+    uMap: WebGLUniformLocation | null;
+    uTime: WebGLUniformLocation | null;
+    uTer: WebGLUniformLocation | null;
+    uTerOn: WebGLUniformLocation | null;
+    uTexel: WebGLUniformLocation | null;
+  };
+  private terTex: WebGLTexture;
+  private terSource: Terrain | null = null;
+  private terOn = false;
   private unitPass: Pass;
   private beamPass: Pass;
   private shapePass: Pass;
@@ -116,7 +131,11 @@ export class Renderer {
       uView: gl.getUniformLocation(bgProg, 'u_view'),
       uMap: gl.getUniformLocation(bgProg, 'u_map'),
       uTime: gl.getUniformLocation(bgProg, 'u_time'),
+      uTer: gl.getUniformLocation(bgProg, 'u_ter'),
+      uTerOn: gl.getUniformLocation(bgProg, 'u_terOn'),
+      uTexel: gl.getUniformLocation(bgProg, 'u_texel'),
     };
+    this.terTex = gl.createTexture()!;
 
     this.units = new InstanceBuffer(5, 1, 16384);
     this.beams = new InstanceBuffer(5, 1, 8192);
@@ -171,6 +190,29 @@ export class Renderer {
     return true;
   }
 
+  /** Bake and upload a world's terrain the first time it is drawn. */
+  useTerrain(t: Terrain): void {
+    if (t === this.terSource) return;
+    this.terSource = t;
+    this.terOn = t.hasPaths || t.spec.crystals.length > 0;
+    if (!this.terOn) return;
+    const gl = this.gl;
+    const { data, tw, th } = bakeTerrain(t.spec, t.width, t.height);
+    gl.bindTexture(gl.TEXTURE_2D, this.terTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, tw, th, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // Texel k sits at world px k * TEX_SCALE, so sample at its center.
+    this.texel[0] = 1 / (tw * TEX_SCALE);
+    this.texel[1] = 1 / (th * TEX_SCALE);
+    this.texel[2] = 0.5 / tw;
+    this.texel[3] = 0.5 / th;
+  }
+  private texel = new Float32Array(4);
+
   beginFrame(): void {
     this.units.count = 0;
     this.beams.count = 0;
@@ -192,6 +234,13 @@ export class Renderer {
     gl.uniform3f(this.bg.uView, camU[0], camU[1], px);
     gl.uniform2f(this.bg.uMap, cam.mapW, cam.mapH);
     gl.uniform1f(this.bg.uTime, time);
+    gl.uniform1f(this.bg.uTerOn, this.terOn ? 1 : 0);
+    if (this.terOn) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.terTex);
+      gl.uniform1i(this.bg.uTer, 0);
+      gl.uniform4fv(this.bg.uTexel, this.texel);
+    }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     gl.enable(gl.BLEND);

@@ -1,6 +1,7 @@
 import { MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './constants';
 import { Rng } from './rng';
 import { Grid } from './spatial';
+import { Terrain, emptyTerrain, type TerrainSpec } from './terrain';
 import type { Bot } from './ai/bot';
 
 export interface Nest {
@@ -64,7 +65,8 @@ export type FxType =
   | 'barrage'
   | 'barrageHit'
   | 'blink'
-  | 'lockdown';
+  | 'lockdown'
+  | 'crystal';
 
 export interface FxEvent {
   type: FxType;
@@ -87,6 +89,16 @@ export interface Barrage {
   owner: number;
   /** tick the strike lands */
   impact: number;
+}
+
+/** An energy crystal; `holder` is the faction charging from it, or -1. */
+export interface Crystal {
+  x: number;
+  y: number;
+  r: number;
+  holder: number;
+  /** last faction to hold it, so passers-by don't re-announce it */
+  last: number;
 }
 
 export const UNIT_FEEDING = 1;
@@ -152,6 +164,8 @@ export class World {
   readonly unitCount = new Int32Array(NUM_FACTIONS);
   nests: Nest[] = [];
   readonly grid: Grid;
+  readonly terrain: Terrain;
+  crystals: Crystal[] = [];
   bots: Bot[] = [];
 
   /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
@@ -172,12 +186,14 @@ export class World {
   /** per-faction unit counts sampled once a second */
   readonly history: number[][] = [];
 
-  constructor(seed: number, width: number, height: number) {
+  constructor(seed: number, width: number, height: number, terrain: TerrainSpec = emptyTerrain()) {
     this.seed = seed >>> 0;
     this.width = width;
     this.height = height;
     this.rng = new Rng(seed ^ 0x51f15e);
     this.grid = new Grid(width, height);
+    this.terrain = new Terrain(terrain, width, height);
+    this.crystals = terrain.crystals.map((c) => ({ x: c.x, y: c.y, r: c.r, holder: -1, last: -1 }));
     for (let f = 0; f < NUM_FACTIONS; f++) {
       this.factions.push({
         id: f,

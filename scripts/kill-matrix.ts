@@ -1,4 +1,5 @@
 // Who kills whom: are the eventual losers killed by the winner, or by each other?
+import { TERRAIN } from './env';
 import { Bot, PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -26,7 +27,7 @@ const orig = (Bot.prototype as any).issue;
 };
 
 for (let g = 0; g < games; g++) {
-  const w = createWorld({
+  const w = createWorld({ terrain: TERRAIN, 
     seed: 3000 + g, size,
     players: Array.from({ length: players }, (_, i) => ({ faction: i, team: i, human: false, bot: { difficulty: 1, personality: PERSONALITIES[(i + g) % 4] } })),
   });

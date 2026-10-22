@@ -69,6 +69,7 @@ export function applyCommand(w: World, c: Command): void {
       }
       x = clamp(x, 4, w.width - 4);
       y = clamp(y, 4, w.height - 4);
+      if (!nest) [x, y] = w.terrain.freePoint(x, y);
       const ar = Math.max(nestR * 0.8, groupArrive(slots.length));
       for (const s of slots) {
         w.ox[s] = x;
@@ -82,8 +83,7 @@ export function applyCommand(w: World, c: Command): void {
       for (const id of c.nests) {
         const n = w.nests[id];
         if (!n || n.owner !== c.p) continue;
-        n.rallyX = clamp(c.x, 4, w.width - 4);
-        n.rallyY = clamp(c.y, 4, w.height - 4);
+        [n.rallyX, n.rallyY] = w.terrain.freePoint(clamp(c.x, 4, w.width - 4), clamp(c.y, 4, w.height - 4));
       }
       return;
     }
@@ -193,12 +193,17 @@ export function applyCommand(w: World, c: Command): void {
         dy *= POWER.blinkRange / d;
       }
       const ar = groupArrive(slots.length);
+      // Blink jumps walls, but nobody lands inside one.
+      const tr = w.terrain;
       for (const s of slots) {
-        const nx = clamp(w.x[s] + dx, 2, w.width - 2), ny = clamp(w.y[s] + dy, 2, w.height - 2);
+        let nx = clamp(w.x[s] + dx, 2, w.width - 2), ny = clamp(w.y[s] + dy, 2, w.height - 2);
+        if (tr.hasWalls && tr.collide(nx, ny, UNIT_STATS[w.kind[s]].size * 0.5)) {
+          nx = tr.ox;
+          ny = tr.oy;
+        }
         w.x[s] = w.px[s] = nx;
         w.y[s] = w.py[s] = ny;
-        w.ox[s] = cx + dx;
-        w.oy[s] = cy + dy;
+        [w.ox[s], w.oy[s]] = tr.freePoint(cx + dx, cy + dy);
         w.arrive[s] = ar;
       }
       pushFx(w, 'blink', cx + dx, cy + dy, c.p, ar + 10, -1, -1, cx, cy);
