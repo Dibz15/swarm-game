@@ -1,9 +1,18 @@
-import { DT, Kind, LEASH, LEVEL, MAX_LEVEL, POWER, TERRAIN, TRAITS, UNIT_STATS, UPGRADE_COST } from './constants';
+import { DT, HOLD_EXTRA, Kind, LEASH, LEVEL, MAX_LEVEL, POWER, TERRAIN, TRAITS, UNIT_STATS, UPGRADE_COST } from './constants';
 import { T_NEBULA, T_RIFT } from './terrain';
 import { pushFx, removeUnit, UNIT_FEEDING, type World } from './world';
 
 const MAX_SEP_SCAN = 22;
 const STEER = 0.3;
+
+/** Radius of the nest whose ring contains (x, y), or 0 in the open field. */
+function holdRadius(w: World, x: number, y: number): number {
+  for (const n of w.nests) {
+    const dx = n.x - x, dy = n.y - y;
+    if (dx * dx + dy * dy <= n.r * n.r) return n.r;
+  }
+  return 0;
+}
 
 export function updateMovement(w: World): void {
   const g = w.grid;
@@ -84,8 +93,11 @@ export function updateMovement(w: World): void {
         desY *= 0.12;
       } else if (t >= 0 && w.alive[t] && w.uid[t] === w.tgtUid[i] && d <= ar * 1.6 + 8) {
         // Idle and an enemy is near: close in, within a leash of the order point.
+        // Units holding a nest only chase what steps into the ring.
         const lx = w.x[t] - w.ox[i], ly = w.y[t] - w.oy[i];
-        if (lx * lx + ly * ly < (ar + LEASH) ** 2) {
+        const hold = holdRadius(w, w.ox[i], w.oy[i]);
+        const leash = hold > 0 ? Math.max(ar, hold) + HOLD_EXTRA : ar + LEASH;
+        if (lx * lx + ly * ly < leash * leash) {
           const tx = w.x[t] - x, ty = w.y[t] - y;
           const td = Math.sqrt(tx * tx + ty * ty) || 1;
           desX = (tx / td) * spd;

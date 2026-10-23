@@ -77,6 +77,8 @@ export const ALERT_RADIUS = 60;
 export const ALERT_EVERY = 20;
 /** how far an idle unit will chase from its order point */
 export const LEASH = 90;
+/** units holding a nest only chase enemies this far past its ring (or their own spread) */
+export const HOLD_EXTRA = 18;
 /** each unit re-searches for the nearest enemy every RETARGET ticks (staggered) */
 export const RETARGET = 6;
 
