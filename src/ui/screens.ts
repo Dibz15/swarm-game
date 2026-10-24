@@ -7,6 +7,7 @@ import type { World } from '../sim/world';
 import { NEUTRAL } from '../sim/constants';
 import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
+import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 
 function el(html: string): HTMLDivElement {
   const d = document.createElement('div');
@@ -38,7 +39,24 @@ export const CONTROLS_HTML = `
     <dt>Touch</dt><dd>Drag selects, tap sends, two fingers pan and zoom</dd>
   </dl>`;
 
-export function mainMenu(handlers: { skirmish: () => void; howto: () => void }): HTMLDivElement {
+export const TOUCH_CONTROLS_HTML = `
+  <dl class="controls">
+    <dt>Drag</dt><dd>Select your dots</dd>
+    <dt>Tap</dt><dd>Send the selected dots there · tap a nest to send them onto it</dd>
+    <dt>Tap a nest</dt><dd>With nothing selected: select your nest. Then tap the map to set its rally point</dd>
+    <dt>Two fingers</dt><dd>Pan and pinch to zoom</dd>
+    <dt>✕</dt><dd>Clear the selection</dd>
+    <dt>Type chips</dt><dd>Keep only that type from your group</dd>
+    <dt>Powers</dt><dd>Surge and Nova fire at once · nest powers: tap the button, then tap the target</dd>
+    <dt>Upgrade</dt><dd>Select one of your nests, then tap Upgrade to feed it nearby dots</dd>
+  </dl>`;
+
+/** Controls list for the current interface mode. */
+export function controlsHtml(): string {
+  return isMobile() ? TOUCH_CONTROLS_HTML : CONTROLS_HTML;
+}
+
+export function mainMenu(handlers: { skirmish: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
   const m = el(`
     <div class="screen menu">
       <div class="menu-inner">
@@ -48,16 +66,113 @@ export function mainMenu(handlers: { skirmish: () => void; howto: () => void }):
           <button class="primary" data-a="skirmish">Skirmish</button>
           <button data-a="campaign" disabled>Campaign <small>soon</small></button>
           <button data-a="howto">How to play</button>
+          <button data-a="settings">Settings</button>
         </div>
       </div>
       <footer>v0.1 · fight for the nests</footer>
     </div>`);
   m.querySelector('[data-a=skirmish]')!.addEventListener('click', handlers.skirmish);
   m.querySelector('[data-a=howto]')!.addEventListener('click', handlers.howto);
+  m.querySelector('[data-a=settings]')!.addEventListener('click', handlers.settings);
+  return m;
+}
+
+/** One-time heads-up when mobile mode switched itself on. */
+export function mobileNotice(h: { ok: () => void; desktop: () => void }): HTMLDivElement {
+  const m = el(`
+    <div class="notice">
+      <p><b>Looks like you're on a touch device</b>, so mobile mode is on: bigger buttons and touch instructions. You can change this any time in Settings.</p>
+      <div class="row"><button class="primary small" data-a="ok">Got it</button><button class="small" data-a="desktop">Use desktop layout</button></div>
+    </div>`);
+  m.querySelector('[data-a=ok]')!.addEventListener('click', h.ok);
+  m.querySelector('[data-a=desktop]')!.addEventListener('click', h.desktop);
+  return m;
+}
+
+const MODE_LABEL: Record<UiMode, string> = { auto: 'Auto', mobile: 'Mobile', desktop: 'Desktop' };
+
+/** Interface mode + volume controls, shared by the Settings screen and the pause menu. */
+function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement {
+  const vol = (k: VolumeKind, label: string) =>
+    `<label class="vol"><span>${label}</span><input type="range" min="0" max="100" value="${Math.round(audio.volumes[k] * 100)}" data-vol="${k}"></label>`;
+  const m = el(`
+    <div class="settings">
+      <h3>Interface</h3>
+      <div class="seg" data-a="mode">${UI_MODES.map((v) => `<button data-v="${v}">${MODE_LABEL[v]}</button>`).join('')}</div>
+      <p class="hint">Mobile mode uses bigger touch buttons and touch instructions. Auto picks it on phones and tablets.</p>
+      <h3>Sound</h3>
+      <div class="vols">
+        ${vol('master', 'Master')}${vol('sfx', 'Effects')}${vol('ambience', 'Ambience')}${vol('music', 'Music')}
+      </div>
+    </div>`);
+  const modes = [...m.querySelectorAll<HTMLButtonElement>('[data-a=mode] button')];
+  const mark = () => modes.forEach((b) => b.classList.toggle('on', b.dataset.v === uiMode()));
+  modes.forEach((b) =>
+    b.addEventListener('click', () => {
+      setUiMode(b.dataset.v as UiMode);
+      mark();
+      onMode();
+    }),
+  );
+  mark();
+  m.querySelectorAll<HTMLInputElement>('[data-vol]').forEach((inp) =>
+    inp.addEventListener('input', () => audio.setVolume(inp.dataset.vol as VolumeKind, Number(inp.value) / 100)),
+  );
+  return m;
+}
+
+export function settingsScreen(audio: AudioEngine, onBack: () => void): HTMLDivElement {
+  const m = el(`
+    <div class="screen modal">
+      <div class="card">
+        <h2>Settings</h2>
+        <div class="fields"></div>
+        <div class="row end"><button class="primary" data-a="back">Done</button></div>
+      </div>
+    </div>`);
+  m.querySelector('.fields')!.replaceWith(settingsFields(audio, () => {}));
+  m.querySelector('[data-a=back]')!.addEventListener('click', onBack);
+  return m;
+}
+
+/** Shorter, touch-first How to play for mobile mode. */
+function howToPlayMobile(onBack: () => void): HTMLDivElement {
+  const m = el(`
+    <div class="screen modal">
+      <div class="card wide howto-mobile">
+        <h2>How to play</h2>
+        <h3>The goal</h3>
+        <p>Capture <b>nests</b>: they're the only way to make more dots. Win by wiping out every rival, or by holding most of the nests for 30 seconds.</p>
+        <h3>Play</h3>
+        <ul class="steps">
+          <li><b>Drag</b> across your dots to select them.</li>
+          <li><b>Tap</b> where they should go. They fight on their own.</li>
+          <li><b>Park</b> dots on a nest with no enemies to capture it.</li>
+          <li><b>Pinch</b> to zoom, <b>two fingers</b> to pan.</li>
+          <li><b>✕</b> clears your selection.</li>
+        </ul>
+        <h3>Nests</h3>
+        <ul class="nests">
+          <li><i class="n-hex"></i><b>Hive</b> Swarmers</li>
+          <li><i class="n-sq"></i><b>Forge</b> Shields · Fortify</li>
+          <li><i class="n-dia"></i><b>Spire</b> Spears · Barrage</li>
+          <li><i class="n-tri"></i><b>Den</b> Raiders · Blink</li>
+          <li><i class="n-oct"></i><b>Bastion</b> turret · Lockdown</li>
+        </ul>
+        <p><b>Spears beat Shields, Shields beat Swarmers, Swarmers beat Spears.</b></p>
+        <h3>Powers and upgrades</h3>
+        <p><b>Surge</b> and <b>Nova</b> fire on your selected dots. Nest powers: tap the button, then tap the target. Tap one of your nests, then <b>Upgrade</b> to feed it dots for faster spawns and a turret.</p>
+        <h3>The map</h3>
+        <p>Rock blocks paths, purple nebula slows, red rifts burn. Hold a crystal or a supply drop alone for energy. Wild swarms and the Colossus fight everyone.</p>
+        <div class="row end"><button class="primary" data-a="back">Got it</button></div>
+      </div>
+    </div>`);
+  m.querySelector('[data-a=back]')!.addEventListener('click', onBack);
   return m;
 }
 
 export function howToPlay(onBack: () => void): HTMLDivElement {
+  if (isMobile()) return howToPlayMobile(onBack);
   const m = el(`
     <div class="screen modal">
       <div class="card wide">
@@ -359,8 +474,6 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
 }
 
 export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine }): HTMLDivElement {
-  const vol = (k: VolumeKind, label: string) =>
-    `<label class="vol"><span>${label}</span><input type="range" min="0" max="100" value="${Math.round(h.audio.volumes[k] * 100)}" data-vol="${k}"></label>`;
   const m = el(`
     <div class="screen modal dim">
       <div class="card">
@@ -370,17 +483,15 @@ export function pauseMenu(h: { resume: () => void; restart: () => void; quit: ()
           <button data-a="restart">Restart match</button>
           <button data-a="quit">Quit to menu</button>
         </div>
-        <h3>Sound</h3>
-        <div class="vols">
-          ${vol('master', 'Master')}${vol('sfx', 'Effects')}${vol('ambience', 'Ambience')}${vol('music', 'Music')}
-        </div>
+        <div class="fields"></div>
         <h3>Controls</h3>
-        ${CONTROLS_HTML}
+        <div class="ctl"></div>
       </div>
     </div>`);
-  m.querySelectorAll<HTMLInputElement>('[data-vol]').forEach((inp) =>
-    inp.addEventListener('input', () => h.audio.setVolume(inp.dataset.vol as VolumeKind, Number(inp.value) / 100)),
-  );
+  const ctl = m.querySelector('.ctl')!;
+  const showControls = () => (ctl.innerHTML = controlsHtml());
+  m.querySelector('.fields')!.replaceWith(settingsFields(h.audio, showControls));
+  showControls();
   m.querySelector('[data-a=resume]')!.addEventListener('click', h.resume);
   m.querySelector('[data-a=restart]')!.addEventListener('click', h.restart);
   m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);

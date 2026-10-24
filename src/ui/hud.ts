@@ -1,5 +1,6 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
+import { isMobile } from './mobile';
 import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
 
 const TIPS = [
@@ -65,6 +66,8 @@ export class Hud {
   private domMark: HTMLElement;
   private nestCard: HTMLDivElement;
   private tip: HTMLDivElement;
+  private aimHint: HTMLDivElement;
+  private bottom: HTMLDivElement;
   private counters: HTMLDivElement;
   private kindChips: HTMLButtonElement[] = [];
   /** the match this HUD is showing (set every update) */
@@ -94,6 +97,7 @@ export class Hud {
       <div class="dom"><div class="dom-time"></div><div class="dom-text"></div><div class="dom-bar"><i></i></div></div>
       <div class="toasts"></div>
       <div class="nestcard"></div>
+      <div class="aimhint"><span></span><button class="cancel">Cancel</button></div>
       <div class="tip"><span></span><button class="x" title="Hide tips">✕</button></div>
       <div class="counters" title="Spears pierce Shields · Shields stop Swarmers · Swarmers overrun Spears">
         <svg viewBox="0 0 120 92" aria-hidden="true">
@@ -165,6 +169,12 @@ export class Hud {
     this.domMark = q('.nestshare .mark');
     this.nestCard = q('.nestcard');
     this.tip = q('.tip');
+    this.aimHint = q('.aimhint');
+    this.bottom = q('.hud-bottom');
+    q<HTMLButtonElement>('.aimhint .cancel').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.game) this.game.aim = null;
+    });
     this.el.querySelectorAll<HTMLButtonElement>('button[data-a]').forEach((b) => {
       const a = b.dataset.a as keyof typeof this.actions;
       this.btn[a] = b;
@@ -224,7 +234,12 @@ export class Hud {
     this.acc = 0;
 
     const w = g.world;
+    const mobile = isMobile();
     this.clock.textContent = formatTime(w.tick);
+    // Floating panels sit above the bottom bar, whose height depends on what's in it.
+    this.el.style.setProperty('--hudb', `${this.bottom.offsetHeight}px`);
+    this.aimHint.classList.toggle('on', !!g.aim);
+    if (g.aim) (this.aimHint.firstElementChild as HTMLElement).textContent = `Tap where to cast ${g.aim[0].toUpperCase()}${g.aim.slice(1)}`;
 
     // Strength bar + chips.
     const active = w.factions.filter((f) => f.active && f.id !== NEUTRAL);
@@ -305,7 +320,9 @@ export class Hud {
       (this.btn.upgrade.querySelector('.ucost') as HTMLElement).textContent = `${Math.max(0, up.cost)} dots`;
       (this.btn.upgrade.querySelector('.ulabel') as HTMLElement).textContent = up.repair ? 'Repair' : 'Upgrade';
     }
-    this.btn.clear.style.visibility = g.selection.empty ? 'hidden' : 'visible';
+    // Mobile keeps ✕ in its grid slot (disabled) so the buttons don't shuffle.
+    this.btn.clear.style.visibility = mobile || !g.selection.empty ? 'visible' : 'hidden';
+    this.btn.clear.disabled = g.selection.empty;
 
     const nNests = g.selection.nests.size;
     const parts: string[] = [];
@@ -326,13 +343,15 @@ export class Hud {
       b.querySelector('b')!.textContent = String(mix[k]);
     });
 
-    // Hover card for nests.
-    const hn = w.nests[g.hoverNest];
+    // Hover card for nests. Touch has no hover, so mobile shows the selected nest.
+    let hn = w.nests[g.hoverNest];
+    if (!hn && mobile) for (const id of g.selection.nests) hn = hn ?? w.nests[id];
     if (hn) {
       const owner = hn.owner < 0 ? 'Unclaimed' : hn.owner === NEUTRAL ? 'Neutral' : hn.owner === g.human ? 'Yours' : FACTION_NAMES[hn.owner];
-      const next = hn.level < MAX_LEVEL ? `<br>Next: <b>Lv${hn.level + 1}</b> for ${UPGRADE_COST[hn.level]} dots (U): ${LEVEL_PERKS[hn.level + 1]}` : '';
+      const next = hn.level < MAX_LEVEL ? `<br>Next: <b>Lv${hn.level + 1}</b> for ${UPGRADE_COST[hn.level]} dots (${mobile ? 'Upgrade' : 'U'}): ${LEVEL_PERKS[hn.level + 1]}` : '';
+      const rally = mobile && hn.owner === g.human && g.selection.nests.has(hn.id) ? '<br>Tap the map to set its rally point.' : '';
       const has = hn.level > 1 ? `<br>Lv${hn.level}: ${LEVEL_PERKS.slice(2, hn.level + 1).join('; ')}` : '';
-      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${has}${hn.owner === g.human ? next : ''}</small>`;
+      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${has}${hn.owner === g.human ? next : ''}${rally}</small>`;
       this.nestCard.style.display = 'block';
     } else {
       this.nestCard.style.display = 'none';

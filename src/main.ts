@@ -13,7 +13,8 @@ import { Kind, MAX_UNITS } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
 import { Hud } from './ui/hud';
-import { buildSetup, endScreen, howToPlay, loadPrefs, mainMenu, pauseMenu, randomSeed, skirmishSetup } from './ui/screens';
+import { initUiMode, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
+import { buildSetup, endScreen, howToPlay, loadPrefs, mainMenu, mobileNotice, pauseMenu, randomSeed, settingsScreen, skirmishSetup } from './ui/screens';
 
 class App {
   private canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -65,6 +66,7 @@ class App {
   }
 
   start(): void {
+    initUiMode();
     this.renderer.resize();
     this.camera.setView(this.renderer.width, this.renderer.height);
     const q = new URLSearchParams(location.search);
@@ -95,12 +97,26 @@ class App {
     this.endGame();
     this.startDemo();
     this.setModal(null);
-    this.setScreen(
-      mainMenu({
-        skirmish: () => this.showSetup(),
-        howto: () => this.setModal(howToPlay(() => this.setModal(null))),
-      }),
-    );
+    const menu = mainMenu({
+      skirmish: () => this.showSetup(),
+      howto: () => this.setModal(howToPlay(() => this.setModal(null))),
+      settings: () => this.setModal(settingsScreen(this.sfx, () => this.setModal(null))),
+    });
+    if (shouldShowMobileNotice()) {
+      const n = mobileNotice({
+        ok: () => {
+          markMobileNoticeSeen();
+          n.remove();
+        },
+        desktop: () => {
+          markMobileNoticeSeen();
+          setUiMode('desktop');
+          n.remove();
+        },
+      });
+      menu.appendChild(n);
+    }
+    this.setScreen(menu);
   }
 
   private showSetup(): void {

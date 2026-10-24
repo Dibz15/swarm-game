@@ -351,7 +351,7 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   .selinfo { display: none; }
   .energy { width: 100%; height: 18px; }
   .energy span { line-height: 16px; font-size: 11px; }
-  .tip, .nestcard { display: none !important; }
+  .tip, body:not(.mobile) .nestcard { display: none !important; }
   .howto-grid, .field.two { grid-template-columns: 1fr; }
   .end .result { font-size: 44px; }
   .stats th:nth-child(n+5), .stats td:nth-child(n+5) { display: none; }
@@ -419,3 +419,101 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .kchip kbd { margin-left: 2px; }
 .counters .node text { font: 600 9px var(--font); fill: var(--muted); }
 .counters .node.on text { fill: #fff; }
+
+/* ---- mobile mode (body.mobile: auto-detected or chosen in Settings) ---- */
+
+.notice {
+  position: absolute;
+  left: 50%;
+  bottom: calc(44px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: min(440px, calc(100% - 32px));
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 12px 14px;
+  backdrop-filter: blur(8px);
+}
+.notice p { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: #c6cceb; }
+.settings .hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+.steps { margin: 4px 0; padding-left: 20px; font-size: 15px; line-height: 1.55; color: #c6cceb; }
+.aimhint { display: none; }
+
+body.mobile kbd { display: none; }
+body.mobile .tip { display: none !important; }
+body.mobile button.small, body.mobile .seg button { padding: 10px 14px; }
+body.mobile .hud-tr { top: calc(6px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); }
+body.mobile .hud-tr button { min-width: 44px; min-height: 44px; font-size: 16px; }
+body.mobile .hud-top { left: calc(10px + env(safe-area-inset-left)); transform: none; width: calc(100% - 180px); }
+
+/* Bottom bar: docked full width, chips and energy on top, a grid of big action buttons below. */
+body.mobile .hud-bottom {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  transform: none;
+  max-width: none;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'chips energy' 'actions actions';
+  gap: 8px;
+  align-items: center;
+  border-width: 1px 0 0;
+  border-radius: 12px 12px 0 0;
+  padding: 8px calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+}
+body.mobile .selinfo { display: none; }
+body.mobile .selchips { grid-area: chips; gap: 6px; }
+body.mobile .kchip { min-width: 52px; min-height: 44px; justify-content: center; font-size: 15px; }
+body.mobile .kchip svg { width: 16px; height: 16px; }
+body.mobile .energy { grid-area: energy; width: auto; height: 24px; }
+body.mobile .energy span { line-height: 22px; font-size: 12px; }
+body.mobile .actions { grid-area: actions; display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 6px; }
+body.mobile .actions button {
+  min-height: 48px;
+  padding: 4px 2px;
+  font-size: 15px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+body.mobile .actions button small { margin: 0; font-size: 11px; }
+body.mobile .actions .touch { display: flex; font-size: 18px; }
+
+/* Floating panels move above the bar (--hudb is its height, set by the HUD). */
+body.mobile .counters { width: 88px; top: auto; bottom: calc(var(--hudb, 120px) + 8px); right: calc(8px + env(safe-area-inset-right)); }
+body.mobile .counter-cap { display: none; }
+body.mobile .nestcard {
+  top: auto;
+  left: calc(8px + env(safe-area-inset-left));
+  right: 108px;
+  bottom: calc(var(--hudb, 120px) + 8px);
+  max-width: 420px;
+  font-size: 13px;
+}
+body.mobile .aimhint.on {
+  position: absolute;
+  top: calc(60px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  white-space: nowrap;
+  padding: 6px 6px 6px 14px;
+  font-size: 15px;
+  background: var(--panel);
+  border: 1px solid var(--hot);
+  border-radius: 10px;
+  box-shadow: 0 0 16px rgba(255, 60, 172, 0.3);
+}
+body.mobile .aimhint button { min-height: 40px; }
+
+/* Landscape phones are short: one row for chips, energy and actions. */
+@media (orientation: landscape) and (max-height: 500px) {
+  body.mobile .hud-bottom { grid-template-columns: auto minmax(120px, 200px) 1fr; grid-template-areas: 'chips energy actions'; padding-top: 6px; }
+  body.mobile .actions button { min-height: 44px; }
+  body.mobile .hud-top { width: calc(100% - 200px); }
+}
