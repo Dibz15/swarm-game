@@ -343,15 +343,19 @@ export class Hud {
       b.querySelector('b')!.textContent = String(mix[k]);
     });
 
-    // Hover card for nests. Touch has no hover, so mobile shows the selected nest.
+    // Hover card for nests. Touch has no hover, so mobile shows a compact card
+    // for the selected nest, only while no dots are selected with it.
     let hn = w.nests[g.hoverNest];
-    if (!hn && mobile) for (const id of g.selection.nests) hn = hn ?? w.nests[id];
-    if (hn) {
+    if (!hn && mobile && nUnits === 0) for (const id of g.selection.nests) hn = hn ?? w.nests[id];
+    if (hn && mobile) {
+      const next = hn.owner === g.human && hn.level < MAX_LEVEL ? `<br><small>Upgrade: ${UPGRADE_COST[hn.level]} dots → ${LEVEL_PERKS[hn.level + 1]}</small>` : '';
+      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL}${next}`;
+      this.nestCard.style.display = 'block';
+    } else if (hn) {
       const owner = hn.owner < 0 ? 'Unclaimed' : hn.owner === NEUTRAL ? 'Neutral' : hn.owner === g.human ? 'Yours' : FACTION_NAMES[hn.owner];
-      const next = hn.level < MAX_LEVEL ? `<br>Next: <b>Lv${hn.level + 1}</b> for ${UPGRADE_COST[hn.level]} dots (${mobile ? 'Upgrade' : 'U'}): ${LEVEL_PERKS[hn.level + 1]}` : '';
-      const rally = mobile && hn.owner === g.human && g.selection.nests.has(hn.id) ? '<br>Tap the map to set its rally point.' : '';
+      const next = hn.level < MAX_LEVEL ? `<br>Next: <b>Lv${hn.level + 1}</b> for ${UPGRADE_COST[hn.level]} dots (U): ${LEVEL_PERKS[hn.level + 1]}` : '';
       const has = hn.level > 1 ? `<br>Lv${hn.level}: ${LEVEL_PERKS.slice(2, hn.level + 1).join('; ')}` : '';
-      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${has}${hn.owner === g.human ? next : ''}${rally}</small>`;
+      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${has}${hn.owner === g.human ? next : ''}</small>`;
       this.nestCard.style.display = 'block';
     } else {
       this.nestCard.style.display = 'none';
