@@ -9,7 +9,7 @@ npm test           # determinism, spatial, capture, upgrade, bot-FFA smoke test
 npm run build      # static site in dist/ — host anywhere (GitHub Pages, Netlify, S3…)
 ```
 
-CI: `.github/workflows/ci.yml` runs typecheck, tests and build on every push and PR. Pushes to `main` also publish `dist/` to GitHub Pages (Settings → Pages → Source must be "GitHub Actions").
+CI: `.github/workflows/ci.yml` runs typecheck, tests and build on every push and PR. Pushes to `main` publish `dist/` to the `gh-pages` branch, and every PR from this repo gets a playable preview at `…/pr-preview/pr-<n>/` (linked in a PR comment, removed when the PR closes). Settings → Pages → Source must be "Deploy from a branch: `gh-pages` / root".
 
 Balance tools (headless bot matches):
 
