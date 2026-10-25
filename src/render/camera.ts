@@ -15,6 +15,8 @@ export class Camera {
   inset = { top: 0, right: 0, bottom: 0, left: 0 };
   /** device px of empty space allowed beyond a map edge, at least */
   edgePad = 40;
+  /** showing the fitted view, untouched since: refit when the HUD changes size */
+  private fitted = false;
   shake = 0;
   private shakeX = 0;
   private shakeY = 0;
@@ -37,6 +39,10 @@ export class Camera {
     const i = this.inset;
     if (i.top === top && i.bottom === bottom && i.left === left && i.right === right) return false;
     this.inset = { top, right, bottom, left };
+    if (this.fitted) {
+      this.fit();
+      return true;
+    }
     this.computeFit();
     this.zoom = clamp(this.zoom, this.fitZoom * 0.7, this.fitZoom * 5);
     this.clampPos();
@@ -63,9 +69,20 @@ export class Camera {
     this.cx = this.mapW / 2;
     this.cy = this.mapH / 2;
     this.clampPos();
+    this.fitted = true;
+  }
+
+  /** Center on a world point (optionally at a new zoom); leaves the fitted view. */
+  focus(x: number, y: number, zoom = this.zoom): void {
+    this.fitted = false;
+    this.zoom = clamp(zoom, this.fitZoom * 0.7, this.fitZoom * 5);
+    this.cx = x;
+    this.cy = y;
+    this.clampPos();
   }
 
   zoomAt(sx: number, sy: number, factor: number): void {
+    this.fitted = false;
     const [wx, wy] = this.toWorld(sx, sy);
     this.zoom = clamp(this.zoom * factor, this.fitZoom * 0.7, this.fitZoom * 5);
     const [nx, ny] = this.toWorld(sx, sy);
@@ -75,6 +92,7 @@ export class Camera {
   }
 
   pan(dxPx: number, dyPx: number): void {
+    this.fitted = false;
     this.cx -= dxPx / this.zoom;
     this.cy -= dyPx / this.zoom;
     this.clampPos();

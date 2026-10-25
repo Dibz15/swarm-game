@@ -102,6 +102,8 @@ describe('tutorial (#17)', () => {
           w.fx = [];
           w.deaths = [];
           run.update({ w, human: me, log });
+          // Every step's demo must build from live state without throwing.
+          if (w.tick % 90 === 0) expect(Array.isArray(run.current?.demo?.({ w, human: me, log }) ?? [])).toBe(true);
         }
         if (!portrait) times.push(`${m.id} ${(w.tick / TICK_HZ).toFixed(0)}s`);
         expect(run.step, `stuck on step ${run.step + 1}: ${run.current?.text.desktop}`).toBe(m.steps.length);

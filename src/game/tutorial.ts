@@ -3,6 +3,8 @@ import { NEUTRAL, NestType } from '../sim/constants';
 import type { MatchSetup } from '../sim/setup';
 import type { CrystalSpec, FieldSpec, Capsule } from '../sim/terrain';
 import type { World } from '../sim/world';
+import type { DemoAction } from '../ui/demo';
+import { UNIT_FEEDING } from '../sim/world';
 import type { TimedCommand } from './session';
 
 /**
@@ -29,6 +31,8 @@ export interface Step {
   done: (c: StepCtx) => boolean;
   /** nests to pulse while this step is active */
   highlight?: (c: StepCtx) => number[];
+  /** a ghost cursor acting the step out on the map (world coordinates) */
+  demo?: (c: StepCtx) => DemoAction[];
 }
 
 export interface Mission {
@@ -97,6 +101,40 @@ const ordered = (c: StepCtx, t: TimedCommand['cmd']['t']) => c.log.some((l) => l
 const unowned = (ids: number[]) => (c: StepCtx) => ids.filter((id) => c.w.nests[id]?.owner !== c.human);
 const won = (c: StepCtx) => c.w.over && c.w.winnerTeam === c.w.teamOf[c.human];
 
+// ---- demos -------------------------------------------------------------------
+
+/** Box-select the main group of the player's dots (the ones near their middle). */
+function selectArmy(c: StepCtx, max = 260): DemoAction[] {
+  const { w, human } = c;
+  let cx = 0, cy = 0, n = 0;
+  for (let i = 0; i < w.n; i++) {
+    if (!w.alive[i] || w.owner[i] !== human || w.state[i] === UNIT_FEEDING) continue;
+    cx += w.x[i];
+    cy += w.y[i];
+    n++;
+  }
+  if (!n) return [];
+  cx /= n;
+  cy /= n;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < w.n; i++) {
+    if (!w.alive[i] || w.owner[i] !== human || w.state[i] === UNIT_FEEDING) continue;
+    if ((w.x[i] - cx) ** 2 + (w.y[i] - cy) ** 2 > max * max) continue;
+    x0 = Math.min(x0, w.x[i]);
+    y0 = Math.min(y0, w.y[i]);
+    x1 = Math.max(x1, w.x[i]);
+    y1 = Math.max(y1, w.y[i]);
+  }
+  return [{ t: 'drag', from: [x0 - 24, y0 - 24], to: [x1 + 24, y1 + 24] }];
+}
+
+const at = (c: StepCtx, id: number): [number, number] => [c.w.nests[id].x, c.w.nests[id].y];
+/** Select the army and send it at the first nest in `ids` the player doesn't hold. */
+const sendTo = (ids: (c: StepCtx) => number[]) => (c: StepCtx): DemoAction[] => {
+  const id = ids(c).find((i) => c.w.nests[i].owner !== c.human);
+  return id === undefined ? [] : [...selectArmy(c), { t: 'tap', at: at(c, id), order: true }];
+};
+
 // ---- the missions ----------------------------------------------------------------
 
 export const MISSIONS: Mission[] = [
@@ -115,14 +153,16 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => owned(c) >= 2,
         highlight: unowned([1]),
+        demo: sendTo(() => [1]),
       },
       {
         text: {
-          desktop: 'Captured nests make dots for you. Take the last nest too: it has more guards, so bring everyone.',
-          mobile: 'Captured nests make dots for you. Take the last nest too: it has more guards, so bring everyone.',
+          desktop: 'Captured nests make dots for you. Take the last nest too: it has more guards, so bring everyone. <small>WASD or middle-drag moves the map, the wheel zooms.</small>',
+          mobile: 'Captured nests make dots for you. Take the last nest too: it has more guards, so bring everyone. <small>Two fingers move and zoom the map.</small>',
         },
         done: (c) => owned(c) >= 3,
         highlight: unowned([2]),
+        demo: sendTo(() => [2]),
       },
     ],
   },
@@ -148,6 +188,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => ordered(c, 'rally'),
         highlight: () => [1],
+        demo: (c) => [{ t: 'tap', at: at(c, 0) }, { t: 'tap', at: at(c, 1), order: true }],
       },
       {
         text: {
@@ -156,6 +197,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[1].owner === c.human && c.w.nests[2].owner === c.human,
         highlight: unowned([1, 2]),
+        demo: sendTo(() => [1, 2]),
       },
       {
         text: {
@@ -164,6 +206,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[3].owner === c.human,
         highlight: unowned([3]),
+        demo: sendTo(() => [3]),
       },
     ],
   },
@@ -197,6 +240,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[2].owner === c.human && c.w.nests[3].owner === c.human,
         highlight: unowned([2, 3]),
+        demo: sendTo(() => [2, 3]),
       },
       {
         text: {
@@ -205,6 +249,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => ordered(c, 'surge'),
         highlight: unowned([4]),
+        demo: (c) => [...selectArmy(c), { t: 'button', a: 'surge' }],
       },
       {
         text: {
@@ -213,6 +258,7 @@ export const MISSIONS: Mission[] = [
         },
         done: won,
         highlight: (c) => c.w.nests.filter((n) => n.owner !== c.human && n.owner >= 0 && n.owner !== NEUTRAL).map((n) => n.id),
+        demo: sendTo((c) => c.w.nests.filter((n) => n.owner !== c.human && n.owner >= 0 && n.owner !== NEUTRAL).map((n) => n.id)),
       },
     ],
   },
@@ -247,6 +293,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests.some((n) => n.owner === c.human && n.level >= 2),
         highlight: () => [0],
+        demo: (c) => [{ t: 'tap', at: at(c, 0) }, { t: 'button', a: 'upgrade' }],
       },
       {
         text: {
@@ -255,6 +302,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => ordered(c, 'barrage'),
         highlight: () => [2],
+        demo: (c) => [{ t: 'button', a: 'barrage' }, { t: 'tap', at: at(c, 2) }],
       },
       {
         text: {
@@ -263,6 +311,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => ordered(c, 'nova'),
         highlight: () => [0],
+        demo: (c) => [...selectArmy(c), { t: 'button', a: 'nova' }],
       },
       {
         text: {
@@ -271,6 +320,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[2].owner === c.human,
         highlight: unowned([2]),
+        demo: sendTo(() => [2]),
       },
     ],
   },
@@ -314,6 +364,7 @@ export const MISSIONS: Mission[] = [
           mobile: 'Crystals charge energy while your dots stand on them. Park a few dots on the glowing crystal near home.',
         },
         done: (c) => c.w.crystals.some((k) => k.holder === c.human),
+        demo: (c) => [...selectArmy(c, 80), { t: 'tap', at: [c.w.crystals[0].x, c.w.crystals[0].y], order: true }],
       },
       {
         text: {
@@ -326,6 +377,7 @@ export const MISSIONS: Mission[] = [
           const left = c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id);
           return left.length ? left : [0];
         },
+        demo: sendTo((c) => c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id)),
       },
     ],
   },

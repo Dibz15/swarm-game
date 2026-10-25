@@ -30,6 +30,10 @@ export class InputController {
   onPause: () => void = () => {};
 
   private ptrs = new Map<number, Ptr>();
+  /** a finger or button is down on the map (the tutorial demo steps aside) */
+  get busy(): boolean {
+    return this.ptrs.size > 0;
+  }
   private boxEl: HTMLDivElement;
   private boxing = false;
   private panning = false;
@@ -346,18 +350,11 @@ export class InputController {
         break;
       }
       case 'c':
-        if (!this.centerOnSelection()) {
-          const [x, y] = g.homePoint();
-          this.camera.cx = x;
-          this.camera.cy = y;
-        }
+        if (!this.centerOnSelection()) this.camera.focus(...g.homePoint());
         break;
-      case 'h': {
-        const [x, y] = g.homePoint();
-        this.camera.cx = x;
-        this.camera.cy = y;
+      case 'h':
+        this.camera.focus(...g.homePoint());
         break;
-      }
       case '0':
         this.camera.fit();
         break;
@@ -377,9 +374,7 @@ export class InputController {
   private centerOnSelection(): boolean {
     const c = this.game?.selectionCenter();
     if (!c) return false;
-    this.camera.cx = c[0];
-    this.camera.cy = c[1];
-    this.camera.clampPos();
+    this.camera.focus(c[0], c[1]);
     return true;
   }
 

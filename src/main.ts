@@ -15,6 +15,7 @@ import { PERSONALITIES } from './sim/ai/bot';
 import { Kind, MAX_UNITS, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
+import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
 import { buildSetup, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
@@ -42,6 +43,9 @@ class App {
   private recSaved = false;
   /** the current match is the tutorial's graduation 1v1 */
   private graduation = false;
+  /** ghost cursor acting out the current tutorial step */
+  private demoOverlay: DemoOverlay | null = null;
+  private demoKey = '';
   private last = 0;
   private time = 0;
   private frames = 0;
@@ -211,8 +215,23 @@ class App {
     const g = this.game!;
     g.mission = new MissionRun(m, i);
     g.locked = new Set(m.locked);
+    this.demoOverlay = new DemoOverlay(this.ui, this.camera, () => this.renderer.dpr, isMobile);
     // Tutorial maps are small: show all of it.
     this.camera.fit();
+  }
+
+  /** Restart the ghost-cursor demo whenever the tutorial step changes. */
+  private updateDemo(g: GameView, dt: number): void {
+    const d = this.demoOverlay;
+    const m = g.mission;
+    if (!d || !m) return;
+    const key = `${m.step}`;
+    if (key !== this.demoKey) {
+      this.demoKey = key;
+      const step = m.current;
+      d.play(step?.demo ? () => step.demo!({ w: g.world, human: g.human, log: g.session.log }) : null);
+    }
+    d.update(dt, !g.result && !g.session.paused && !this.input.busy);
   }
 
   /** Record a finished (or skipped) mission and move on. */
@@ -304,14 +323,14 @@ class App {
     if (record) this.hud.toast(opts.scenario ? `Recording: ${opts.scenario}` : 'Recording this match', '#8aa0b8');
     // Open on the player's home, zoomed in a little.
     const [hx, hy] = this.game.homePoint();
-    this.camera.zoom = this.camera.fitZoom * 1.15;
-    this.camera.cx = hx;
-    this.camera.cy = hy;
-    this.camera.clampPos();
+    this.camera.focus(hx, hy, this.camera.fitZoom * 1.15);
   }
 
   private endGame(reason: EndReason = 'quit'): void {
     this.saveRec(reason, true);
+    this.demoOverlay?.destroy();
+    this.demoOverlay = null;
+    this.demoKey = '';
     this.hud?.destroy();
     this.hud = null;
     this.camera.setInsets(0, 0);
@@ -467,6 +486,7 @@ class App {
       if (g.result) this.saveRec(g.result, true);
       this.hud?.update(g, dt);
       this.applyInsets();
+      this.updateDemo(g, dt);
       g.render(this.time);
       if (g.result && !this.endShown && this.time - g.resultTime > 1.6) this.showEnd();
     } else if (this.demo) {
