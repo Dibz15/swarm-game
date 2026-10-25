@@ -536,7 +536,7 @@ export class Bot {
       cy /= group.length;
       // Only worth it for long walks (walls make walks longer, and Blink jumps
       // them); land short of the nest, not on its turret.
-      const d = Math.hypot(target.x - cx, target.y - cy);
+      const d = Math.sqrt((target.x - cx) ** 2 + (target.y - cy) ** 2);
       if (w.terrain.pathDist(cx, cy, target.x, target.y, w.tick) > POWER.blinkRange + 120 && d > 110) {
         const k = Math.min(POWER.blinkRange, d - 50) / d;
         this.issue(w, { t: 'blink', p: me, units: group.map((s) => w.uid[s]), x: cx + (target.x - cx) * k, y: cy + (target.y - cy) * k });
@@ -590,7 +590,7 @@ export class Bot {
     // Barrage is artillery: for enemies massed apart from our own troops
     // (standing off or dug in), or, when energy allows, smaller fights.
     if (ne >= 12 && fa.energy >= POWER.barrageCost && hasPower(w, me, 'barrage')) {
-      const apart = own.length === 0 || Math.hypot(ex / ne - ox / own.length, ey / ne - oy / own.length) > 45;
+      const apart = own.length === 0 || (ex / ne - ox / own.length) ** 2 + (ey / ne - oy / own.length) ** 2 > 45 * 45;
       // In small skirmishes keep a cushion so energy can still build to a Nova.
       if (apart ? this.spendable(w, POWER.barrageCost) : !brawl && this.spendable(w, POWER.barrageCost + 20)) {
         this.issue(w, { t: 'barrage', p: me, x: ex / ne, y: ey / ne });
