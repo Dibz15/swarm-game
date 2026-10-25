@@ -154,6 +154,7 @@ export function missionDebrief(
         <small class="eyebrow">Mission ${i + 1} of ${MISSIONS.length}</small>
         <h2>${won ? (last ? 'Graduated' : 'Mission complete') : 'Defeated'}</h2>
         ${body}
+        ${!last ? `<p class="hint">Next: ${MISSIONS[i + 1].title}. ${MISSIONS[i + 1].teaches}</p>` : ''}
         <div class="row end">
           <button data-a="menu">Main menu</button>
           ${won ? '' : '<button data-a="retry">Retry</button>'}

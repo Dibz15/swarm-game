@@ -245,8 +245,9 @@ class App {
     saveProgress(p);
   }
 
+  /** Straight into the next mission: the debrief already said what's next, and the coach names it. */
   private afterMission(i: number): void {
-    if (i < MISSIONS.length - 1) this.briefMission(i + 1);
+    if (i < MISSIONS.length - 1) this.playMission(i + 1);
     else this.playSuggested('normal1v1', true);
   }
 
