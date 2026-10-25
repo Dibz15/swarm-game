@@ -25,15 +25,19 @@ interface DifficultyKnobs {
   noise: number;
   /** production multiplier (only Brutal cheats) */
   prod: number;
-  /** stream new spawns to the front instead of idling at home */
-  frontRally: boolean;
+  /** share of the home reserve kept during the opening (humans keep none) */
+  openReserve: number;
+  /** fight size (own and hostile units) worth a Surge */
+  surgeAt: number;
+  /** energy at which a bot stops saving and spends on any real fight (income is wasted at the max) */
+  dumpAt: number;
 }
 
 export const DIFFICULTY: readonly DifficultyKnobs[] = [
-  { think: 80, margin: 1.9, powers: false, upgradeSkill: 0.35, noise: 0.6, prod: 1, frontRally: false },
-  { think: 45, margin: 1.45, powers: true, upgradeSkill: 0.7, noise: 0.3, prod: 1, frontRally: false },
-  { think: 24, margin: 1.25, powers: true, upgradeSkill: 1, noise: 0.12, prod: 1, frontRally: true },
-  { think: 14, margin: 1.15, powers: true, upgradeSkill: 1, noise: 0.06, prod: 1.25, frontRally: true },
+  { think: 80, margin: 1.9, powers: false, upgradeSkill: 0.35, noise: 0.6, prod: 1, openReserve: 1, surgeAt: 10, dumpAt: 101 },
+  { think: 45, margin: 1.45, powers: true, upgradeSkill: 0.7, noise: 0.3, prod: 1, openReserve: 0.5, surgeAt: 8, dumpAt: 95 },
+  { think: 24, margin: 1.25, powers: true, upgradeSkill: 1, noise: 0.12, prod: 1, openReserve: 0, surgeAt: 6, dumpAt: 85 },
+  { think: 14, margin: 1.15, powers: true, upgradeSkill: 1, noise: 0.06, prod: 1.25, openReserve: 0, surgeAt: 6, dumpAt: 85 },
 ];
 
 interface PersonalityKnobs {
@@ -58,7 +62,7 @@ interface PersonalityKnobs {
   colossus: number;
 }
 
-const PERSONALITY: Record<Personality, PersonalityKnobs> = {
+export const PERSONALITY: Record<Personality, PersonalityKnobs> = {
   rusher: { neutral: 1.3, enemy: 1.5, margin: 1.0, upgrade: 0.9, reserve: 0.15, weakest: 1, bastion: 0.6, vulture: 1, eagerSurge: true, reach: 1.3, crystal: 0.6, colossus: 1.2 },
   turtler: { neutral: 1.0, enemy: 0.8, margin: 1.3, upgrade: 1.3, reserve: 0.28, weakest: 1, bastion: 1.8, vulture: 1, eagerSurge: false, reach: 1, crystal: 1.2, colossus: 0.7 },
   expander: { neutral: 1.5, enemy: 0.9, margin: 1.0, upgrade: 0.9, reserve: 0.18, weakest: 1, bastion: 0.9, vulture: 1, eagerSurge: false, reach: 1, crystal: 1, colossus: 0.9 },
@@ -71,7 +75,9 @@ const scratch: number[] = [];
  * Opening phase: all bots favor neutral nests and mostly leave players alone,
  * so aggressive personalities don't bleed out before they have an economy.
  */
-const OPENING = { ticks: 90 * 30, neutral: 1.6, enemy: 0.35 };
+const OPENING = { ticks: 90 * 30, neutral: 1.6, enemy: 0.35,
+  /** nests held before crystals are worth a squad during the opening */
+  crystalNests: 3 };
 
 /** Energy bots keep banked for a Nova once their army is this big. */
 const NOVA_RESERVE = { minArmy: 30, energy: 25 };
@@ -328,7 +334,7 @@ export class Bot {
     // Supply blocked: a capped army only has value if it's used, so keep a
     // thinner reserve, take riskier fights and reach for more nests.
     const capped = myUnits >= supplyCap(w, me) * SUPPLY_BOT.near;
-    const reserve = threatened ? 0 : Math.floor(total * this.p.reserve * (capped ? SUPPLY_BOT.reserve : 1));
+    const reserve = threatened ? 0 : Math.floor(total * this.p.reserve * (capped ? SUPPLY_BOT.reserve : 1) * (opening ? this.d.openReserve : 1));
     const available = idle.length - used.size - reserve;
     for (const n of w.nests) {
       if (n.owner >= 0 && w.teamOf[n.owner] === myTeam) continue;
@@ -391,7 +397,9 @@ export class Bot {
     // 2b) Map objectives: crystals nobody on our team holds, supply drops
     // (worth more, and every personality wants them), and a weakened Colossus.
     const objectives: { x: number; y: number; r: number; value: number; trip: number; min: number }[] = [];
-    if (this.rng.next() < 0.6 * this.p.crystal) {
+    // Not in the opening: dots spent holding a crystal delay the first
+    // expansions (Easy bots don't plan their opening).
+    if ((!opening || mine.length >= OPENING.crystalNests || this.d.openReserve >= 1) && this.rng.next() < 0.6 * this.p.crystal) {
       for (const c of w.crystals) {
         if (c.holder < 0 || w.teamOf[c.holder] !== myTeam) objectives.push({ x: c.x, y: c.y, r: c.r, value: 1, trip: CRYSTAL.maxTrip, min: CRYSTAL.guard });
       }
@@ -450,23 +458,8 @@ export class Bot {
       }
     }
 
-    // Rally: easy bots idle new spawns at home; better bots stream them to
-    // the friendly nest closest to the current target.
-    if (this.d.frontRally && best && mine.length > 0) {
-      let front = mine[0];
-      let fd = Infinity;
-      for (const n of mine) {
-        const d = (n.x - best.x) ** 2 + (n.y - best.y) ** 2;
-        if (d < fd) {
-          fd = d;
-          front = n;
-        }
-      }
-      const toRally = mine.filter((n) => n !== front && hostile[n.id] === 0).map((n) => n.id);
-      const rx = this.cfg.personality === 'rusher' ? best.x : front.x;
-      const ry = this.cfg.personality === 'rusher' ? best.y : front.y;
-      if (toRally.length) this.issue(w, { t: 'rally', p: me, nests: toRally, x: rx, y: ry });
-    }
+    // No front rally: new spawns gather at home and join the next attack as a
+    // group. Streaming them to the front fed fights one dot at a time (#28).
 
     // 3) Feed nests when there is slack: repair a damaged nest once the
     // threat is gone, or level up a safe one while the match is young enough
@@ -581,6 +574,12 @@ export class Bot {
       ne++;
     }
     const brawl = own.length >= 12 && bestH >= 16;
+    // Near full energy: income is being wasted, so spend on whatever fight this is.
+    if (fa.energy >= this.d.dumpAt && own.length >= 6 && bestH >= 6) {
+      if (fa.energy >= POWER.novaCost && bestH >= 12) this.issue(w, { t: 'nova', p: me, units: uids });
+      else this.issue(w, { t: 'surge', p: me, units: uids });
+      return;
+    }
 
     // Nova is the answer to a big brawl right on top of us.
     if (brawl && fa.energy >= POWER.novaCost) {
@@ -611,7 +610,7 @@ export class Bot {
     } else if (this.p.eagerSurge && bestH >= 6 && own.length >= 6) {
       // Rushers spend energy on Surge the moment a fight starts.
       this.issue(w, { t: 'surge', p: me, units: uids });
-    } else if (bestH >= 10 && own.length >= 10 && this.spendable(w, POWER.surgeCost + (this.cfg.difficulty >= 2 ? 25 : 0))) {
+    } else if (bestH >= this.d.surgeAt && own.length >= this.d.surgeAt && this.spendable(w, POWER.surgeCost + (this.cfg.difficulty >= 2 ? 25 : 0))) {
       this.issue(w, { t: 'surge', p: me, units: uids });
     }
   }
