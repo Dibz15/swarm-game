@@ -10,15 +10,17 @@ export interface AmbienceState {
   music: number;
 }
 
+/** Lowpass ceiling: the LFO adds up to ±60 Hz on top. */
+const MAX_CUTOFF = 640;
+
 /**
- * Slow generative drone underneath everything. Tension opens the filter and
- * brings in a shimmer; danger darkens it with a minor second; escalation adds
- * a heartbeat pulse.
+ * Slow generative drone underneath everything. Tension swells it and opens the
+ * filter a little; danger darkens it with a minor second; escalation adds a
+ * heartbeat pulse. Everything stays below ~700 Hz so it never gets shrill.
  */
 export class Ambience {
   private filter: BiquadFilterNode;
   private droneGain: GainNode;
-  private shimmerGain: GainNode;
   private dissonance: GainNode;
   private nextBeat = 0;
   private time = 0;
@@ -29,7 +31,7 @@ export class Ambience {
     this.filter = ctx.createBiquadFilter();
     this.filter.type = 'lowpass';
     this.filter.frequency.value = 380;
-    this.filter.Q.value = 2.5;
+    this.filter.Q.value = 1.5;
     this.droneGain = ctx.createGain();
     this.droneGain.gain.value = 0;
     this.filter.connect(this.droneGain).connect(out);
@@ -58,42 +60,18 @@ export class Ambience {
     const lfo = ctx.createOscillator();
     lfo.frequency.value = 0.07;
     const lfoAmt = ctx.createGain();
-    lfoAmt.gain.value = 90;
+    lfoAmt.gain.value = 60;
     lfo.connect(lfoAmt).connect(this.filter.frequency);
     lfo.start(t);
 
-    // Danger: a minor second against the root.
+    // Danger: a minor second against the root, triangle so it darkens without fizz.
     this.dissonance = ctx.createGain();
     this.dissonance.gain.value = 0;
     const d = ctx.createOscillator();
-    d.type = 'sawtooth';
+    d.type = 'triangle';
     d.frequency.value = 58.27;
     d.connect(this.dissonance).connect(this.filter);
     d.start(t);
-
-    // Shimmer: high sines with tremolo, sent mostly to reverb.
-    this.shimmerGain = ctx.createGain();
-    this.shimmerGain.gain.value = 0;
-    const trem = ctx.createGain();
-    trem.gain.value = 0.5;
-    const tlfo = ctx.createOscillator();
-    tlfo.frequency.value = 5.5;
-    const tAmt = ctx.createGain();
-    tAmt.gain.value = 0.5;
-    tlfo.connect(tAmt).connect(trem.gain);
-    tlfo.start(t);
-    for (const f of [880, 1318.5, 1760 * 1.003]) {
-      const o = ctx.createOscillator();
-      o.type = 'sine';
-      o.frequency.value = f;
-      o.connect(trem);
-      o.start(t);
-    }
-    trem.connect(this.shimmerGain);
-    this.shimmerGain.connect(reverb);
-    const dry = ctx.createGain();
-    dry.gain.value = 0.25;
-    this.shimmerGain.connect(dry).connect(out);
   }
 
   update(dt: number, s: AmbienceState): void {
@@ -105,10 +83,9 @@ export class Ambience {
 
     const base = s.inGame ? 0.05 : 0.035;
     const duck = 1 - 0.45 * s.music;
-    this.droneGain.gain.setTargetAtTime(base * this.level * duck * (1 + s.tension * 0.6), t, 0.8);
-    this.filter.frequency.setTargetAtTime(320 + s.tension * 1300 + s.escalation * 300, t, 0.9);
-    this.dissonance.gain.setTargetAtTime(s.danger * 0.22, t, 0.6);
-    this.shimmerGain.gain.setTargetAtTime(this.level * (0.004 + s.tension * 0.014), t, 1.2);
+    this.droneGain.gain.setTargetAtTime(base * this.level * duck * (1 + s.tension * 0.8), t, 0.8);
+    this.filter.frequency.setTargetAtTime(Math.min(MAX_CUTOFF, 320 + s.tension * 300 + s.escalation * 80), t, 0.9);
+    this.dissonance.gain.setTargetAtTime(s.danger * 0.34, t, 0.6);
 
     // Heartbeat once escalation starts; faster with tension.
     if (s.inGame && s.escalation > 0) {
