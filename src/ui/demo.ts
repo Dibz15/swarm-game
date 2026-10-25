@@ -117,7 +117,9 @@ export class DemoOverlay {
         moveTo(p);
         phases.push({ dur: PRESS, at: () => p(), press: touch ? 'tap' : a.order ? 'right-click' : 'click' });
       } else {
-        const p = () => this.buttonAt(a.a) ?? cur?.() ?? [innerWidth / 2, innerHeight - 60];
+        // A button not on screen yet (Upgrade before a nest is picked): stay where we were.
+        const prev = cur;
+        const p = (): [number, number] => this.buttonAt(a.a) ?? prev?.() ?? [innerWidth / 2, innerHeight - 60];
         moveTo(p);
         phases.push({ dur: PRESS, at: () => p(), press: touch ? 'tap' : 'click' });
       }

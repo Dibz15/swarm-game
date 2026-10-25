@@ -231,7 +231,14 @@ class App {
       const step = m.current;
       d.play(step?.demo ? () => step.demo!({ w: g.world, human: g.human, log: g.session.log }) : null);
     }
-    d.update(dt, !g.result && !g.session.paused && !this.input.busy);
+    // The demo is decoration: if it ever breaks, drop it rather than the game loop.
+    try {
+      d.update(dt, !g.result && !g.session.paused && !this.input.busy);
+    } catch (err) {
+      console.error('tutorial demo stopped', err);
+      d.destroy();
+      this.demoOverlay = null;
+    }
   }
 
   /** Record a finished (or skipped) mission and move on. */
