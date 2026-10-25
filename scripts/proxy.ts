@@ -17,9 +17,13 @@ export interface ProxyKnobs {
   upgradeEvery: number;
   /** seconds to notice a nest under attack (recordings: ~6 s) */
   react: number;
+  /** share of the enemy army within 380 px of an enemy nest counted as its defense */
+  scout: number;
 }
 
-export const PROXY: ProxyKnobs = { every: 5, margin: 1.2, upgradeEvery: 30, react: 6 };
+export const PROXY: ProxyKnobs = { every: 5, margin: 1.2, upgradeEvery: 30, react: 6, scout: 0 };
+// Tuning, e.g. PROXY='{"react":2}'
+if (typeof process !== 'undefined' && process.env.PROXY) Object.assign(PROXY, JSON.parse(process.env.PROXY));
 
 const scratch: number[] = [];
 
@@ -37,6 +41,14 @@ export class Proxy {
     let h = 0;
     queryRadius(w, n.x, n.y, n.r + 70, scratch);
     for (const s of scratch) if (w.teamOf[w.owner[s]] !== team) h += UNIT_STATS[w.kind[s]].weight;
+    if (this.k.scout > 0 && n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] !== team) {
+      const r2 = (n.r + 70) ** 2;
+      queryRadius(w, n.x, n.y, 380, scratch);
+      for (const s of scratch) {
+        if (w.owner[s] === NEUTRAL || w.teamOf[w.owner[s]] === team) continue;
+        if ((w.x[s] - n.x) ** 2 + (w.y[s] - n.y) ** 2 > r2) h += UNIT_STATS[w.kind[s]].weight * this.k.scout;
+      }
+    }
     if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] !== team) {
       if (n.type === NestType.Bastion && n.control > 0.5) {
         const t = bastionTurret(n.owner, n.level);

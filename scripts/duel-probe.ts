@@ -27,17 +27,18 @@ proto.issue = function (this: Bot, w: World, c: Command) {
 };
 
 interface Side {
+  kd: number[];
   n2: number[];
   n3: number[];
   peak: number[];
   powersPerMin: number[];
 }
-const side = (): Side => ({ n2: [], n3: [], peak: [], powersPerMin: [] });
+const side = (): Side => ({ kd: [], n2: [], n3: [], peak: [], powersPerMin: [] });
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
 const f1 = (v: number) => (Number.isFinite(v) ? v.toFixed(0) : '-').padStart(5);
 
 console.log(`1v1 vs human proxy, difficulty ${difficulty}, ${games} games per personality per size (${sizes.join(', ')}), terrain ${TERRAIN}, caves ${CAVES}, events ${EVENTS}`);
-console.log(`${'personality'.padEnd(12)}  bot win  avg min  |  2nd nest s  3rd nest s  peak army  powers/min  (bot vs proxy)`);
+console.log(`${'personality'.padEnd(12)}  bot win  avg min  |  2nd nest s  3rd nest s  peak army  powers/min  kill/loss  (bot vs proxy)`);
 for (const pers of PERSONALITIES as readonly Personality[]) {
   let wins = 0, played = 0, ticks = 0;
   const bot = side(), px = side();
@@ -83,6 +84,7 @@ for (const pers of PERSONALITIES as readonly Personality[]) {
         if (firsts[f][0] >= 0) s.n2.push(firsts[f][0]);
         if (firsts[f][1] >= 0) s.n3.push(firsts[f][1]);
         s.peak.push(peaks[f]);
+        s.kd.push(w.factions[f].stats.kills / Math.max(1, w.factions[f].stats.lost));
         s.powersPerMin.push(p / mins);
       }
     }
@@ -90,6 +92,6 @@ for (const pers of PERSONALITIES as readonly Personality[]) {
   const pct = ((100 * wins) / played).toFixed(0).padStart(4);
   const len = (ticks / played / TICK_HZ / 60).toFixed(1).padStart(6);
   console.log(
-    `${pers.padEnd(12)}  ${pct}%  ${len}   |  ${f1(avg(bot.n2))} ${f1(avg(px.n2))}  ${f1(avg(bot.n3))} ${f1(avg(px.n3))}  ${f1(avg(bot.peak))} ${f1(avg(px.peak))}  ${avg(bot.powersPerMin).toFixed(1).padStart(5)} ${avg(px.powersPerMin).toFixed(1).padStart(5)}`,
+    `${pers.padEnd(12)}  ${pct}%  ${len}   |  ${f1(avg(bot.n2))} ${f1(avg(px.n2))}  ${f1(avg(bot.n3))} ${f1(avg(px.n3))}  ${f1(avg(bot.peak))} ${f1(avg(px.peak))}  ${avg(bot.powersPerMin).toFixed(1).padStart(5)} ${avg(px.powersPerMin).toFixed(1).padStart(5)}  ${avg(bot.kd).toFixed(2).padStart(5)} ${avg(px.kd).toFixed(2).padStart(5)}`,
   );
 }

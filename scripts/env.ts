@@ -1,6 +1,6 @@
 // Shared probe options from the environment, e.g. TERRAIN=standard CAVES=full EVENTS=normal npx vite-node scripts/balance.ts
 import { SUPPLY } from '../src/sim/constants';
-import { DIFFICULTY, PERSONALITY } from '../src/sim/ai/bot';
+import { CROWD, DIFFICULTY, PERSONALITY } from '../src/sim/ai/bot';
 import type { CaveLevel, EventLevel, TerrainLevel } from '../src/sim/mapgen';
 
 export const TERRAIN = (process.env.TERRAIN ?? 'none') as TerrainLevel;
@@ -20,3 +20,5 @@ if (process.env.PERS) {
   const all = JSON.parse(process.env.PERS) as Record<string, object>;
   for (const [p, knobs] of Object.entries(all)) Object.assign(PERSONALITY[p as keyof typeof PERSONALITY], knobs);
 }
+// FFA pile-on knobs, e.g. CROWD='{"k":2}'
+if (process.env.CROWD) Object.assign(CROWD, JSON.parse(process.env.CROWD));

@@ -115,6 +115,22 @@ const EVENT_BOT = {
 /** Crystal squads: how many units hold one, and how far bots will walk for it. */
 const CRYSTAL = { guard: 5, maxTrip: 650 };
 
+/**
+ * FFA pile-ons: a rival other players are already attacking is worth less to
+ * us. Without this every bot sees the same undefended nests and jumps the same
+ * player at once, which reads as scripted (#28).
+ */
+export const CROWD = {
+  /** value falls to 1 / (1 + k * others' attackers / our army) */
+  k: 1,
+  /** px around a nest where an order point counts as attacking it */
+  near: 40,
+  /** our army never counts as smaller than this */
+  minArmy: 20,
+  /** before the runaway rule can kick in, rivals farther than the nearest one are worth up to this much less */
+  neighbor: 0.5,
+};
+
 /** When bots start ganging up on the leader. */
 const RUNAWAY = {
   afterTicks: 100 * 30,
@@ -303,6 +319,35 @@ export class Bot {
       return false;
     };
 
+    // Who else is already attacking each rival: other factions' dots ordered onto its nests.
+    const pressure = new Float64Array(NEUTRAL + 1);
+    if (rivals > 2) {
+      for (let i = 0; i < w.n; i++) {
+        if (!w.alive[i]) continue;
+        const o = w.owner[i];
+        if (o === me || o === NEUTRAL || w.teamOf[o] === myTeam) continue;
+        for (const n of w.nests) {
+          if (n.owner < 0 || n.owner === NEUTRAL || n.owner === o || w.teamOf[n.owner] === w.teamOf[o]) continue;
+          if ((w.ox[i] - n.x) ** 2 + (w.oy[i] - n.y) ** 2 <= (n.r + CROWD.near) ** 2) {
+            pressure[n.owner]++;
+            break;
+          }
+        }
+      }
+    }
+
+    // How far each rival's capital is from ours (walking), and the nearest.
+    const homeDist = new Float64Array(NEUTRAL + 1);
+    let nearestRival = Infinity;
+    if (rivals > 2 && w.tick < RUNAWAY.afterTicks) {
+      const cap = w.nests.find((n) => n.capital && n.owner === me) ?? mine[0];
+      for (const n of w.nests) {
+        if (!cap || !n.capital || n.owner < 0 || n.owner === NEUTRAL || w.teamOf[n.owner] === myTeam) continue;
+        homeDist[n.owner] = w.terrain.pathDist(cap.x, cap.y, n.x, n.y, w.tick);
+        nearestRival = Math.min(nearestRival, homeDist[n.owner]);
+      }
+    }
+
     // Opening: everyone builds an economy first; personalities show after.
     const opening = w.tick < OPENING.ticks;
 
@@ -353,6 +398,11 @@ export class Bot {
         // Third-party: a nest under attack by someone else is softened up.
         if (n.contested && hostileNotOwner(n)) value *= this.p.vulture;
         if (n.owner === leader) value *= leaderBonus;
+        value /= 1 + (CROWD.k * pressure[n.owner]) / Math.max(CROWD.minArmy, myUnits);
+        // Early on, fight your neighbors: nobody crosses the map to jump one player.
+        if (rivals > 2 && w.tick < RUNAWAY.afterTicks && homeDist[n.owner] > 0) {
+          value *= 1 - CROWD.neighbor * (1 - nearestRival / homeDist[n.owner]);
+        }
         // A team about to win by domination is everyone's problem.
         if (w.domTicks[w.teamOf[n.owner]] > 0) {
           value *= DOM_BOT.value;
