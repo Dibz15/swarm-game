@@ -95,7 +95,7 @@ src/sim/      deterministic simulation — no DOM, no Math.random, no clock
 src/game/     LocalSession (fixed-timestep driver + command log), GameView (match + feedback)
 src/render/   WebGL2: instanced units, beams, SDF nest shapes, terrain baked to a distance texture; particles; camera
 src/input/    mouse / touch / keyboard → actions; client-only selection
-src/ui/       DOM HUD, menus, end screen
+src/ui/       DOM HUD, menus, settings, end screen; mobile mode (body.mobile: touch layout + wording)
 src/audio/    procedural WebAudio sound effects
 ```
 
