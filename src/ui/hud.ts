@@ -250,12 +250,17 @@ export class Hud {
     if (key === this.coachKey) return;
     this.coachKey = key;
     this.coach.classList.toggle('on', !!m);
-    if (!m) return;
+    if (!m) {
+      this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
+      return;
+    }
     this.tip.style.display = 'none';
     const step = m.current;
     (this.coach.querySelector('small') as HTMLElement).textContent = `Mission ${m.index + 1} of 5 · ${m.mission.title}`;
     (this.coach.querySelector('p') as HTMLElement).innerHTML = step ? (mobile ? step.text.mobile : step.text.desktop) : 'Mission complete!';
     (this.coach.querySelector('.pips') as HTMLElement).innerHTML = m.mission.steps.map((_, i) => `<i class="${i < m.step ? 'done' : i === m.step ? 'now' : ''}"></i>`).join('');
+    this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
+    if (step?.pulse) this.el.querySelector(step.pulse)?.classList.add('coach-pulse');
     this.coach.classList.remove('pop');
     void this.coach.offsetWidth;
     this.coach.classList.add('pop');

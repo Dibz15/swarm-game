@@ -33,6 +33,8 @@ export interface Step {
   highlight?: (c: StepCtx) => number[];
   /** a ghost cursor acting the step out on the map (world coordinates) */
   demo?: (c: StepCtx) => DemoAction[];
+  /** a HUD element to make glow (a selector inside the HUD), for steps about the HUD */
+  pulse?: string;
 }
 
 export interface Mission {
@@ -201,9 +203,10 @@ export const MISSIONS: Mission[] = [
       },
       {
         text: {
-          desktop: 'Spires make <b>Spears</b>. The wheel (bottom right) shows who beats whom. Walls block the way: go through the gap and take the Spire.',
-          mobile: 'Spires make <b>Spears</b>. The wheel shows who beats whom. Walls block the way: go through the gap and take the Spire.',
+          desktop: 'Spires make <b>Spears</b>. The glowing wheel shows who beats whom. Walls block the way: go through the gap and take the Spire.',
+          mobile: 'Spires make <b>Spears</b>. The glowing wheel shows who beats whom. Walls block the way: go through the gap and take the Spire.',
         },
+        pulse: '.counters',
         done: (c) => c.w.nests[3].owner === c.human,
         highlight: unowned([3]),
         demo: sendTo(() => [3]),
