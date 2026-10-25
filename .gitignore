@@ -3,3 +3,4 @@ dist
 .DS_Store
 .claude/.cc-writes
 vite.config.ts.timestamp-*
+recordings/
