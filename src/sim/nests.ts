@@ -19,7 +19,7 @@ import {
   SUPPLY,
   UNIT_STATS,
 } from './constants';
-import { TAU, dcos, dsin } from './mathx';
+import { TAU, dcos, dpow, dsin } from './mathx';
 import { queryRadius } from './spatial';
 import { pushFx, spawnUnit, UNIT_FEEDING, type Nest, type World } from './world';
 
@@ -201,7 +201,7 @@ function spawn(w: World, n: Nest): void {
   // as the match escalates.
   const k = nestCount[n.owner];
   const exp = BALANCE.nestExponent + (1 - BALANCE.nestExponent) * L;
-  const wide = k > 1 ? Math.pow(k, exp - 1) : 1;
+  const wide = k > 1 ? dpow(k, exp - 1) : 1;
   n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * wide * upkeep;
   const interval = UNIT_STATS[kind].interval;
   if (n.spawnAcc < interval) return;
