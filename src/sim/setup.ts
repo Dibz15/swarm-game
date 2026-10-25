@@ -1,6 +1,6 @@
 import { DOMINATION, Kind, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
-import { generateMap, type EventLevel, type EventParams, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
+import { generateMap, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
 import { initEvents } from './events';
 import { TAU, dcos, dsin } from './mathx';
 import { spawnUnit, World } from './world';
@@ -21,6 +21,8 @@ export interface MatchSetup {
   portrait?: boolean;
   /** terrain preset or explicit amounts (default: none) */
   terrain?: TerrainLevel | TerrainParams;
+  /** cave layout preset or explicit params (default: open map) */
+  caves?: CaveLevel | CaveParams;
   /** neutral map events preset or explicit schedule (default: off) */
   events?: EventLevel | EventParams;
 }
@@ -34,6 +36,7 @@ export function createWorld(setup: MatchSetup): World {
     players: setup.players.length,
     portrait: setup.portrait,
     terrain: setup.terrain,
+    caves: setup.caves,
     events: setup.events,
   });
   const w = new World(setup.seed, map.width, map.height, map.terrain);

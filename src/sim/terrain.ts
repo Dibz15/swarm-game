@@ -2,8 +2,9 @@ import { CELL, TERRAIN } from './constants';
 
 /**
  * Static map terrain: impassable walls plus fields that change how units
- * move or fight. Everything is a capsule (a segment with a radius; a circle
- * when both ends coincide), so collision is exact and cheap.
+ * move or fight. Walls and fields are capsules (a segment with a radius; a
+ * circle when both ends coincide), so collision is exact and cheap. Cave rock
+ * is the complement of carved capsules, kept as a signed-distance grid.
  *
  * Pathing uses flow fields on a TILE grid: one Dijkstra from each
  * destination tile, cached and shared by every unit going there. A field is
@@ -29,10 +30,20 @@ export interface CrystalSpec {
   r: number;
 }
 
+/**
+ * Cave rock: solid wherever the zone is (everywhere when zone is null) and no
+ * carve is. Carves are the chambers and tunnels.
+ */
+export interface CaveSpec {
+  carves: Capsule[];
+  zone: Capsule[] | null;
+}
+
 export interface TerrainSpec {
   walls: Capsule[];
   fields: FieldSpec[];
   crystals: CrystalSpec[];
+  cave?: CaveSpec | null;
 }
 
 export const emptyTerrain = (): TerrainSpec => ({ walls: [], fields: [], crystals: [] });
@@ -77,6 +88,70 @@ function segSegDist2(
   );
 }
 
+/** World px between samples of the rock distance grid. */
+export const ROCK_RES = 8;
+/** distances are only exact this far from a rock edge; deeper reads clamp */
+const ROCK_PAD = 96;
+
+/** Signed distance to cave rock on a grid (positive in the open). */
+export interface RockGrid {
+  cols: number;
+  rows: number;
+  d: Float32Array;
+}
+
+const rockCache = new WeakMap<CaveSpec, RockGrid>();
+
+/** Min signed capsule distance per grid point, within ROCK_PAD of each capsule. */
+function unionDist(caps: Capsule[], cols: number, rows: number): Float32Array {
+  const g = new Float32Array(cols * rows).fill(ROCK_PAD);
+  for (const c of caps) {
+    const R = c.r + ROCK_PAD;
+    const x0 = Math.max(0, Math.floor((Math.min(c.x1, c.x2) - R) / ROCK_RES));
+    const x1 = Math.min(cols - 1, Math.ceil((Math.max(c.x1, c.x2) + R) / ROCK_RES));
+    const y0 = Math.max(0, Math.floor((Math.min(c.y1, c.y2) - R) / ROCK_RES));
+    const y1 = Math.min(rows - 1, Math.ceil((Math.max(c.y1, c.y2) + R) / ROCK_RES));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const k = y * cols + x;
+        const d = capsuleDist(c, x * ROCK_RES, y * ROCK_RES);
+        if (d < g[k]) g[k] = d;
+      }
+    }
+  }
+  return g;
+}
+
+/** The rock distance grid for a cave, built once per spec and shared (sim, mapgen, renderer). */
+export function rockGrid(cave: CaveSpec, width: number, height: number): RockGrid {
+  const hit = rockCache.get(cave);
+  if (hit) return hit;
+  const cols = Math.ceil(width / ROCK_RES) + 1, rows = Math.ceil(height / ROCK_RES) + 1;
+  const open = unionDist(cave.carves, cols, rows);
+  const zone = cave.zone ? unionDist(cave.zone, cols, rows) : null;
+  // Rock = zone minus carves. Its signed distance (negative inside rock) is
+  // the max of the zone's and the carves' inverted one: positive in the open.
+  const d = new Float32Array(cols * rows);
+  for (let k = 0; k < d.length; k++) d[k] = Math.max(zone ? zone[k] : -ROCK_PAD, -open[k]);
+  const g = { cols, rows, d };
+  rockCache.set(cave, g);
+  return g;
+}
+
+/** Bilinear sample of a rock grid at a world point. */
+export function sampleRock(g: RockGrid, x: number, y: number): number {
+  let fx = x / ROCK_RES, fy = y / ROCK_RES;
+  fx = fx < 0 ? 0 : fx > g.cols - 1.001 ? g.cols - 1.001 : fx;
+  fy = fy < 0 ? 0 : fy > g.rows - 1.001 ? g.rows - 1.001 : fy;
+  const x0 = Math.floor(fx), y0 = Math.floor(fy);
+  const ax = fx - x0, ay = fy - y0;
+  const k = y0 * g.cols + x0;
+  const d = g.d;
+  const top = d[k] + (d[k + 1] - d[k]) * ax;
+  const bot = d[k + g.cols] + (d[k + g.cols + 1] - d[k + g.cols]) * ax;
+  return top + (bot - top) * ay;
+}
+
 // Neighbor offsets: 4 orthogonal, then 4 diagonal.
 const NX = [1, -1, 0, 0, 1, -1, 1, -1];
 const NY = [0, 0, 1, -1, 1, 1, -1, -1];
@@ -110,6 +185,8 @@ export class Terrain {
   /** walls, nebula or rifts: units need flow fields */
   readonly hasPaths: boolean;
   readonly hasFields: boolean;
+  /** cave rock distance grid, or null on open maps */
+  readonly rock: RockGrid | null;
 
   // Walls bucketed per spatial CELL (CSR), for collision and line of sight.
   private readonly ccols: number;
@@ -132,11 +209,19 @@ export class Terrain {
     this.cols = Math.ceil(width / TILE);
     this.rows = Math.ceil(height / TILE);
     this.flags = new Uint8Array(this.cols * this.rows);
-    this.hasWalls = spec.walls.length > 0;
+    this.rock = spec.cave ? rockGrid(spec.cave, width, height) : null;
+    this.hasWalls = spec.walls.length > 0 || !!this.rock;
     this.hasFields = spec.fields.length > 0;
     this.hasPaths = this.hasWalls || this.hasFields;
 
     for (const c of spec.walls) this.raster(c, TERRAIN.wallMargin, T_BLOCK);
+    if (this.rock) {
+      for (let ty = 0; ty < this.rows; ty++) {
+        for (let tx = 0; tx < this.cols; tx++) {
+          if (sampleRock(this.rock, (tx + 0.5) * TILE, (ty + 0.5) * TILE) < TERRAIN.wallMargin) this.flags[ty * this.cols + tx] |= T_BLOCK;
+        }
+      }
+    }
     for (const f of spec.fields) this.raster(f, 0, f.kind === 'nebula' ? T_NEBULA : T_RIFT);
 
     this.ccols = Math.ceil(width / CELL) + 1;
@@ -228,6 +313,22 @@ export class Terrain {
         }
         hit = moved = true;
       }
+      const g = this.rock;
+      if (g) {
+        // Cave rock: push out along the distance gradient.
+        const d = sampleRock(g, x, y);
+        if (d < rad) {
+          const h = ROCK_RES * 0.5;
+          const gx = sampleRock(g, x + h, y) - sampleRock(g, x - h, y);
+          const gy = sampleRock(g, x, y + h) - sampleRock(g, x, y - h);
+          const l = Math.sqrt(gx * gx + gy * gy);
+          if (l > 1e-9) {
+            x += (gx / l) * (rad - d);
+            y += (gy / l) * (rad - d);
+            hit = moved = true;
+          }
+        }
+      }
       if (!hit) break;
     }
     this.ox = x;
@@ -235,9 +336,28 @@ export class Terrain {
     return moved;
   }
 
+  /** Signed distance to cave rock at a point (Infinity on open maps). */
+  rockDist(x: number, y: number): number {
+    return this.rock ? sampleRock(this.rock, x, y) : Infinity;
+  }
+
+  /** Distance from a point to the nearest wall or rock edge (negative inside). For mapgen. */
+  clearance(x: number, y: number): number {
+    let d = this.rockDist(x, y);
+    for (const c of this.spec.walls) d = Math.min(d, capsuleDist(c, x, y));
+    return d;
+  }
+
   /** Nearest point at least `clear` from every wall (for order points, blinks). */
   freePoint(x: number, y: number, clear = 8): [number, number] {
     if (!this.hasWalls) return [x, y];
+    if (this.rock && sampleRock(this.rock, x, y) < 0) {
+      // Inside cave rock (maybe deeper than the distance grid reaches): start
+      // from the nearest open tile instead.
+      const t = this.nearestFree(this.tileOf(x, y));
+      x = ((t % this.cols) + 0.5) * TILE;
+      y = (((t / this.cols) | 0) + 0.5) * TILE;
+    }
     this.collide(x, y, clear);
     return [this.ox, this.oy];
   }
@@ -258,11 +378,25 @@ export class Terrain {
         }
       }
     }
+    const g = this.rock;
+    if (g) {
+      // March the segment, stepping by the distance to the nearest rock.
+      const dx = x2 - x1, dy = y2 - y1;
+      const L = Math.sqrt(dx * dx + dy * dy);
+      for (let t = 0; ; ) {
+        const f = L > 0 ? t / L : 0;
+        const d = sampleRock(g, x1 + dx * f, y1 + dy * f);
+        if (d < -shrink) return false;
+        if (t >= L) break;
+        t = Math.min(L, t + Math.max(2, (d + shrink) * 0.7));
+      }
+    }
     return true;
   }
 
   /** Any wall stored near this point? Cheap pre-check for los(). */
   wallsNear(x1: number, y1: number, x2: number, y2: number): boolean {
+    if (this.rock) return true;
     const cx0 = this.ccx(Math.min(x1, x2)), cx1 = this.ccx(Math.max(x1, x2));
     const cy0 = this.ccy(Math.min(y1, y2)), cy1 = this.ccy(Math.max(y1, y2));
     for (let cy = cy0; cy <= cy1; cy++) {

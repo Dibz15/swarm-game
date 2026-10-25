@@ -1,5 +1,5 @@
 // Army size of an idle (never-acting) player vs the bots over time.
-import { EVENTS, TERRAIN } from './env';
+import { CAVES, EVENTS, TERRAIN } from './env';
 import { PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -18,7 +18,7 @@ for (const [name, apply] of variants) {
   apply();
   const at = [2, 3, 4].map(() => ({ idle: 0, top: 0, mean: 0, n: 0 }));
   for (let g = 0; g < games; g++) {
-    const w = createWorld({ terrain: TERRAIN, events: EVENTS, 
+    const w = createWorld({ terrain: TERRAIN, caves: CAVES, events: EVENTS, 
       seed: 7000 + g, size: 'medium',
       players: [{ faction: 0, team: 0, human: true }, ...[1, 2, 3].map((f, i) => ({ faction: f, team: f, human: false, bot: { difficulty: 1, personality: PERSONALITIES[(i + g) % 4] } }))],
     });

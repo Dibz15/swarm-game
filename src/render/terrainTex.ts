@@ -1,4 +1,4 @@
-import { capsuleDist, type Capsule, type TerrainSpec } from '../sim/terrain';
+import { capsuleDist, rockGrid, sampleRock, type Capsule, type TerrainSpec } from '../sim/terrain';
 
 /** World px per texel of the baked terrain texture. */
 export const TEX_SCALE = 4;
@@ -29,6 +29,16 @@ export function bakeTerrain(spec: TerrainSpec, width: number, height: number): {
     }
   };
   for (const c of spec.walls) each(c, WALL_LO + WALL_SPAN, (k, d) => (wall[k] = Math.min(wall[k], d)));
+  if (spec.cave) {
+    // Cave rock uses the same channel, so it gets the same rock look.
+    const g = rockGrid(spec.cave, width, height);
+    for (let y = 0; y < th; y++) {
+      for (let x = 0; x < tw; x++) {
+        const k = y * tw + x;
+        wall[k] = Math.min(wall[k], sampleRock(g, x * TEX_SCALE, y * TEX_SCALE));
+      }
+    }
+  }
   for (const f of spec.fields) {
     if (f.kind === 'rift') each(f, RIFT_LO + RIFT_SPAN, (k, d) => (rift[k] = Math.min(rift[k], d)));
     else {
