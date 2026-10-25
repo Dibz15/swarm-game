@@ -4,6 +4,7 @@ import type { MatchSetup } from '../sim/setup';
 import type { CrystalSpec, FieldSpec, Capsule } from '../sim/terrain';
 import type { World } from '../sim/world';
 import type { DemoAction } from '../ui/demo';
+import { novaRadius, type Command } from '../sim/commands';
 import { UNIT_FEEDING, WILD_SWARM } from '../sim/world';
 import type { TimedCommand } from './session';
 
@@ -37,6 +38,8 @@ export interface Step {
   pulse?: string;
   /** a live line under the instruction (a countdown, say) */
   status?: (c: StepCtx) => string | null;
+  /** commands issued (as the player) when the step begins: summon its swarm, say */
+  enter?: (c: StepCtx) => Command[];
 }
 
 export interface Mission {
@@ -139,15 +142,44 @@ const sendTo = (ids: (c: StepCtx) => number[]) => (c: StepCtx): DemoAction[] => 
   return id === undefined ? [] : [...selectArmy(c), { t: 'tap', at: at(c, id), order: true }];
 };
 
-/** "Wild swarm in 12 s" until it shows up, then a nudge to Nova. */
+/** Seconds from the Nova step starting to its swarm appearing at the map edge. */
+const SWARM_LEAD = 3;
+
+/** Is an enemy inside the Nova that the player's dots near `home` would cast? */
+function inNovaReach(c: StepCtx, home: { x: number; y: number }, wild: boolean): boolean {
+  const { w, human } = c;
+  let cx = 0, cy = 0, n = 0;
+  for (let i = 0; i < w.n; i++) {
+    if (!w.alive[i] || w.owner[i] !== human || w.state[i] === UNIT_FEEDING) continue;
+    if ((w.x[i] - home.x) ** 2 + (w.y[i] - home.y) ** 2 > 300 * 300) continue;
+    cx += w.x[i];
+    cy += w.y[i];
+    n++;
+  }
+  if (n < 4) return false;
+  cx /= n;
+  cy /= n;
+  const r = novaRadius(n);
+  for (let i = 0; i < w.n; i++) {
+    if (!w.alive[i] || (wild ? w.wild[i] !== WILD_SWARM : !w.hostile(w.owner[i], human))) continue;
+    if ((w.x[i] - cx) ** 2 + (w.y[i] - cy) ** 2 < r * r) return true;
+  }
+  return false;
+}
+
+/** A countdown, then "wait for it", then "now": Nova only hits around your dots. */
 function swarmStatus(c: StepCtx): string | null {
   const ev = c.w.events;
   if (!ev) return null;
   let wild = 0;
   for (let i = 0; i < c.w.n; i++) if (c.w.alive[i] && c.w.wild[i] === WILD_SWARM) wild++;
-  if (wild > 0) return '<b>The swarm is here!</b> Select your army and Nova it.';
+  if (wild > 0) {
+    return inNovaReach(c, c.w.nests[0], true)
+      ? '<b>It’s on your dots: Nova now!</b>'
+      : 'Here it comes. <b>Wait until it reaches your dots</b>: Nova only hits around them.';
+  }
   const secs = Math.max(0, Math.ceil((ev.nextSwarm - c.w.tick) / TICK_HZ));
-  return `Wild swarm in ${secs} s…`;
+  return secs > 600 ? null : `Wild swarm in ${secs} s…`;
 }
 
 // ---- the missions ----------------------------------------------------------------
@@ -299,8 +331,9 @@ export const MISSIONS: Mission[] = [
           ],
           {
             fields: [{ kind: 'nebula', x1: 560, y1: 120, x2: 640, y2: 200, r: 60 }],
-            // Early and often, and big enough to outlast the home turret for a few seconds.
-            events: { params: { swarm: { first: 40, every: 35, size: 32 }, drop: null, colossus: [], regrow: 0 }, swarmSpawns: [[1080, 120]], dropSpots: [], colossusPaths: [] },
+            // Swarms come when the Nova step summons them (then every 35 s), big
+            // enough to outlast the home turret for a few seconds.
+            events: { params: { swarm: { first: 100000, every: 35, size: 32 }, drop: null, colossus: [], regrow: 0 }, swarmSpawns: [[780, 40]], dropSpots: [[420, 340], [560, 420]], colossusPaths: [] },
           },
         ),
         portrait,
@@ -333,6 +366,7 @@ export const MISSIONS: Mission[] = [
         done: (c) => ordered(c, 'nova'),
         highlight: () => [0],
         status: swarmStatus,
+        enter: (c) => [{ t: 'summon', p: c.human, secs: SWARM_LEAD }],
         demo: (c) => [...selectArmy(c), { t: 'button', a: 'nova' }],
       },
       {
@@ -408,10 +442,24 @@ export const MISSIONS: Mission[] = [
 /** Advances through one mission's steps as the match plays. */
 export class MissionRun {
   step = 0;
+  /** step-entry commands waiting to be issued */
+  private queue: Command[] = [];
+  private entered = -1;
   constructor(
     readonly mission: Mission,
     readonly index: number,
   ) {}
+
+  /** Commands the current step wants issued when it begins (once). */
+  take(c: StepCtx): Command[] {
+    if (this.entered !== this.step && !this.complete) {
+      this.entered = this.step;
+      this.queue.push(...(this.mission.steps[this.step].enter?.(c) ?? []));
+    }
+    const out = this.queue;
+    this.queue = [];
+    return out;
+  }
 
   get complete(): boolean {
     return this.step >= this.mission.steps.length;

@@ -6,7 +6,7 @@ import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
-import { feedNeed, hasPower, powerBoost } from '../sim/commands';
+import { feedNeed, hasPower, novaRadius, powerBoost } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { LocalSession } from './session';
@@ -115,6 +115,7 @@ export class GameView {
   private updateMission(time: number): void {
     const m = this.mission!;
     const ctx = { w: this.world, human: this.human, log: this.session.log };
+    for (const c of m.take(ctx)) this.session.issue(c);
     if (m.update(ctx)) {
       const c = this.s.camera;
       this.s.sfx.levelUp(c.cx, c.cy, true);
@@ -679,9 +680,33 @@ export class GameView {
 
   nova(): void {
     if (this.blocked('nova')) return;
+    // In a lesson, don't let a Nova fizzle on empty ground: it costs dots and energy.
+    if (this.mission && this.selection.units.size >= 4 && !this.novaWouldHit()) {
+      return this.s.toast('Nova only hits around your selected dots: wait until the enemy reaches them', '#ffd166');
+    }
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');
     if (this.world.factions[this.human].energy < POWER.novaCost) return this.s.sfx.fail();
     this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
+  }
+
+  private novaWouldHit(): boolean {
+    const w = this.world;
+    let cx = 0, cy = 0, n = 0;
+    for (const u of this.selection.units) {
+      const s = w.uidToSlot.get(u);
+      if (s === undefined) continue;
+      cx += w.x[s];
+      cy += w.y[s];
+      n++;
+    }
+    if (!n) return false;
+    cx /= n;
+    cy /= n;
+    const r = novaRadius(n);
+    for (let i = 0; i < w.n; i++) {
+      if (w.alive[i] && w.hostile(w.owner[i], this.human) && (w.x[i] - cx) ** 2 + (w.y[i] - cy) ** 2 < r * r) return true;
+    }
+    return false;
   }
 
   canUse(power: NestPower): boolean {

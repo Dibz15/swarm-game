@@ -96,7 +96,7 @@ describe('tutorial (#17)', () => {
         const log: TimedCommand[] = [];
         const locked = new Set(m.locked);
         while (!run.complete && w.tick < 6 * 60 * TICK_HZ && !w.factions[me].eliminated) {
-          const cmds = w.tick % 30 === 0 ? autopilot(w, me, run, locked) : [];
+          const cmds = [...run.take({ w, human: me, log }), ...(w.tick % 30 === 0 ? autopilot(w, me, run, locked) : [])];
           for (const c of cmds) log.push({ tick: w.tick + 1, cmd: c });
           step(w, cmds);
           w.fx = [];
@@ -138,5 +138,34 @@ describe('tutorial bots', () => {
       expect(biggest).toBeLessThanOrEqual(m.setup(portrait).players[1].unitCap!);
       expect(w.factions[0].eliminated).toBe(false);
     }
+  });
+});
+
+describe('tutorial pacing', () => {
+  it('mission 4: the swarm shows up a few seconds after the Nova step begins, not on a fixed clock', () => {
+    const i = MISSIONS.findIndex((x) => x.id === 'powers');
+    const m = MISSIONS[i];
+    const w = createWorld(m.setup(false));
+    const run = new MissionRun(m, i);
+    const log: TimedCommand[] = [];
+    // Dawdle: jump straight to the Nova step only after a minute and a half.
+    while (w.tick < 90 * TICK_HZ) {
+      step(w, []);
+      w.fx = [];
+      w.deaths = [];
+    }
+    expect(w.events!.swarms.length).toBe(0);
+    run.step = m.steps.findIndex((s) => s.status);
+    const start = w.tick;
+    let seen = -1;
+    while (w.tick < start + 15 * TICK_HZ && seen < 0) {
+      const cmds = run.take({ w, human: 0, log });
+      step(w, cmds);
+      w.fx = [];
+      w.deaths = [];
+      if (w.events!.swarms.length) seen = w.tick;
+    }
+    expect(seen).toBeGreaterThan(start);
+    expect((seen - start) / TICK_HZ).toBeLessThan(8);
   });
 });

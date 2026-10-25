@@ -135,8 +135,9 @@ function steerSwarm(w: World, sw: Swarm): void {
     sw.tx = candX[best];
     sw.ty = candY[best];
   } else if ((sw.tx - cx) ** 2 + (sw.ty - cy) ** 2 < 60 * 60) {
+    // Hand-authored maps may have no drop spots: then it just holds.
     const spots = w.events!.spec.dropSpots;
-    [sw.tx, sw.ty] = spots[w.events!.rng.int(spots.length)];
+    if (spots.length) [sw.tx, sw.ty] = spots[w.events!.rng.int(spots.length)];
   }
   const ar = groupArrive(n);
   for (const u of sw.uids) {
