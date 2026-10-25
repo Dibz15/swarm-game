@@ -8,6 +8,7 @@ import { NEUTRAL } from '../sim/constants';
 import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
+import { MISSIONS, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 
 function el(html: string): HTMLDivElement {
@@ -57,7 +58,7 @@ export function controlsHtml(): string {
   return isMobile() ? TOUCH_CONTROLS_HTML : CONTROLS_HTML;
 }
 
-export function mainMenu(handlers: { skirmish: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
+export function mainMenu(handlers: { skirmish: () => void; tutorial: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
   const m = el(`
     <div class="screen menu">
       <div class="menu-inner">
@@ -65,6 +66,7 @@ export function mainMenu(handlers: { skirmish: () => void; howto: () => void; se
         <p class="tag">a tiny war of colors</p>
         <div class="menu-buttons">
           <button class="primary" data-a="skirmish">Skirmish</button>
+          <button data-a="tutorial">Tutorial</button>
           <button data-a="campaign" disabled>Campaign <small>soon</small></button>
           <button data-a="howto">How to play</button>
           <button data-a="settings">Settings</button>
@@ -73,9 +75,116 @@ export function mainMenu(handlers: { skirmish: () => void; howto: () => void; se
       <footer>v0.1 · fight for the nests</footer>
     </div>`);
   m.querySelector('[data-a=skirmish]')!.addEventListener('click', handlers.skirmish);
+  m.querySelector('[data-a=tutorial]')!.addEventListener('click', handlers.tutorial);
   m.querySelector('[data-a=howto]')!.addEventListener('click', handlers.howto);
   m.querySelector('[data-a=settings]')!.addEventListener('click', handlers.settings);
   return m;
+}
+
+// ---- tutorial (#17) --------------------------------------------------------
+
+/** A card on the main menu: tutorial offer, continue, or the suggested next step. */
+export function menuCard(text: string, buttons: { label: string; primary?: boolean; on: () => void }[]): HTMLDivElement {
+  const m = el(`<div class="notice"><p>${text}</p><div class="row"></div></div>`);
+  const row = m.querySelector('.row')!;
+  for (const b of buttons) {
+    const btn = document.createElement('button');
+    btn.className = `small${b.primary ? ' primary' : ''}`;
+    btn.textContent = b.label;
+    btn.addEventListener('click', b.on);
+    row.appendChild(btn);
+  }
+  return m;
+}
+
+/** What the menu suggests after the tutorial's graduation match. */
+export const NEXT_STEP_TEXT: Record<NextStep, string> = {
+  graduate: '<b>Next step:</b> your first real match. A 1v1 against a Normal bot on a small map.',
+  ffa: '<b>Next step:</b> you beat a Normal bot. Try a 4-player free-for-all, where rivals fight each other too.',
+  rematch: '<b>Next step:</b> take on the Normal bot again, or warm up against Easy first.',
+};
+
+export function tutorialMenu(p: TutorialProgress, h: { play: (i: number) => void; back: () => void }): HTMLDivElement {
+  const m = el(`
+    <div class="screen modal">
+      <div class="card tutorial">
+        <h2>Tutorial <small>about 10 minutes</small></h2>
+        <ol class="missions">${MISSIONS.map(
+          (ms, i) => `<li class="${p.done.includes(ms.id) ? 'done' : ''}"><button data-i="${i}"><b>${i + 1}. ${ms.title}</b><span>${ms.teaches}</span></button></li>`,
+        ).join('')}</ol>
+        <p class="hint">After the last mission you can play a real 1v1 against a Normal bot.</p>
+        <div class="row end"><button data-a="back">Back</button></div>
+      </div>
+    </div>`);
+  m.querySelectorAll<HTMLButtonElement>('[data-i]').forEach((b) => b.addEventListener('click', () => h.play(Number(b.dataset.i))));
+  m.querySelector('[data-a=back]')!.addEventListener('click', h.back);
+  return m;
+}
+
+export function missionBriefing(ms: Mission, i: number, h: { start: () => void; back: () => void }): HTMLDivElement {
+  const m = el(`
+    <div class="screen modal">
+      <div class="card brief">
+        <small class="eyebrow">Mission ${i + 1} of ${MISSIONS.length}</small>
+        <h2>${ms.title}</h2>
+        <p>${ms.teaches}</p>
+        <p class="hint">Follow the instructions at the top of the screen. ${isMobile() ? 'Pause' : 'Esc pauses'} any time.</p>
+        <div class="row end"><button data-a="back">Back</button><button class="primary" data-a="start">Start</button></div>
+      </div>
+    </div>`);
+  m.querySelector('[data-a=start]')!.addEventListener('click', h.start);
+  m.querySelector('[data-a=back]')!.addEventListener('click', h.back);
+  return m;
+}
+
+/** After a mission: what was learned, then onward (or the graduation offer after the last one). */
+export function missionDebrief(
+  ms: Mission,
+  i: number,
+  won: boolean,
+  h: { next: () => void; retry: () => void; menu: () => void },
+): HTMLDivElement {
+  const last = i === MISSIONS.length - 1;
+  const body = won
+    ? `<ul class="steps">${ms.learned.map((l) => `<li>${l}</li>`).join('')}</ul>${last ? '<p><b>Tutorial complete!</b> Ready for a real match? A 1v1 against a Normal bot on a small map.</p>' : ''}`
+    : '<p>Your nests and dots are gone. Try again: grow first, and bring more dots than the enemy.</p>';
+  const m = el(`
+    <div class="screen modal dim">
+      <div class="card brief ${won ? 'win' : 'lose'}">
+        <small class="eyebrow">Mission ${i + 1} of ${MISSIONS.length}</small>
+        <h2>${won ? (last ? 'Graduated' : 'Mission complete') : 'Defeated'}</h2>
+        ${body}
+        <div class="row end">
+          <button data-a="menu">Main menu</button>
+          ${won ? '' : '<button data-a="retry">Retry</button>'}
+          <button class="primary" data-a="next">${won ? (last ? 'Play the 1v1' : 'Next mission') : 'Skip mission'}</button>
+        </div>
+      </div>
+    </div>`);
+  m.querySelector('[data-a=next]')!.addEventListener('click', h.next);
+  m.querySelector('[data-a=menu]')!.addEventListener('click', h.menu);
+  m.querySelector('[data-a=retry]')?.addEventListener('click', h.retry);
+  return m;
+}
+
+/** Ready-made matches the menu suggests: the graduation 1v1 and what comes after. */
+export function quickSetup(kind: 'normal1v1' | 'easy1v1' | 'ffa'): MatchSetup {
+  const p = loadPrefs();
+  const others = [0, 1, 2, 3, 4, 5].filter((c) => c !== p.color);
+  const bots = kind === 'ffa' ? 3 : 1;
+  const difficulty = kind === 'easy1v1' ? 0 : 1;
+  return buildSetup(
+    {
+      ...p,
+      size: kind === 'ffa' ? 'medium' : 'small',
+      terrain: 'standard',
+      caves: 'off',
+      events: 'normal',
+      teams: false,
+      bots: others.slice(0, bots).map((faction, i) => ({ faction, difficulty, personality: 'random', team: i + 1 })),
+    },
+    randomSeed(),
+  );
 }
 
 /** One-time heads-up when mobile mode switched itself on. */

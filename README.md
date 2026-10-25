@@ -87,6 +87,7 @@ Dev URL flags:
 - **Selecting by type:** 1–4 keep Swarmers / Shields / Spears / Raiders from your group (or grab that type on screen), and Shift+1–4 drops a type. Double-click a unit to grab all of its type on screen. The type chips and counter wheel icons work the same way, and Tab cycles. Control groups are Ctrl+5–9 / 5–9.
 - **Escalation:** from minute 5, those comeback rules fade out over 3 minutes so every match reaches an endgame.
 - **Win** by eliminating every rival, or by holding 70% of the nests (60% on large maps) for 30 seconds.
+- **Tutorial** (main menu): five short missions on hand-authored maps (moving and capturing, rally points and nest types, a first fight with Surge, upgrades with Barrage and Nova, then terrain, crystals and domination), about 10 minutes in all. It ends with a 1v1 against a Normal bot, after which the menu suggests a next step. Missions live in `src/game/tutorial.ts`; `tests/tutorial.test.ts` plays each one headlessly.
 - **Bots** have four difficulties (Easy to Brutal; only Brutal gets a production bonus) and four personalities. Every bot expands for the first 90 seconds, then:
   - **Rusher** attacks nearby players, commits hard, and Surges as soon as a fight starts.
   - **Turtler** upgrades nests, builds Bastions and keeps a big home guard.

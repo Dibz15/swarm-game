@@ -133,6 +133,7 @@ function checkVictory(w: World): void {
     aliveTeams.add(fa.team);
   }
 
+  if (w.endless) return;
   if (aliveTeams.size <= 1) {
     w.over = true;
     w.winnerTeam = aliveTeams.size === 1 ? [...aliveTeams][0] : -1;

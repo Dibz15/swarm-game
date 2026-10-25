@@ -10,6 +10,7 @@ import { feedNeed, hasPower, powerBoost } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { LocalSession } from './session';
+import type { Lock, MissionRun } from './tutorial';
 
 export interface Services {
   renderer: Renderer;
@@ -42,6 +43,11 @@ export class GameView {
   resultTime = 0;
   /** match recorder (#29), when the player opted in */
   readonly rec: Recorder | null;
+  /** tutorial mission being played, if any (#17) */
+  mission: MissionRun | null = null;
+  /** actions this mission hides */
+  locked = new Set<Lock>();
+  private highlightAt = 0;
   private mask = new Uint8Array(MAX_UNITS);
   private spawnSeen: number[] = [];
   private domSecs = -1;
@@ -87,6 +93,7 @@ export class GameView {
       else if (w.over) this.finish(w.winnerTeam === w.teamOf[this.human] ? 'victory' : 'defeat', time);
     }
     if (!this.result) this.checkSupply();
+    if (!this.result && this.mission) this.updateMission(time);
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
     // Domination countdown ticks in the last ten seconds.
     const ds = this.result ? null : dominationStatus(w);
@@ -102,6 +109,30 @@ export class GameView {
         if (n.lastSpawn === w.tick) this.s.sfx.spawn(n.x, n.y);
       }
     }
+  }
+
+  /** Advance the tutorial steps, pulse the nests the current step is about, end on success. */
+  private updateMission(time: number): void {
+    const m = this.mission!;
+    const ctx = { w: this.world, human: this.human, log: this.session.log };
+    if (m.update(ctx)) {
+      const c = this.s.camera;
+      this.s.sfx.levelUp(c.cx, c.cy, true);
+    }
+    if (m.complete) return this.finish('victory', time);
+    if (time - this.highlightAt < 1.1) return;
+    this.highlightAt = time;
+    for (const id of m.current?.highlight?.(ctx) ?? []) {
+      const n = this.world.nests[id];
+      if (n) this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.3, r1: n.r * 2.6, dur: 0.9, c: WHITE, thick: 3 });
+    }
+  }
+
+  /** A mission hides this action: say so instead of doing it. */
+  private blocked(a: Lock): boolean {
+    if (!this.locked.has(a)) return false;
+    this.s.toast('Not in this lesson: it comes later', '#9aa4c7');
+    return true;
   }
 
   private finish(r: MatchResult, time: number): void {
@@ -640,12 +671,14 @@ export class GameView {
   }
 
   surge(): void {
+    if (this.blocked('surge')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Surge', '#9aa4c7');
     if (this.world.factions[this.human].energy < POWER.surgeCost) return this.s.sfx.fail();
     this.session.issue({ t: 'surge', p: this.human, units: [...this.selection.units] });
   }
 
   nova(): void {
+    if (this.blocked('nova')) return;
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');
     if (this.world.factions[this.human].energy < POWER.novaCost) return this.s.sfx.fail();
     this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
@@ -668,6 +701,7 @@ export class GameView {
   }
 
   fortify(): void {
+    if (this.blocked('fortify')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Fortify', '#9aa4c7');
     if (!this.power('fortify', POWER.fortifyCost)) return;
     this.session.issue({ t: 'fortify', p: this.human, units: [...this.selection.units] });
@@ -676,6 +710,7 @@ export class GameView {
   /** Targeted powers: cast at a world point. */
   castAt(power: NestPower, wx: number, wy: number): void {
     this.aim = null;
+    if (this.blocked(power)) return;
     if (power === 'fortify') return this.fortify();
     if (power === 'barrage') {
       if (!this.power('barrage', POWER.barrageCost)) return;
@@ -696,6 +731,7 @@ export class GameView {
 
   /** HUD button: Fortify fires at once; the others wait for a click. */
   startAim(power: NestPower): void {
+    if (this.blocked(power)) return;
     if (power === 'fortify') return this.fortify();
     if (!this.canUse(power)) return void this.power(power, 0);
     this.aim = this.aim === power ? null : power;
@@ -710,6 +746,7 @@ export class GameView {
   }
 
   upgrade(): void {
+    if (this.blocked('upgrade')) return;
     const ids = [...this.selection.nests].filter((id) => {
       const n = this.world.nests[id];
       return n.owner === this.human && (n.level < MAX_LEVEL || n.control < 1);

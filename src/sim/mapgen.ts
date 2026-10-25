@@ -123,7 +123,10 @@ export interface NestSpec {
   level: number;
   /** player index (into MatchSetup.players), or -1 for neutral */
   player: number;
+  /** neutral: guards; player: starting army (0 = the default) */
   garrison: number;
+  /** a player's nest is their capital unless this is false (hand-authored maps) */
+  capital?: boolean;
 }
 
 export interface MapSpec {

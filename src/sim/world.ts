@@ -244,6 +244,8 @@ export class World {
   domShare = 0.7;
   over = false;
   winnerTeam = -1;
+  /** no elimination or domination win (tutorial missions without an opponent) */
+  endless = false;
   /** how the match ended */
   winReason: '' | 'elimination' | 'domination' = '';
   /** consecutive ticks each team has held the domination share */
