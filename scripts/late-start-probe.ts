@@ -10,8 +10,8 @@ const games = Number(process.argv[2] ?? 40);
 const wakeMin = Number(process.argv[3] ?? 2.5);
 const base = { ...BALANCE };
 const econ: [string, Partial<typeof BALANCE>][] = [
-  ['old economy (exp .75, cap 110)', { nestExponent: 0.75, softCap: 110, capPerNest: 0, softScale: 260 }],
-  ['new economy (exp .9, cap 30+25/nest)', {}],
+  ['steeper width penalty (exp .75)', { nestExponent: 0.75 }],
+  ['current economy', {}],
 ];
 for (const [name, cfg] of econ) {
   for (const late of [false, true]) {

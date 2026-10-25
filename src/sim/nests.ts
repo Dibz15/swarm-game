@@ -16,6 +16,7 @@ import {
   NEUTRAL,
   NUM_FACTIONS,
   NestType,
+  SUPPLY,
   UNIT_STATS,
 } from './constants';
 import { TAU, dcos, dsin } from './mathx';
@@ -30,11 +31,38 @@ function captureRate(count: number, level: number): number {
 }
 
 const nestCount = new Int32Array(NUM_FACTIONS);
+/** supply cap per faction, refreshed each tick in updateNests */
+const capOf = new Float64Array(NUM_FACTIONS);
+const levelCount = new Int32Array(NUM_FACTIONS);
+
+/** Max army for a faction right now (see SUPPLY). */
+export function supplyCap(w: World, f: number): number {
+  let nests = 0, levels = 0;
+  for (const n of w.nests) {
+    if (n.owner !== f) continue;
+    nests++;
+    levels += n.level - 1;
+  }
+  return capFor(nests, levels, escalation(w.tick));
+}
+
+function capFor(nests: number, levels: number, L: number): number {
+  const full = Math.min(nests, SUPPLY.fullNests);
+  const counted = full + (nests - full) * SUPPLY.tail;
+  return Math.floor(SUPPLY.base + (SUPPLY.perNest * counted + SUPPLY.perLevel * levels) * (1 + SUPPLY.escalation * L));
+}
 
 export function updateNests(w: World): void {
   w.armor.fill(1, 0, w.n);
   nestCount.fill(0);
-  for (const n of w.nests) if (n.owner >= 0) nestCount[n.owner]++;
+  levelCount.fill(0);
+  for (const n of w.nests) {
+    if (n.owner < 0) continue;
+    nestCount[n.owner]++;
+    levelCount[n.owner] += n.level - 1;
+  }
+  const L = escalation(w.tick);
+  for (let f = 0; f < NUM_FACTIONS; f++) capOf[f] = capFor(nestCount[f], levelCount[f], L);
   for (const n of w.nests) {
     updateControl(w, n);
     applyArmor(w, n);
@@ -160,18 +188,21 @@ function spawn(w: World, n: Nest): void {
   if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1 || n.contested || n.lockedUntil > w.tick) return;
   const kind = NEST_KIND[n.type];
   if (kind < 0) return;
-  if (w.unitCount[n.owner] >= FACTION_UNIT_CAP) return;
+  // Supply blocked: no production until the army shrinks or the cap grows.
+  const cap = capOf[n.owner];
+  if (w.unitCount[n.owner] >= Math.min(FACTION_UNIT_CAP, cap)) return;
   const f = w.factions[n.owner];
-  // Soft cap: big armies produce slower, which keeps comebacks possible.
-  // Both comeback rules relax as the match escalates.
   const L = escalation(w.tick);
+  // Upkeep: the closer to the cap, the slower the nests (big armies cost more
+  // to feed). Fades with escalation like the other comeback rules.
+  const fill = w.unitCount[n.owner] / cap;
+  const upkeep = 1 - SUPPLY.upkeep * (1 - L) * fill * fill;
+  // Diminishing returns on width: k nests produce like k^exp nests. Relaxes
+  // as the match escalates.
   const k = nestCount[n.owner];
-  const softCap = (BALANCE.softCap + BALANCE.capPerNest * k) * (1 + 2 * L);
-  const soft = 1 / (1 + Math.max(0, w.unitCount[n.owner] - softCap) / BALANCE.softScale);
-  // Diminishing returns on width: k nests produce like k^exp nests.
   const exp = BALANCE.nestExponent + (1 - BALANCE.nestExponent) * L;
   const wide = k > 1 ? Math.pow(k, exp - 1) : 1;
-  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * soft * wide;
+  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * wide * upkeep;
   const interval = UNIT_STATS[kind].interval;
   if (n.spawnAcc < interval) return;
   n.spawnAcc -= interval;

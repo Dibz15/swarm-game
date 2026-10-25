@@ -1,6 +1,7 @@
 import { ESCALATION, EVENTS, Kind, LEVEL, MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
 import { applyCommand, feedNeed, hasPower, type Command } from '../commands';
 import { Rng } from '../rng';
+import { supplyCap } from '../nests';
 import { queryRadius } from '../spatial';
 import { UNIT_FEEDING, WILD_COLOSSUS, type Nest, type World } from '../world';
 
@@ -77,6 +78,8 @@ const NOVA_RESERVE = { minArmy: 30, energy: 25 };
 
 /** Breaking a rival's domination. */
 const DOM_BOT = { value: 3, margin: 1.05 };
+/** At (near) the supply cap: reserve share, attack margin and nest value multipliers. */
+const SUPPLY_BOT = { near: 0.92, reserve: 0.4, margin: 0.85, value: 1.3 };
 
 /** Feeding nests. */
 const UPGRADE_BOT = {
@@ -322,7 +325,10 @@ export class Bot {
     let fallback: Nest | null = null;
     let fallbackScore = -Infinity;
     let fallbackNeed = 0;
-    const reserve = threatened ? 0 : Math.floor(total * this.p.reserve);
+    // Supply blocked: a capped army only has value if it's used, so keep a
+    // thinner reserve, take riskier fights and reach for more nests.
+    const capped = myUnits >= supplyCap(w, me) * SUPPLY_BOT.near;
+    const reserve = threatened ? 0 : Math.floor(total * this.p.reserve * (capped ? SUPPLY_BOT.reserve : 1));
     const available = idle.length - used.size - reserve;
     for (const n of w.nests) {
       if (n.owner >= 0 && w.teamOf[n.owner] === myTeam) continue;
@@ -330,7 +336,8 @@ export class Bot {
       let value = n.type === NestType.Bastion ? 0.95 * this.p.bastion : n.type === NestType.Hive ? 1 : 1.1;
       value *= 0.6 + 0.4 * n.level;
       value *= counterBonus[n.type];
-      let margin = this.d.margin * this.p.margin;
+      let margin = this.d.margin * this.p.margin * (capped ? SUPPLY_BOT.margin : 1);
+      if (capped) value *= SUPPLY_BOT.value;
       if (n.owner === NEUTRAL || n.owner < 0) value *= opening ? Math.max(this.p.neutral, OPENING.neutral) : this.p.neutral;
       else {
         value *= opening ? OPENING.enemy : this.p.enemy;

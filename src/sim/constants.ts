@@ -149,15 +149,32 @@ export const CAPITAL = { range: 88, dps: 11, targets: 2, armor: 0.6 };
  * - Each extra nest adds less production than the last.
  */
 export const BALANCE = {
-  softCap: 30,
-  /** extra soft-cap headroom per nest held, so hoarding on one nest stalls sooner */
-  capPerNest: 25,
-  softScale: 160,
   homeRadius: 70,
   homeArmor: 0.75,
   underdogEnergy: 1.5,
   /** total production grows as nests^exp, so wide empires out-produce less */
   nestExponent: 0.9,
+};
+
+/**
+ * Supply: your army can't grow past base + perNest per nest held (nests past
+ * the first `fullNests` count `tail` each) + perLevel per upgrade level above
+ * 1. At the cap your nests stop producing (nothing dies), so expanding is the
+ * way to grow and hoarding at home stalls. Upkeep slows production as the army
+ * nears the cap, which softens runaway leaders; it fades with escalation, and
+ * escalation lifts the per-nest part by up to `escalation`x more, so leaders
+ * can still close the match out.
+ */
+export const SUPPLY = {
+  base: 20,
+  perNest: 16,
+  fullNests: 6,
+  tail: 0.5,
+  /** small: upgraded nests also escape upkeep, so more made Turtlers run away */
+  perLevel: 3,
+  escalation: 1,
+  /** production slows by up to this share as the army nears the cap (quadratic in fill) */
+  upkeep: 0.5,
 };
 
 /**
