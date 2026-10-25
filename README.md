@@ -28,7 +28,11 @@ npx vite-node scripts/upgrade-probe.ts turtler medium 40   # mirror match: eager
 npx vite-node scripts/supply-probe.ts 20         # army size vs nests held per minute (supply cap headroom)
 npx vite-node scripts/hoard-probe.ts 20          # idle hoarder vs bots under supply cap variants
 npx vite-node scripts/takeoff-probe.ts 24        # runaway leaders: top/2nd army ratio, comebacks per supply variant
+npx vite-node scripts/duel-probe.ts 12 2         # 1v1: each personality vs the human proxy (scripts/proxy.ts), per difficulty
+npx vite-node scripts/dogpile-probe.ts 16 2       # FFA: share of bot attacks aimed at the proxy over time (pile-ons)
 ```
+
+`scripts/proxy.ts` is a scripted stand-in for a human, built from recorded games (#29): it expands at once, moves one big blob and spends energy freely. Tuning overrides: `BOT='{"level":2,"surgeAt":6}'` changes one difficulty's knobs, `PERS='{"turtler":{"reserve":0.2}}'` a personality's, `CROWD='{"k":2}'` the FFA pile-on rule, `PROXY='{"react":2}'` the proxy's.
 
 Every probe takes `TERRAIN=none|light|standard|heavy`, `CAVES=off|belt|full` and `EVENTS=off|calm|normal|wild` (defaults `none` / `off` / `off`), e.g. `TERRAIN=standard npx vite-node scripts/balance.ts 4 medium 40`. For sim timing without vite-node overhead:
 

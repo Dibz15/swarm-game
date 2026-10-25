@@ -24,3 +24,29 @@ it('bot FFA plays out', () => {
   console.log(w.factions.slice(0, 4).map((f) => JSON.stringify(f.stats)).join('\n'));
   expect(w.factions.slice(0, 4).some((f) => f.stats.captured > 0)).toBe(true);
 }, 60000);
+
+// #28: Hard bots open like the recorded human, taking a 2nd nest within ~30 s
+// on small 1v1 maps instead of splitting dots off to hold crystals.
+it('Hard bots expand early in a 1v1', () => {
+  const second: number[] = [];
+  for (const seed of [11, 12, 13, 14]) {
+    const w = createWorld({
+      seed,
+      size: 'small',
+      terrain: 'standard',
+      events: 'normal',
+      players: [0, 1].map((f) => ({ faction: f, team: f, human: false, bot: { difficulty: 2, personality: 'turtler' as const } })),
+    });
+    const at = [-1, -1];
+    while (w.tick < 60 * TICK_HZ && at.some((t) => t < 0)) {
+      step(w, []);
+      w.fx = [];
+      w.deaths = [];
+      for (const f of [0, 1]) if (at[f] < 0 && w.nests.filter((n) => n.owner === f).length >= 2) at[f] = w.tick / TICK_HZ;
+    }
+    second.push(...at);
+  }
+  console.log('2nd nest at', second.join(', '));
+  expect(second.every((t) => t > 0)).toBe(true);
+  expect(second.reduce((a, b) => a + b, 0) / second.length).toBeLessThan(32);
+}, 60000);
