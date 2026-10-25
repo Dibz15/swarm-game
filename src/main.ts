@@ -201,12 +201,13 @@ class App {
   }
 
   private showTutorial(): void {
-    this.setModal(tutorialMenu(loadProgress(), { play: (i) => this.briefMission(i), back: () => this.setModal(null) }));
+    // Back from a mission's briefing returns here, not to the main menu.
+    this.setModal(tutorialMenu(loadProgress(), { play: (i) => this.briefMission(i, () => this.showTutorial()), back: () => this.setModal(null) }));
   }
 
-  private briefMission(i: number): void {
+  private briefMission(i: number, back: () => void = () => this.setModal(null)): void {
     if (this.game) this.showMenu();
-    this.setModal(missionBriefing(MISSIONS[i], i, { start: () => this.playMission(i), back: () => this.setModal(null) }));
+    this.setModal(missionBriefing(MISSIONS[i], i, { start: () => this.playMission(i), back }));
   }
 
   private playMission(i: number, prevEnd: EndReason = 'quit'): void {
