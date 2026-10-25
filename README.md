@@ -53,6 +53,7 @@ Dev URL flags:
   - **Nebula** slows everything inside: ambush ground.
   - **Rift** burns anything standing in it: a risky shortcut that Raiders cross fastest.
   - **Crystal** charges energy for the only team standing on it.
+- **Layout** (skirmish setup: Open / Cave belt / Caves): caves start from solid rock and carve chambers around every nest and crystal, joined by winding tunnels with a few alternative routes. **Cave belt** rings the center with rock crossed by tunnels; **Caves** makes the whole map a cave system, with tunnels in from the map edge where wild swarms emerge. Terrain features still go on top.
 - **Map events** (skirmish setup: Off / Calm / Normal / Wild, seeded like the map):
   - **Wild swarm:** a neutral red-gray swarm that hunts the biggest army nearby. It can contest nests but never capture them. Lure it into a rival.
   - **Supply drop:** lands at fair spots, usually near the weakest player. Hold it alone for energy plus a free nest upgrade; the biggest army only gets the energy.
@@ -88,7 +89,7 @@ src/sim/      deterministic simulation — no DOM, no Math.random, no clock
   commands.ts   the only way to change the world: move / rally / upgrade / surge / nova
   ai/bot.ts     bot players — run inside the sim and issue the same Commands as humans
   mapgen.ts     MapParams → MapSpec: rotationally symmetric nests + terrain from a seed (portrait variant for phones)
-  terrain.ts    walls/fields as capsules; tile flags, exact collision, line of sight, cached flow fields
+  terrain.ts    walls/fields as capsules + cave rock as a distance grid; tile flags, collision, line of sight, cached flow fields
   events.ts     living-map director: wild swarms, supply drops, the Colossus, garrison regrowth
   mathx.ts      table-based deterministic sin/cos
   hash.ts       state checksum

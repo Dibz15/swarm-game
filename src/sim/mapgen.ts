@@ -1,7 +1,7 @@
 import { NEST_RADIUS, NestType } from './constants';
 import { PI, TAU, dcos, dsin } from './mathx';
 import { Rng } from './rng';
-import { Terrain, capsuleDist, emptyTerrain, type Capsule, type FieldSpec, type TerrainSpec } from './terrain';
+import { Terrain, capsuleDist, emptyTerrain, type Capsule, type CaveSpec, type FieldSpec, type TerrainSpec } from './terrain';
 
 export type MapSize = 'small' | 'medium' | 'large';
 
@@ -31,6 +31,35 @@ export const TERRAIN_PRESETS: Record<TerrainLevel, TerrainParams> = {
   standard: { walls: 1, nebula: 1, rifts: 1, crystals: 1 },
   heavy: { walls: 1.6, nebula: 1.4, rifts: 1.5, crystals: 1 },
 };
+
+/**
+ * Cave layouts. 'full': the whole map is rock, with chambers around nests
+ * and crystals joined by tunnels. 'belt': a ring of rock around the center,
+ * crossed by the same tunnels; the rest of the map stays open.
+ */
+export interface CaveParams {
+  mode: 'full' | 'belt';
+  /** px of chamber around each nest */
+  chamber: number;
+  /** tunnel radius range, px */
+  tunnel: [number, number];
+  /** odds of each extra loop beyond the spanning tree (alternative routes) */
+  loops: number;
+}
+
+export type CaveLevel = 'off' | 'belt' | 'full';
+export const CAVE_LEVELS: readonly CaveLevel[] = ['off', 'belt', 'full'];
+
+export const CAVE_PRESETS: Record<CaveLevel, CaveParams | null> = {
+  off: null,
+  belt: { mode: 'belt', chamber: 30, tunnel: [24, 32], loops: 0.7 },
+  full: { mode: 'full', chamber: 42, tunnel: [24, 34], loops: 0.8 },
+};
+
+export function caveParams(c: MapParams['caves']): CaveParams | null {
+  if (!c) return null;
+  return typeof c === 'string' ? CAVE_PRESETS[c] : c;
+}
 
 /** Neutral map events (seconds). null / empty / 0 turns one off. */
 export interface EventParams {
@@ -78,6 +107,8 @@ export interface MapParams {
   /** tall map for portrait screens, player 0 at the bottom */
   portrait?: boolean;
   terrain?: TerrainLevel | TerrainParams;
+  /** cave layout preset or explicit params (default: open map) */
+  caves?: CaveLevel | CaveParams;
   events?: EventLevel | EventParams;
   /** nests per player sector, including the natural expansion (default by size) */
   nestsPerSector?: number;
@@ -144,11 +175,15 @@ export function generateMap(p: MapParams): MapSpec {
   const pos = (r: number, a: number): [number, number] => [cx + dcos(a) * r * ax, cy + dsin(a) * r * ay];
 
   const nests: NestSpec[] = [];
+  /** where each nest sits in polar terms: radius, angle from `base`, sector */
+  const polar: Polar[] = [];
   for (let k = 0; k < P; k++) {
     const [x, y] = pos(0.86, base + k * sector);
     nests.push({ x, y, type: NestType.Hive, level: 1, player: k < players ? k : -1, garrison: k < players ? 0 : 8 });
+    polar.push({ r: 0.86, a: k * sector, sec: k });
   }
   nests.push({ x: cx, y: cy, type: NestType.Hive, level: 2, player: -1, garrison: 14 + P * 2 });
+  polar.push({ r: 0, a: 0, sec: 0 });
 
   const minDist = p.size === 'small' ? 100 : 110;
   const fits = (r: number, da: number) => {
@@ -165,6 +200,7 @@ export function generateMap(p: MapParams): MapSpec {
     for (let k = 0; k < P; k++) {
       const [x, y] = pos(r, base + da + k * sector);
       nests.push({ x, y, type, level, player: -1, garrison });
+      polar.push({ r, a: da + k * sector, sec: k });
     }
   };
 
@@ -203,10 +239,8 @@ export function generateMap(p: MapParams): MapSpec {
   }
 
   // Terrain gets its own stream so tuning it never reshuffles the nests.
-  const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), terrainParams(p.terrain), {
-    w, h, P, sector, base, pos, nests, size: p.size,
-  });
-  const frame = { w, h, P, sector, base, pos, nests, size: p.size };
+  const frame: Frame = { w, h, P, sector, base, pos, nests, polar, size: p.size };
+  const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), terrainParams(p.terrain), caveParams(p.caves), frame);
   const events = generateEvents(new Rng(p.seed ^ 0x3c9d17), eventParams(p.events), terrain, frame);
   return { width: w, height: h, nests, terrain, events };
 }
@@ -234,7 +268,7 @@ function generateEvents(rng: Rng, params: EventParams, terrain: TerrainSpec, f: 
   const cand: { x: number; y: number; spread: number }[] = [];
   for (let tries = 0; tries < 80 && cand.length < 24; tries++) {
     const x = rng.range(w * 0.12, w * 0.88), y = rng.range(h * 0.12, h * 0.88);
-    if (terrain.walls.some((c) => capsuleDist(c, x, y) < 34)) continue;
+    if (t.clearance(x, y) < 34) continue;
     if (terrain.fields.some((c) => c.kind === 'rift' && capsuleDist(c, x, y) < 40)) continue;
     if (nests.some((n) => (n.x - x) ** 2 + (n.y - y) ** 2 < (NEST_RADIUS[n.type] + 70) ** 2)) continue;
     if (terrain.crystals.some((c) => (c.x - x) ** 2 + (c.y - y) ** 2 < (c.r + 60) ** 2)) continue;
@@ -256,7 +290,14 @@ interface Frame {
   base: number;
   pos: (r: number, a: number) => [number, number];
   nests: NestSpec[];
+  polar: Polar[];
   size: MapSize;
+}
+
+interface Polar {
+  r: number;
+  a: number;
+  sec: number;
 }
 
 /** A feature in player 0's sector: capsules in polar (r, angle offset) coordinates. */
@@ -268,9 +309,9 @@ interface PolarCapsule {
   rad: number;
 }
 
-function generateTerrain(rng: Rng, tp: TerrainParams, f: Frame): TerrainSpec {
+function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: Frame): TerrainSpec {
   const spec = emptyTerrain();
-  if (tp.walls <= 0 && tp.nebula <= 0 && tp.rifts <= 0 && tp.crystals <= 0) return spec;
+  if (tp.walls <= 0 && tp.nebula <= 0 && tp.rifts <= 0 && tp.crystals <= 0 && !cp) return spec;
   const { w, h, P, sector, base, pos, nests } = f;
   const scale = f.size === 'small' ? 0.9 : f.size === 'large' ? 1.15 : 1;
 
@@ -298,6 +339,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, f: Frame): TerrainSpec {
   // The first sits on the border between neighbors, so it's contested; more
   // go deeper into each sector.
   const crystals = Math.round(tp.crystals);
+  const crystalPolar: { r: number; a: number }[] = [];
   for (let k = 0, tries = 0; k < crystals && tries < 40; tries++) {
     const a = k === 0 ? (0.5 + rng.range(-0.06, 0.06)) * sector : rng.range(-0.35, 0.35) * sector;
     const r = rng.range(0.42, 0.66);
@@ -311,8 +353,16 @@ function generateTerrain(rng: Rng, tp: TerrainParams, f: Frame): TerrainSpec {
     );
     if (!ok) continue;
     for (const c of spots) spec.crystals.push({ x: c.x1, y: c.y1, r: R });
+    crystalPolar.push({ r, a });
     k++;
   }
+
+  // ---- caves ------------------------------------------------------------
+  // Carved before the walls, so wall checks see the rock.
+  if (cp) spec.cave = fairestCave(rng, cp, f, crystalPolar, spec.crystals[0]?.r ?? 0, scale);
+  const caveT = spec.cave ? new Terrain(spec, w, h) : null;
+  /** open cave ground at least `gap` from rock (always true on open maps) */
+  const inOpen = (x: number, y: number, gap: number) => !caveT || caveT.rockDist(x, y) > gap;
   // ---- walls ----------------------------------------------------------
   // Each candidate feature is added to all sectors at once, then kept only if
   // every nest is still reachable from every other.
@@ -320,7 +370,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, f: Frame): TerrainSpec {
     const caps = parts.flatMap(rotate);
     if (!caps.every((c) => inMap(c, 30) && clearOfNests(c, gap) && clearOfCrystals(c, 16))) return false;
     const next = [...spec.walls, ...caps];
-    if (!new Terrain({ walls: next, fields: [], crystals: [] }, w, h).connected(points)) return false;
+    if (!new Terrain({ walls: next, fields: [], crystals: [], cave: spec.cave }, w, h).connected(points)) return false;
     spec.walls = next;
     return true;
   };
@@ -332,7 +382,9 @@ function generateTerrain(rng: Rng, tp: TerrainParams, f: Frame): TerrainSpec {
     return out;
   };
 
-  if (tp.walls > 0) {
+  // Full caves are all walls already: only scattered outcrops go on top.
+  const fullCave = cp?.mode === 'full';
+  if (tp.walls > 0 && !fullCave) {
     // Center bulwark: an arc in each sector around the middle nest, with gaps
     // between sectors that become the chokepoints into the center.
     if (rng.next() < 0.55 + 0.35 * tp.walls) {
@@ -352,8 +404,10 @@ function generateTerrain(rng: Rng, tp: TerrainParams, f: Frame): TerrainSpec {
       const bend = rng.range(-0.08, 0.08) * sector;
       if (tryWalls([{ r1, a1: a, r2, a2: a + bend, rad: rng.range(16, 24) * scale }], 40)) k++;
     }
-    // Outcrops: scattered rocks, some elongated.
-    const rocks = Math.round(tp.walls * rng.range(2.5, 4.5));
+  }
+  if (tp.walls > 0) {
+    // Outcrops: scattered rocks, some elongated. In caves, fewer: cover inside chambers.
+    const rocks = Math.round(tp.walls * rng.range(2.5, 4.5) * (fullCave ? 0.4 : 1));
     for (let k = 0, tries = 0; k < rocks && tries < 60; tries++) {
       const r = rng.range(0.3, 0.95);
       const a = rng.range(-0.5, 0.5) * sector;
@@ -368,6 +422,9 @@ function generateTerrain(rng: Rng, tp: TerrainParams, f: Frame): TerrainSpec {
   const addField = (parts: PolarCapsule[], kind: FieldSpec['kind'], check: (c: Capsule) => boolean): boolean => {
     const caps = parts.flatMap(rotate);
     if (!caps.every((c) => inMap(c, 0) && check(c))) return false;
+    // In caves, fields sit in open ground: rifts well inside, so none walls off a tunnel.
+    const gap = kind === 'rift' ? 30 : 0;
+    if (!caps.every((c) => inOpen(c.x1, c.y1, gap) && inOpen(c.x2, c.y2, gap))) return false;
     for (const c of caps) spec.fields.push({ ...c, kind });
     return true;
   };
@@ -402,4 +459,174 @@ function generateTerrain(rng: Rng, tp: TerrainParams, f: Frame): TerrainSpec {
   }
 
   return spec;
+}
+
+/**
+ * Rotating a layout around an ellipse stretches it differently in each
+ * sector, so a tunnel that runs straight for one start can wind for another.
+ * Try a few layouts and keep the one where every start's walk to the center
+ * is the most alike (as a detour over the straight line).
+ */
+function fairestCave(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number; a: number }[], crystalR: number, scale: number): CaveSpec {
+  const { w, h, P, nests } = f;
+  const center = nests[P];
+  let best: CaveSpec | null = null, bestSpread = Infinity;
+  for (let attempt = 0; attempt < 16 && bestSpread > 1.05; attempt++) {
+    const cave = generateCaves(new Rng(rng.int(0x7fffffff)), cp, f, crystals, crystalR, scale);
+    const t = new Terrain({ walls: [], fields: [], crystals: [], cave }, w, h);
+    const detours = nests.slice(0, P).map((n) => t.pathDist(n.x, n.y, center.x, center.y, 0) / Math.sqrt((n.x - center.x) ** 2 + (n.y - center.y) ** 2));
+    const spread = Math.max(...detours) / Math.min(...detours);
+    if (spread < bestSpread) {
+      bestSpread = spread;
+      best = cave;
+    }
+  }
+  return best!;
+}
+
+/**
+ * Carve a cave system in player 0's sector and rotate it into the others:
+ * a chamber around every nest and crystal, a spanning tree of tunnels between
+ * them, one tunnel across the sector border, and a few extra loops so there's
+ * more than one way in. Everything is a carved capsule, so the open space is
+ * connected by construction.
+ */
+function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number; a: number }[], crystalR: number, scale: number): CaveSpec {
+  const { w, h, P, sector, base, pos, nests, polar } = f;
+  // Polar units are fractions of the map ellipse; this converts px to them (roughly).
+  const unit = Math.min(w * 0.44, h * 0.42);
+  const carves: Capsule[] = [];
+  const rotate = (r1: number, a1: number, r2: number, a2: number, rad: number) => {
+    for (let k = 0; k < P; k++) {
+      const [x1, y1] = pos(r1, base + a1 + k * sector);
+      const [x2, y2] = pos(r2, base + a2 + k * sector);
+      carves.push({ x1, y1, x2, y2, r: rad });
+    }
+  };
+
+  // Sector 0's chambers. The center nest (r = 0) is shared by every sector.
+  type Node = { r: number; a: number; R: number };
+  const nodes: Node[] = [];
+  polar.forEach((p, i) => {
+    if (p.sec !== 0) return;
+    const n = nests[i];
+    const boost = p.r === 0 ? 1.5 : n.player >= 0 ? 1.4 : 1;
+    nodes.push({ r: p.r, a: p.a, R: NEST_RADIUS[n.type] + cp.chamber * boost * scale });
+  });
+  for (const c of crystals) nodes.push({ r: c.r, a: c.a, R: crystalR + 34 * scale });
+
+  for (const n of nodes) {
+    rotate(n.r, n.a, n.r, n.a, n.R);
+    // A few lumpy side pockets so chambers aren't perfect circles.
+    const lumps = 2 + rng.int(2);
+    for (let k = 0; k < lumps; k++) {
+      const off = (n.R * rng.range(0.35, 0.65)) / unit;
+      const dr = rng.range(-1, 1) * off;
+      const da = n.r > 0.05 ? (rng.range(-1, 1) * off) / n.r : 0;
+      rotate(n.r + dr, n.a + da, n.r + dr, n.a + da, n.R * rng.range(0.5, 0.75));
+    }
+  }
+
+  // Candidate tunnels: every pair inside the sector, and every pair across
+  // the border into the next sector (angle + sector).
+  const xy = (r: number, a: number) => pos(r, base + a);
+  type Edge = { i: number; j: number; cross: boolean; len: number };
+  const edges: Edge[] = [];
+  const dist = (r1: number, a1: number, r2: number, a2: number) => {
+    const [x1, y1] = xy(r1, a1), [x2, y2] = xy(r2, a2);
+    // sqrt, not hypot: hypot isn't guaranteed identical across browsers.
+    return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+  };
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      edges.push({ i, j, cross: false, len: dist(nodes[i].r, nodes[i].a, nodes[j].r, nodes[j].a) });
+    }
+    for (let j = 0; j < nodes.length; j++) {
+      if (nodes[i].r === 0 || nodes[j].r === 0) continue;
+      edges.push({ i, j, cross: true, len: dist(nodes[i].r, nodes[i].a, nodes[j].r, nodes[j].a + sector) });
+    }
+  }
+  edges.sort((a, b) => a.len - b.len || a.i - b.i || a.j - b.j);
+
+  // Spanning tree (Kruskal) inside the sector; the center joins the sectors.
+  const parent = nodes.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const chosen: Edge[] = [];
+  for (const e of edges) {
+    if (e.cross) continue;
+    const a = find(e.i), b = find(e.j);
+    if (a === b) continue;
+    parent[a] = b;
+    chosen.push(e);
+  }
+  const longest = Math.max(...chosen.map((e) => e.len));
+  // Neighbors always share a border tunnel: the shortest one.
+  const border = edges.find((e) => e.cross);
+  if (border) chosen.push(border);
+  // Loops: a few more short tunnels, for flanks and second routes.
+  const maxLoops = 1 + Math.round(cp.loops * 3);
+  for (let k = 0, e = 0; e < edges.length && k < maxLoops; e++) {
+    const c = edges[e];
+    if (chosen.includes(c) || c.len > longest * 1.5) continue;
+    if (rng.next() < cp.loops) {
+      chosen.push(c);
+      k++;
+    }
+  }
+
+  const tunnel = (r1: number, a1: number, r2: number, a2: number) => {
+    // A tunnel into the center comes straight in from its other end.
+    if (r1 === 0) a1 = a2;
+    if (r2 === 0) a2 = a1;
+    const segs = Math.max(2, Math.round(dist(r1, a1, r2, a2) / 70));
+    let pr = r1, pa = a1;
+    for (let s = 1; s <= segs; s++) {
+      const t = s / segs;
+      let r = r1 + (r2 - r1) * t, a = a1 + (a2 - a1) * t;
+      if (s < segs) {
+        // Wander a little so tunnels bend.
+        r += (rng.range(-1, 1) * 22) / unit;
+        if (r > 0.05) a += (rng.range(-1, 1) * 22) / unit / r;
+      }
+      rotate(pr, pa, r, a, rng.range(cp.tunnel[0], cp.tunnel[1]) * scale);
+      pr = r;
+      pa = a;
+    }
+  };
+  for (const e of chosen) {
+    const A = nodes[e.i], B = nodes[e.j];
+    tunnel(A.r, A.a, B.r, B.a + (e.cross ? sector : 0));
+  }
+
+  let zone: Capsule[] | null = null;
+  if (cp.mode === 'full') {
+    // The deep: a tunnel in from the map edge on each border, where wild swarms enter.
+    const ea = 0.5 * sector;
+    let best = 0, bd = Infinity;
+    nodes.forEach((n, i) => {
+      if (n.r === 0) return;
+      for (const a of [n.a, n.a + sector]) {
+        const d = dist(1.12, ea, n.r, a);
+        if (d < bd) {
+          bd = d;
+          best = i;
+        }
+      }
+    });
+    const n = nodes[best];
+    const na = Math.abs(n.a - ea) < Math.abs(n.a + sector - ea) ? n.a : n.a + sector;
+    tunnel(1.12, ea, n.r, na);
+  } else {
+    // Belt: a thick ring of rock around the center, built from arcs.
+    zone = [];
+    const r = 0.5, rad = 0.26 * unit, segs = 4;
+    for (let s = 0; s < segs; s++) {
+      for (let k = 0; k < P; k++) {
+        const [x1, y1] = pos(r, base + (s / segs) * sector + k * sector);
+        const [x2, y2] = pos(r, base + ((s + 1) / segs) * sector + k * sector);
+        zone.push({ x1, y1, x2, y2, r: rad });
+      }
+    }
+  }
+  return { carves, zone };
 }

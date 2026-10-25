@@ -1,6 +1,6 @@
 import { FACTION_HEX, FACTION_NAMES } from '../content/factions';
 import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
-import { EVENT_LEVELS, TERRAIN_LEVELS, type EventLevel, type MapSize, type TerrainLevel } from '../sim/mapgen';
+import { CAVE_LEVELS, EVENT_LEVELS, TERRAIN_LEVELS, type CaveLevel, type EventLevel, type MapSize, type TerrainLevel } from '../sim/mapgen';
 import { hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import type { World } from '../sim/world';
@@ -163,7 +163,7 @@ function howToPlayMobile(onBack: () => void): HTMLDivElement {
         <h3>Powers and upgrades</h3>
         <p><b>Surge</b> and <b>Nova</b> fire on your selected dots. Nest powers: tap the button, then tap the target. Tap one of your nests, then <b>Upgrade</b> to feed it dots for faster spawns and a turret.</p>
         <h3>The map</h3>
-        <p>Rock blocks paths, purple nebula slows, red rifts burn. Hold a crystal or a supply drop alone for energy. Wild swarms and the Colossus fight everyone.</p>
+        <p>Rock blocks paths (cave maps are mostly rock, with tunnels between chambers), purple nebula slows, red rifts burn. Hold a crystal or a supply drop alone for energy. Wild swarms and the Colossus fight everyone.</p>
         <div class="row end"><button class="primary" data-a="back">Got it</button></div>
       </div>
     </div>`);
@@ -199,7 +199,7 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
             <p><b>Upgrade</b> a nest by feeding it dots (U). Level 2 spawns faster and adds a turret; level 3 spawns tougher veterans and strengthens the nest's power. Levels survive capture, so upgraded nests are worth taking. Feeding a damaged nest repairs it first.</p>
             <h3>Terrain</h3>
             <ul class="terrain">
-              <li><i class="t-wall"></i><b>Rock</b> blocks movement and shots. Gaps make chokepoints</li>
+              <li><i class="t-wall"></i><b>Rock</b> blocks movement and shots. Gaps make chokepoints. On cave layouts, nests sit in chambers joined by tunnels</li>
               <li><i class="t-neb"></i><b>Nebula</b> slows everything inside: ambush ground</li>
               <li><i class="t-rift"></i><b>Rift</b> burns dots standing in it: a risky shortcut</li>
               <li><i class="t-crys"></i><b>Crystal</b> charges energy for whoever holds it alone</li>
@@ -229,15 +229,19 @@ export interface SetupPrefs {
   color: number;
   size: MapSize;
   terrain: TerrainLevel;
+  caves: CaveLevel;
   events: EventLevel;
   teams: boolean;
   bots: BotRow[];
 }
 
+const CAVE_LABEL: Record<CaveLevel, string> = { off: 'Open', belt: 'Cave belt', full: 'Caves' };
+
 const DEFAULT_PREFS: SetupPrefs = {
   color: 0,
   size: 'medium',
   terrain: 'standard',
+  caves: 'off',
   events: 'normal',
   teams: false,
   bots: [
@@ -283,6 +287,7 @@ export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
     seed,
     size: p.size,
     terrain: p.terrain,
+    caves: p.caves,
     events: p.events,
     portrait: window.innerHeight > window.innerWidth * 1.15,
     players: [
@@ -329,6 +334,12 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
             <div class="seg" data-a="terrain">
               ${TERRAIN_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
             </div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Layout <small>open ground, a ring of caves around the center, or one big cave system</small></label>
+          <div class="seg" data-a="caves">
+            ${CAVE_LEVELS.map((t) => `<button data-v="${t}">${CAVE_LABEL[t]}</button>`).join('')}
           </div>
         </div>
         <div class="field two">
@@ -379,6 +390,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
     (m.querySelector('[data-a=add]') as HTMLButtonElement).disabled = prefs.bots.length >= 5;
     m.querySelectorAll<HTMLButtonElement>('[data-a=size] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.size));
     m.querySelectorAll<HTMLButtonElement>('[data-a=terrain] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.terrain));
+    m.querySelectorAll<HTMLButtonElement>('[data-a=caves] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.caves));
     m.querySelectorAll<HTMLButtonElement>('[data-a=events] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.events));
   };
 
@@ -446,6 +458,13 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
     const v = (e.target as HTMLElement).dataset.v as TerrainLevel | undefined;
     if (v) {
       prefs.terrain = v;
+      render();
+    }
+  });
+  m.querySelector('[data-a=caves]')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).dataset.v as CaveLevel | undefined;
+    if (v) {
+      prefs.caves = v;
       render();
     }
   });

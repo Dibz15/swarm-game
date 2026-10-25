@@ -59,7 +59,11 @@ void main(){
     float win = 1.0 - smoothstep(-px, px, wd);
     col *= 1.0 - 0.45 * exp(-max(wd, 0.0) / 9.0) * (1.0 - win);
     float hatch = step(abs(fract((w.x + w.y) / 13.0) - 0.5), 0.07);
-    vec3 rock = vec3(0.030, 0.034, 0.055) + vec3(0.045, 0.055, 0.09) * smoothstep(-12.0, 0.0, wd) + vec3(0.010, 0.013, 0.024) * hatch;
+    // Deep rock (big cave masses) goes darker than the floor, with a firmer hatch.
+    float deep = 1.0 - smoothstep(-24.0, -10.0, wd);
+    vec3 rock = mix(vec3(0.030, 0.034, 0.055), vec3(0.008, 0.009, 0.016), deep)
+      + vec3(0.045, 0.055, 0.09) * smoothstep(-12.0, 0.0, wd)
+      + mix(vec3(0.010, 0.013, 0.024), vec3(0.020, 0.024, 0.042), deep) * hatch;
     rock *= 0.85 + 0.3 * vnoise(w * 0.05);
     col = mix(col, rock, win);
     col += vec3(0.28, 0.40, 0.72) * exp(-abs(wd) / (px * 1.3 + 0.6)) * 0.85;

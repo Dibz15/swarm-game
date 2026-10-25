@@ -1,7 +1,7 @@
 // How well does a player who never issues a command do against bots?
 // Runs the same games with individual anti-snowball rules switched off.
 // Usage: npx vite-node scripts/idle-probe.ts [games] [size] [bots]
-import { EVENTS, TERRAIN } from './env';
+import { CAVES, EVENTS, TERRAIN } from './env';
 import { PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -29,7 +29,7 @@ for (const [name, apply] of variants) {
   const places: number[] = [];
   let wins = 0, minutes = 0;
   for (let g = 0; g < games; g++) {
-    const w = createWorld({ terrain: TERRAIN, events: EVENTS, 
+    const w = createWorld({ terrain: TERRAIN, caves: CAVES, events: EVENTS, 
       seed: 7000 + g, size,
       players: [
         { faction: 0, team: 0, human: true },
