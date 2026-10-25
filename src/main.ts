@@ -197,6 +197,7 @@ class App {
       lockdown: () => this.game?.startAim('lockdown'),
     });
     this.hud.setMuted(this.sfx.muted);
+    this.applyInsets();
     if (record) this.hud.toast(opts.scenario ? `Recording: ${opts.scenario}` : 'Recording this match', '#8aa0b8');
     // Open on the player's home, zoomed in a little.
     const [hx, hy] = this.game.homePoint();
@@ -210,8 +211,16 @@ class App {
     this.saveRec(reason, true);
     this.hud?.destroy();
     this.hud = null;
+    this.camera.setInsets(0, 0);
     this.game = null;
     this.input.game = null;
+  }
+
+  /** Keep the camera's usable area in step with the HUD (#36). */
+  private applyInsets(): void {
+    const d = this.renderer.dpr;
+    this.camera.edgePad = 40 * d;
+    if (this.hud) this.camera.setInsets(Math.round(this.hud.insetTop * d), Math.round(this.hud.insetBottom * d));
   }
 
   private togglePause(): void {
@@ -337,6 +346,7 @@ class App {
       g.update(dt, this.time);
       if (g.result) this.saveRec(g.result, true);
       this.hud?.update(g, dt);
+      this.applyInsets();
       g.render(this.time);
       if (g.result && !this.endShown && this.time - g.resultTime > 1.6) this.showEnd();
     } else if (this.demo) {
