@@ -37,7 +37,7 @@ export const DIFFICULTY: readonly DifficultyKnobs[] = [
   { think: 80, margin: 1.9, powers: false, upgradeSkill: 0.35, noise: 0.6, prod: 1, openReserve: 1, surgeAt: 10, dumpAt: 101 },
   { think: 45, margin: 1.45, powers: true, upgradeSkill: 0.7, noise: 0.3, prod: 1, openReserve: 0.5, surgeAt: 8, dumpAt: 95 },
   { think: 24, margin: 1.25, powers: true, upgradeSkill: 1, noise: 0.12, prod: 1, openReserve: 0, surgeAt: 6, dumpAt: 85 },
-  { think: 14, margin: 1.15, powers: true, upgradeSkill: 1, noise: 0.06, prod: 1.25, openReserve: 0, surgeAt: 6, dumpAt: 85 },
+  { think: 14, margin: 1.15, powers: true, upgradeSkill: 1, noise: 0.06, prod: 1.5, openReserve: 0, surgeAt: 6, dumpAt: 85 },
 ];
 
 interface PersonalityKnobs {
