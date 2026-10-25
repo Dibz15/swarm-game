@@ -53,6 +53,8 @@ export interface Faction {
   eliminated: boolean;
   eliminatedTick: number;
   prodMult: number;
+  /** hard army limit on top of supply (tutorial opponents); 0 = none */
+  unitCap: number;
   stats: FactionStats;
 }
 
@@ -271,6 +273,7 @@ export class World {
         eliminated: false,
         eliminatedTick: 0,
         prodMult: 1,
+        unitCap: 0,
         stats: { spawned: 0, kills: 0, lost: 0, captured: 0, peak: 0 },
       });
       this.teamOf[f] = f === NEUTRAL ? NEUTRAL_TEAM : f;

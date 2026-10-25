@@ -86,13 +86,13 @@ const solo = (m: MapSpec, portrait: boolean, energy = 0): MatchSetup => ({
   players: [{ faction: 0, team: 0, human: true, energy }],
 });
 
-const versus = (m: MapSpec, portrait: boolean, personality: 'turtler' | 'expander', energy = 0, passive = false): MatchSetup => ({
+const versus = (m: MapSpec, portrait: boolean, personality: 'turtler' | 'expander', energy = 0, passive = false, unitCap = 0): MatchSetup => ({
   seed: 1702,
   size: 'small',
   map: orient(m, portrait),
   players: [
     { faction: 0, team: 0, human: true, energy },
-    { faction: 1, team: 1, human: false, bot: { difficulty: 0, personality, passive } },
+    { faction: 1, team: 1, human: false, bot: { difficulty: 0, personality, passive }, unitCap },
   ],
 });
 
@@ -234,8 +234,10 @@ export const MISSIONS: Mission[] = [
         portrait,
         'turtler',
         30,
-        // A lesson, not a race: it defends but never comes for your nests.
+        // A lesson, not a race: it defends but never comes for your nests,
+        // and stays small however long you take.
         true,
+        14,
       ),
     steps: [
       {

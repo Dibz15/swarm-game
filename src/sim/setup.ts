@@ -13,6 +13,8 @@ export interface PlayerSetup {
   bot?: BotConfig;
   /** starting energy (tutorial missions; default 0) */
   energy?: number;
+  /** hard army limit (tutorial opponents) */
+  unitCap?: number;
 }
 
 export interface MatchSetup {
@@ -58,6 +60,7 @@ export function createWorld(setup: MatchSetup): World {
     f.active = true;
     f.human = p.human;
     f.energy = p.energy ?? 0;
+    f.unitCap = p.unitCap ?? 0;
     w.setTeam(p.faction, p.team);
     if (!p.human) {
       const cfg = p.bot ?? { difficulty: 1, personality: 'expander' };

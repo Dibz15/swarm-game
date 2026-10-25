@@ -117,19 +117,22 @@ describe('tutorial (#17)', () => {
 });
 
 describe('tutorial bots', () => {
-  it('the mission 3 bot never comes for an idle player', () => {
+  it('the mission 3 bot never comes for an idle player, and stays small', () => {
     const m = MISSIONS.find((x) => x.id === 'fight')!;
     for (const portrait of [false, true]) {
       const w = createWorld(m.setup(portrait));
       const before = w.nests.filter((n) => n.owner === 0).length;
-      let lowest = before;
+      let lowest = before, biggest = 0;
       while (w.tick < 3 * 60 * TICK_HZ) {
         step(w, []);
         w.fx = [];
         w.deaths = [];
         lowest = Math.min(lowest, w.nests.filter((n) => n.owner === 0).length);
+        biggest = Math.max(biggest, w.unitCount[1]);
       }
       expect(lowest).toBe(before);
+      // ...and stays small, so taking its home is quick however long you took.
+      expect(biggest).toBeLessThanOrEqual(m.setup(portrait).players[1].unitCap!);
       expect(w.factions[0].eliminated).toBe(false);
     }
   });
