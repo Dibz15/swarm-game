@@ -69,6 +69,10 @@ export class Hud {
   private tip: HTMLDivElement;
   private aimHint: HTMLDivElement;
   private bottom: HTMLDivElement;
+  private top: HTMLDivElement;
+  /** CSS px of the view covered by the top panel and the bottom bar (for the camera) */
+  insetTop = 0;
+  insetBottom = 0;
   private counters: HTMLDivElement;
   private kindChips: HTMLButtonElement[] = [];
   /** the match this HUD is showing (set every update) */
@@ -172,6 +176,8 @@ export class Hud {
     this.tip = q('.tip');
     this.aimHint = q('.aimhint');
     this.bottom = q('.hud-bottom');
+    this.top = q('.hud-top');
+    this.measure();
     q<HTMLButtonElement>('.aimhint .cancel').addEventListener('click', (e) => {
       e.stopPropagation();
       if (this.game) this.game.aim = null;
@@ -222,6 +228,14 @@ export class Hud {
     setTimeout(() => t.remove(), 3200);
   }
 
+  /** How much of the screen the top panel and bottom bar cover. */
+  measure(): void {
+    const h = this.el.clientHeight || window.innerHeight;
+    this.insetTop = Math.max(0, this.top.getBoundingClientRect().bottom);
+    const b = this.bottom.getBoundingClientRect();
+    this.insetBottom = b.height > 0 ? Math.max(0, h - b.top) : 0;
+  }
+
   update(g: GameView, dt: number): void {
     this.game = g;
     this.tipTimer += dt;
@@ -239,6 +253,7 @@ export class Hud {
     this.clock.textContent = formatTime(w.tick);
     // Floating panels sit above the bottom bar, whose height depends on what's in it.
     this.el.style.setProperty('--hudb', `${this.bottom.offsetHeight}px`);
+    this.measure();
     this.aimHint.classList.toggle('on', !!g.aim);
     if (g.aim) (this.aimHint.firstElementChild as HTMLElement).textContent = `Tap where to cast ${g.aim[0].toUpperCase()}${g.aim.slice(1)}`;
 
