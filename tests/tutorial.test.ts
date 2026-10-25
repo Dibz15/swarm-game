@@ -115,3 +115,22 @@ describe('tutorial (#17)', () => {
   }
   it('fits in about ten minutes of autopilot play', () => console.log('mission times:', times.join(', ')));
 });
+
+describe('tutorial bots', () => {
+  it('the mission 3 bot never comes for an idle player', () => {
+    const m = MISSIONS.find((x) => x.id === 'fight')!;
+    for (const portrait of [false, true]) {
+      const w = createWorld(m.setup(portrait));
+      const before = w.nests.filter((n) => n.owner === 0).length;
+      let lowest = before;
+      while (w.tick < 3 * 60 * TICK_HZ) {
+        step(w, []);
+        w.fx = [];
+        w.deaths = [];
+        lowest = Math.min(lowest, w.nests.filter((n) => n.owner === 0).length);
+      }
+      expect(lowest).toBe(before);
+      expect(w.factions[0].eliminated).toBe(false);
+    }
+  });
+});
