@@ -1,7 +1,7 @@
 // How the human plays vs how the bots in the same matches play (#29).
 // Usage: npx vite-node scripts/human-profile.ts swarm-recordings-*.json [...]
 // Human numbers come from the recorded trace; bot tempo needs a replay, so it is
-// only shown for recordings made on the current build.
+// only shown for recordings that still replay to their recorded hash.
 import type { Command } from '../src/sim/commands';
 import { Bot } from '../src/sim/ai/bot';
 import { TICK_HZ } from '../src/sim/constants';
@@ -67,14 +67,14 @@ function humanOnly(r: Recording, w: World | null): Row {
   const row: Row = { 'selections/min': t.sel.length / mins };
   for (const m of ['box', 'click', 'paint', 'all', 'type', 'kind', 'group']) row[`sel ${m} %`] = (100 * t.sel.filter((s) => s[1] === m).length) / (t.sel.length || 1);
   for (const s of ['key', 'hud', 'mouse', 'touch']) row[`from ${s} %`] = (100 * t.orders.filter((o) => o[2] === s).length) / (t.orders.length || 1);
-  // Camera: how far it moves and how much of the map it shows.
-  let jumps = 0;
+  // Camera: how far it travels (in screen widths) and how much of the map it shows.
+  let travel = 0;
   for (let k = 1; k < t.cam.length; k++) {
     const [, x0, y0, hw] = t.cam[k - 1];
     const [, x1, y1] = t.cam[k];
-    if (Math.abs(x1 - x0) > hw || Math.abs(y1 - y0) > hw) jumps++;
+    travel += Math.hypot(x1 - x0, y1 - y0) / (2 * hw);
   }
-  row['camera jumps/min'] = jumps / mins;
+  row['camera screens/min'] = travel / mins;
   row['view width % of map'] = w ? (100 * median(t.cam.map((c) => c[3] * 2))) / w.width : NaN;
   // Alerts: was the nest on screen, and how long until an order went near it.
   const onScreen: number[] = [];
@@ -110,18 +110,18 @@ for (const r of recs) {
   const h = r.trace.orders.map((o) => ({ tick: o[0], t: o[1], units: o[3] }));
   push(humans, key, common(r, r.human, h));
   let w: World | null = null;
-  if (r.build === here) {
-    botLog = [];
-    const out = replay(r);
-    w = out.world;
-    if (!out.ok) console.warn(`${r.id}: replay diverged on its own build`);
+  botLog = [];
+  const out = replay(r);
+  w = out.world;
+  if (!out.ok) console.warn(`${r.id}: replay diverged${r.build === here ? ' on its own build' : ` (recorded on ${r.build})`}: no bot tempo`);
+  else {
     for (const p of r.setup.players) {
       if (p.human || !p.bot) continue;
       const mine = botLog.filter((b) => b.f === p.faction).map((b) => ({ tick: b.tick, t: b.cmd.t, units: 'units' in b.cmd ? b.cmd.units.length : 0 }));
       push(bots, key, common(r, p.faction, mine));
     }
-    botLog = null;
   }
+  botLog = null;
   push(extra, key, humanOnly(r, w));
 }
 
@@ -131,8 +131,7 @@ const mean = (rows: Row[], k: string) => {
 };
 const fmt = (v: number) => (Number.isFinite(v) ? (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1)) : '-').padStart(8);
 
-const stale = recs.filter((r) => r.build !== here).length;
-console.log(`${recs.length} recordings (${stale} from other builds: no bot tempo for those), current build ${here}`);
+console.log(`${recs.length} recordings, current build ${here}`);
 for (const key of [...humans.keys()].sort((a, b) => (a === 'ALL' ? 1 : b === 'ALL' ? -1 : a.localeCompare(b)))) {
   const hs = humans.get(key)!;
   const bs = bots.get(key) ?? [];
