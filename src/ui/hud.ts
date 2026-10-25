@@ -106,7 +106,7 @@ export class Hud {
       <div class="nestcard"></div>
       <div class="aimhint"><span></span><button class="cancel">Cancel</button></div>
       <div class="tip"><span></span><button class="x" title="Hide tips">✕</button></div>
-      <div class="coach"><small></small><p></p><div class="coach-row"><span class="pips"></span><button class="small" data-a="skip">Skip mission</button></div></div>
+      <div class="coach"><small></small><p></p><div class="coach-status"></div><div class="coach-row"><span class="pips"></span><button class="small" data-a="skip">Skip mission</button></div></div>
       <div class="counters" title="Spears pierce Shields · Shields stop Swarmers · Swarmers overrun Spears">
         <svg viewBox="0 0 120 92" aria-hidden="true">
           <defs>
@@ -239,6 +239,8 @@ export class Hud {
     this.coach.style.top = `${Math.round(topBottom + 8)}px`;
     const coach = this.coach.getBoundingClientRect();
     this.insetTop = coach.height > 0 ? Math.max(topBottom, coach.bottom) : topBottom;
+    // Toasts drop below the tutorial coach while it's up.
+    this.toasts.style.top = coach.height > 0 ? `${Math.round(coach.bottom + 8)}px` : '';
     const b = this.bottom.getBoundingClientRect();
     this.insetBottom = b.height > 0 ? Math.max(0, h - b.top) : 0;
   }
@@ -246,6 +248,11 @@ export class Hud {
   /** Tutorial coach: the current step's instruction and progress (#17). */
   private updateCoach(g: GameView, mobile: boolean): void {
     const m = g.mission;
+    // The live status line changes on its own; everything else only when the step does.
+    const status = m?.current?.status?.({ w: g.world, human: g.human, log: g.session.log }) ?? '';
+    const st = this.coach.querySelector('.coach-status') as HTMLElement;
+    if (st.innerHTML !== status) st.innerHTML = status;
+    st.style.display = status ? '' : 'none';
     const key = m ? `${m.index}:${m.step}:${mobile}` : '';
     if (key === this.coachKey) return;
     this.coachKey = key;

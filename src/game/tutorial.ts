@@ -1,10 +1,10 @@
 import { EVENT_PRESETS, type EventSpec, type MapSpec, type NestSpec } from '../sim/mapgen';
-import { NEUTRAL, NestType } from '../sim/constants';
+import { NEUTRAL, NestType, TICK_HZ } from '../sim/constants';
 import type { MatchSetup } from '../sim/setup';
 import type { CrystalSpec, FieldSpec, Capsule } from '../sim/terrain';
 import type { World } from '../sim/world';
 import type { DemoAction } from '../ui/demo';
-import { UNIT_FEEDING } from '../sim/world';
+import { UNIT_FEEDING, WILD_SWARM } from '../sim/world';
 import type { TimedCommand } from './session';
 
 /**
@@ -35,6 +35,8 @@ export interface Step {
   demo?: (c: StepCtx) => DemoAction[];
   /** a HUD element to make glow (a selector inside the HUD), for steps about the HUD */
   pulse?: string;
+  /** a live line under the instruction (a countdown, say) */
+  status?: (c: StepCtx) => string | null;
 }
 
 export interface Mission {
@@ -136,6 +138,17 @@ const sendTo = (ids: (c: StepCtx) => number[]) => (c: StepCtx): DemoAction[] => 
   const id = ids(c).find((i) => c.w.nests[i].owner !== c.human);
   return id === undefined ? [] : [...selectArmy(c), { t: 'tap', at: at(c, id), order: true }];
 };
+
+/** "Wild swarm in 12 s" until it shows up, then a nudge to Nova. */
+function swarmStatus(c: StepCtx): string | null {
+  const ev = c.w.events;
+  if (!ev) return null;
+  let wild = 0;
+  for (let i = 0; i < c.w.n; i++) if (c.w.alive[i] && c.w.wild[i] === WILD_SWARM) wild++;
+  if (wild > 0) return '<b>The swarm is here!</b> Select your army and Nova it.';
+  const secs = Math.max(0, Math.ceil((ev.nextSwarm - c.w.tick) / TICK_HZ));
+  return `Wild swarm in ${secs} s…`;
+}
 
 // ---- the missions ----------------------------------------------------------------
 
@@ -286,7 +299,8 @@ export const MISSIONS: Mission[] = [
           ],
           {
             fields: [{ kind: 'nebula', x1: 560, y1: 120, x2: 640, y2: 200, r: 60 }],
-            events: { params: { swarm: { first: 70, every: 45, size: 22 }, drop: null, colossus: [], regrow: 0 }, swarmSpawns: [[1080, 120]], dropSpots: [], colossusPaths: [] },
+            // Early and often, and big enough to outlast the home turret for a few seconds.
+            events: { params: { swarm: { first: 40, every: 35, size: 32 }, drop: null, colossus: [], regrow: 0 }, swarmSpawns: [[1080, 120]], dropSpots: [], colossusPaths: [] },
           },
         ),
         portrait,
@@ -313,11 +327,12 @@ export const MISSIONS: Mission[] = [
       },
       {
         text: {
-          desktop: 'A wild swarm is coming from the top right. Gather your army at home, and when the swarm arrives select them and press <b>Nova (E)</b>.',
-          mobile: 'A wild swarm is coming from the top right. Gather your army at home, and when the swarm arrives select them and tap <b>Nova</b>.',
+          desktop: 'A wild swarm is on its way. Gather your army at home, and when the swarm arrives select them and press <b>Nova (E)</b>.',
+          mobile: 'A wild swarm is on its way. Gather your army at home, and when the swarm arrives select them and tap <b>Nova</b>.',
         },
         done: (c) => ordered(c, 'nova'),
         highlight: () => [0],
+        status: swarmStatus,
         demo: (c) => [...selectArmy(c), { t: 'button', a: 'nova' }],
       },
       {
