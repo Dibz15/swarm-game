@@ -26,6 +26,8 @@ export class LocalSession {
   /** interpolation factor between the previous and current tick */
   alpha = 0;
   lastStepMs = 0;
+  /** sees every command as it is issued (the match recorder) */
+  onIssue: ((cmd: Command) => void) | null = null;
 
   constructor(setup: MatchSetup) {
     this.setup = setup;
@@ -34,6 +36,7 @@ export class LocalSession {
 
   issue(cmd: Command): void {
     this.queue.push(cmd);
+    this.onIssue?.(cmd);
   }
 
   update(dt: number): number {

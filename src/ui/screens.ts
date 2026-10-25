@@ -7,6 +7,7 @@ import type { World } from '../sim/world';
 import { NEUTRAL } from '../sim/constants';
 import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
+import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 
 function el(html: string): HTMLDivElement {
@@ -104,6 +105,14 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
       <div class="vols">
         ${vol('master', 'Master')}${vol('sfx', 'Effects')}${vol('ambience', 'Ambience')}${vol('music', 'Music')}
       </div>
+      <h3>Recording</h3>
+      <label class="check"><input type="checkbox" data-a="rec"> Record my games (stays on this device)</label>
+      <div class="row rec-actions">
+        <span class="rec-count hint"></span>
+        <button class="small" data-a="rec-dl">Download</button>
+        <button class="small" data-a="rec-clear">Clear</button>
+      </div>
+      <p class="hint">Saves your orders, camera and selections to study how people play. Nothing is uploaded; Download gives you a file to share.</p>
     </div>`);
   const modes = [...m.querySelectorAll<HTMLButtonElement>('[data-a=mode] button')];
   const mark = () => modes.forEach((b) => b.classList.toggle('on', b.dataset.v === uiMode()));
@@ -118,6 +127,22 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
   m.querySelectorAll<HTMLInputElement>('[data-vol]').forEach((inp) =>
     inp.addEventListener('input', () => audio.setVolume(inp.dataset.vol as VolumeKind, Number(inp.value) / 100)),
   );
+  const rec = m.querySelector('[data-a=rec]') as HTMLInputElement;
+  const count = m.querySelector('.rec-count') as HTMLSpanElement;
+  const dl = m.querySelector('[data-a=rec-dl]') as HTMLButtonElement;
+  const clear = m.querySelector('[data-a=rec-clear]') as HTMLButtonElement;
+  const refresh = () =>
+    countRecordings().then((n) => {
+      count.textContent = `${n} game${n === 1 ? '' : 's'} saved`;
+      dl.disabled = clear.disabled = n === 0;
+    });
+  rec.checked = recordingEnabled();
+  rec.addEventListener('change', () => setRecordingEnabled(rec.checked));
+  dl.addEventListener('click', () => void downloadRecordings());
+  clear.addEventListener('click', () => {
+    if (confirm('Delete every saved recording on this device?')) void clearRecordings().then(refresh);
+  });
+  void refresh();
   return m;
 }
 
@@ -304,14 +329,37 @@ export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
   };
 }
 
-export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () => void): HTMLDivElement {
+/** Fixed scenarios for recording sessions (#29), replayed on the same seeds so games compare. */
+interface Scenario {
+  name: string;
+  seed: string;
+  size: MapSize;
+  caves: CaveLevel;
+  bots: (Personality | 'random')[];
+}
+
+const SCENARIOS: Scenario[] = [
+  ...PERSONALITIES.map((p): Scenario => ({ name: `1v1 vs ${PERSONA_LABEL[p]}`, seed: `rec-duel-${p}`, size: 'small', caves: 'off', bots: [p] })),
+  { name: '4-player FFA', seed: 'rec-ffa-4', size: 'medium', caves: 'off', bots: ['random', 'random', 'random'] },
+  { name: '1v1 on Caves', seed: 'rec-caves', size: 'small', caves: 'full', bots: ['random'] },
+  { name: '1v1 on Cave belt', seed: 'rec-belt', size: 'small', caves: 'belt', bots: ['random'] },
+  { name: '6 players, large', seed: 'rec-ffa-6', size: 'large', caves: 'off', bots: ['random', 'random', 'random', 'random', 'random'] },
+];
+
+export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) => void, onBack: () => void): HTMLDivElement {
   const prefs = loadPrefs();
   let seedText = randomSeed();
+  /** the recording-session preset in use, until the player changes a setting */
+  let scenario: Scenario | null = null;
 
   const m = el(`
     <div class="screen modal">
       <div class="card setup">
         <h2>Skirmish</h2>
+        ${recordingEnabled() ? `<div class="field">
+          <label>Recording session <small>fixed matchups on fixed seeds, so games compare</small></label>
+          <select data-a="scenario"><option value="">Custom</option>${SCENARIOS.map((s, i) => `<option value="${i}">${s.name}</option>`).join('')}</select>
+        </div>` : ''}
         <div class="field">
           <label>Your color</label>
           <div class="swatches"></div>
@@ -373,7 +421,43 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
   const used = () => new Set([prefs.color, ...prefs.bots.map((b) => b.faction)]);
   const freeColor = () => [0, 1, 2, 3, 4, 5].find((c) => !used().has(c)) ?? -1;
 
+  const scenarioSel = m.querySelector('[data-a=scenario]') as HTMLSelectElement | null;
+  scenarioSel?.addEventListener('change', () => {
+    scenario = SCENARIOS[Number(scenarioSel.value)] ?? null;
+    if (!scenario) return render();
+    const difficulty = prefs.bots[0]?.difficulty ?? 1;
+    const free = [0, 1, 2, 3, 4, 5].filter((c) => c !== prefs.color);
+    prefs.size = scenario.size;
+    prefs.terrain = 'standard';
+    prefs.caves = scenario.caves;
+    prefs.events = 'normal';
+    prefs.teams = false;
+    teamsBox.checked = false;
+    prefs.bots = scenario.bots.map((personality, i) => ({ faction: free[i], difficulty, personality, team: i + 1 }));
+    seedInput.value = scenario.seed;
+    render();
+  });
+  // Any manual change leaves the preset.
+  m.addEventListener(
+    'click',
+    (e) => {
+      const t = e.target as HTMLElement;
+      if (scenario && t.tagName !== 'SELECT' && t.closest('.seg, .swatches, .bots, [data-a=add], [data-a=dice]')) scenario = null;
+    },
+    { capture: true },
+  );
+  // Bot difficulty is part of the recorded setup, so changing it keeps the preset.
+  m.addEventListener('change', (e) => {
+    const t = e.target as HTMLElement;
+    if (scenario && t !== scenarioSel && t.dataset.a !== 'diff') {
+      scenario = null;
+      render();
+    }
+  });
+  seedInput.addEventListener('input', () => (scenario = null));
+
   const render = () => {
+    if (scenarioSel && !scenario) scenarioSel.value = '';
     swatches.innerHTML = FACTION_HEX.slice(0, 6)
       .map((c, i) => `<button class="sw${i === prefs.color ? ' on' : ''}" data-c="${i}" style="--c:${c}" title="${FACTION_NAMES[i]}"></button>`)
       .join('');
@@ -487,7 +571,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup) => void, onBack: () =
       prefs.bots[prefs.bots.length - 1].team = 1;
     }
     savePrefs(prefs);
-    onStart(buildSetup(prefs, seedInput.value));
+    onStart(buildSetup(prefs, seedInput.value), scenario?.name);
   });
 
   render();

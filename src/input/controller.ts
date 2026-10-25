@@ -273,7 +273,7 @@ export class InputController {
       // Hold Space and sweep the cursor to paint-select (trackpad friendly).
       e.preventDefault();
       if (!e.repeat) {
-        if (!e.shiftKey) g.selection.clear();
+        if (!e.shiftKey) g.clearSelection();
         this.painting = true;
       }
       return;
@@ -311,6 +311,7 @@ export class InputController {
         e.preventDefault();
       } else if (g.selection.recallGroup(n)) {
         g.selection.prune(g.world, g.human);
+        g.noteSelection('group');
         // double-tap the number to jump to it
         if (this.lastGroup === n && performance.now() - this.lastGroupT < 350) this.centerOnSelection();
         this.lastGroup = n;

@@ -2,6 +2,8 @@ import './style.css';
 import { AudioEngine } from './audio/engine';
 import { FACTION_RGB } from './content/factions';
 import { GameView, type Services } from './game/gameView';
+import type { EndReason } from './game/recording';
+import { recordingEnabled, saveRecording } from './game/recordStore';
 import { LocalSession } from './game/session';
 import { InputController } from './input/controller';
 import { Camera } from './render/camera';
@@ -9,11 +11,11 @@ import { Particles, Rings } from './render/particles';
 import { Renderer } from './render/renderer';
 import { drawWorld } from './render/scene';
 import { PERSONALITIES } from './sim/ai/bot';
-import { Kind, MAX_UNITS } from './sim/constants';
+import { Kind, MAX_UNITS, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
 import { Hud } from './ui/hud';
-import { initUiMode, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
+import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
 import { buildSetup, endScreen, howToPlay, loadPrefs, mainMenu, mobileNotice, pauseMenu, randomSeed, settingsScreen, skirmishSetup } from './ui/screens';
 
 class App {
@@ -35,6 +37,8 @@ class App {
   private screen: HTMLElement | null = null;
   private modal: HTMLElement | null = null;
   private endShown = false;
+  /** the current match's recording was saved at its end */
+  private recSaved = false;
   private last = 0;
   private time = 0;
   private frames = 0;
@@ -56,9 +60,23 @@ class App {
       toast: (m, c) => this.hud?.toast(m, c),
     };
     this.sfx.setListener(this.camera);
-    window.addEventListener('pointerdown', () => this.sfx.unlock(), { capture: true });
+    window.addEventListener(
+      'pointerdown',
+      (e) => {
+        this.sfx.unlock();
+        const rec = this.game?.rec;
+        if (rec) rec.source = e.target !== this.canvas ? 'hud' : e.pointerType === 'touch' ? 'touch' : 'mouse';
+      },
+      { capture: true },
+    );
+    // Save what we have when the tab is hidden: phones may never come back.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') this.saveRec('unload', false);
+    });
     window.addEventListener('keydown', (e) => {
       this.sfx.unlock();
+      const rec = this.game?.rec;
+      if (rec) rec.source = 'key';
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       if (e.key === 'm' || e.key === 'M') this.toggleMute();
       if (e.key === '`') this.showPerf = !this.showPerf;
@@ -120,7 +138,7 @@ class App {
   }
 
   private showSetup(): void {
-    this.setModal(skirmishSetup((setup) => this.startGame(setup), () => this.setModal(null)));
+    this.setModal(skirmishSetup((setup, scenario) => this.startGame(setup, { scenario }), () => this.setModal(null)));
   }
 
   private startDemo(): void {
@@ -153,13 +171,15 @@ class App {
     this.rings.list = [];
   }
 
-  private startGame(setup: MatchSetup): void {
-    this.endGame();
+  private startGame(setup: MatchSetup, opts: { scenario?: string; record?: boolean } = {}, prevEnd: EndReason = 'quit'): void {
+    this.endGame(prevEnd);
     this.demo = null;
     this.setModal(null);
     this.setScreen(null);
     this.endShown = false;
-    this.game = new GameView(setup, this.services);
+    this.recSaved = false;
+    const record = opts.record !== false && recordingEnabled();
+    this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null);
     this.input.game = this.game;
     this.input.enabled = true;
     this.input.reset();
@@ -168,7 +188,7 @@ class App {
       surge: () => this.game?.surge(),
       nova: () => this.game?.nova(),
       upgrade: () => this.game?.upgrade(),
-      clear: () => this.game?.selection.clear(),
+      clear: () => this.game?.clearSelection(),
       pause: () => this.togglePause(),
       mute: () => this.toggleMute(),
       fortify: () => this.game?.startAim('fortify'),
@@ -177,6 +197,7 @@ class App {
       lockdown: () => this.game?.startAim('lockdown'),
     });
     this.hud.setMuted(this.sfx.muted);
+    if (record) this.hud.toast(opts.scenario ? `Recording: ${opts.scenario}` : 'Recording this match', '#8aa0b8');
     // Open on the player's home, zoomed in a little.
     const [hx, hy] = this.game.homePoint();
     this.camera.zoom = this.camera.fitZoom * 1.15;
@@ -185,7 +206,8 @@ class App {
     this.camera.clampPos();
   }
 
-  private endGame(): void {
+  private endGame(reason: EndReason = 'quit'): void {
+    this.saveRec(reason, true);
     this.hud?.destroy();
     this.hud = null;
     this.game = null;
@@ -195,6 +217,7 @@ class App {
   private togglePause(): void {
     const g = this.game;
     if (!g || g.result) return;
+    g.rec?.pause(g.world, !g.session.paused, performance.now() / 1000);
     if (g.session.paused) {
       g.session.paused = false;
       this.input.enabled = true;
@@ -206,7 +229,7 @@ class App {
       this.setModal(
         pauseMenu({
           resume: () => this.togglePause(),
-          restart: () => this.startGame(g.setup),
+          restart: () => this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart'),
           quit: () => this.showMenu(),
           audio: this.sfx,
         }),
@@ -226,11 +249,25 @@ class App {
     this.input.reset();
     this.setModal(
       endScreen(g.world, g.human, g.result === 'victory', {
-        rematch: () => this.startGame(g.setup),
+        rematch: () => this.startGame(g.setup, { scenario: g.rec?.scenario }),
         newMap: () => this.startGame(buildSetup(loadPrefs(), randomSeed())),
         quit: () => this.showMenu(),
       }),
     );
+  }
+
+  /**
+   * Store the current match's recording. `final` marks it saved, so a match
+   * that already ended isn't saved again as quit.
+   */
+  private saveRec(reason: EndReason, final: boolean): void {
+    const g = this.game;
+    if (!g?.rec || this.recSaved) return;
+    const log = g.session.log;
+    // A match left within seconds with no orders tells us nothing.
+    if (!log.length && g.world.tick < 15 * TICK_HZ) return;
+    void saveRecording(g.rec.finish(g.world, log, reason));
+    if (final) this.recSaved = true;
   }
 
   // ---- benchmark ---------------------------------------------------------
@@ -245,7 +282,7 @@ class App {
         { faction: 1, team: 1, human: false, bot: { difficulty: 0, personality: 'turtler' } },
       ],
     };
-    this.startGame(setup);
+    this.startGame(setup, { record: false });
     const w = this.game!.world;
     const half = Math.floor(Math.min(n, MAX_UNITS - w.count - 64) / 2);
     for (let k = 0; k < half * 2; k++) {
@@ -268,7 +305,7 @@ class App {
         { faction: 0, team: 0, human: true },
         { faction: 1, team: 1, human: false, bot: { difficulty: 1, personality: 'expander' } },
       ],
-    });
+    }, { record: false });
   }
 
   // ---- frame loop --------------------------------------------------------
@@ -298,6 +335,7 @@ class App {
       const g = this.game;
       this.input.update(dt);
       g.update(dt, this.time);
+      if (g.result) this.saveRec(g.result, true);
       this.hud?.update(g, dt);
       g.render(this.time);
       if (g.result && !this.endShown && this.time - g.resultTime > 1.6) this.showEnd();
