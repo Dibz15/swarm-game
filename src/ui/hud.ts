@@ -11,6 +11,7 @@ const TIPS = [
   'Select a nest and press U to feed it dots and level it up.',
   'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
   'Hold 70% of the nests (60% on large maps) for 30 seconds to win by domination.',
+  'Your count at the top is army / supply cap. Every nest you hold raises the cap; at the cap your nests stop producing.',
   'Ctrl+5–9 saves a control group, 5–9 recalls it. C centers the camera on your selection, 0 fits the map.',
   'Each nest type you hold unlocks a power: Forge → Fortify (R), Spire → Barrage (F), Den → Blink (G), Bastion → Lockdown (T).',
   'Spears pierce Shields, Shields stop Swarmers, Swarmers overrun Spears. Raiders capture nests three times faster.',
@@ -256,9 +257,17 @@ export class Hud {
       seg.style.flexGrow = String(w.unitCount[f.id] / total + 0.0001);
       const chip = this.chips.children[k] as HTMLElement;
       chip.classList.toggle('dead', f.eliminated);
-      (chip.children[0] as HTMLElement).textContent = String(w.unitCount[f.id]);
+      if (f.id === g.human) {
+        // Your own chip shows supply: army / cap, red while production is blocked.
+        const sp = g.supply();
+        (chip.children[0] as HTMLElement).textContent = `${sp.units}/${sp.cap}`;
+        chip.classList.toggle('blocked', sp.blocked);
+      } else (chip.children[0] as HTMLElement).textContent = String(w.unitCount[f.id]);
       (chip.children[1] as HTMLElement).textContent = `⬡${nestsOf(f.id)}`;
-      chip.title = `${FACTION_NAMES[f.id]}${f.id === g.human ? ' (you)' : ''}`;
+      chip.title =
+        f.id === g.human
+          ? `${FACTION_NAMES[f.id]} (you). Army / supply cap: nests stop producing at the cap. Take or upgrade nests to raise it.`
+          : FACTION_NAMES[f.id];
     });
 
     // Nest share: one segment per faction, unheld nests left empty.

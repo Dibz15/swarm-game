@@ -4,7 +4,8 @@ import { CAVES, EVENTS, TERRAIN } from './env';
 import { PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
-import { NEUTRAL, TICK_HZ, UNIT_FEEDING } from '../src/sim/constants';
+import { NEUTRAL, TICK_HZ } from '../src/sim/constants';
+import { UNIT_FEEDING } from '../src/sim/world';
 
 const players = Number(process.argv[2] ?? 4);
 const size = (process.argv[3] ?? 'medium') as 'small' | 'medium' | 'large';

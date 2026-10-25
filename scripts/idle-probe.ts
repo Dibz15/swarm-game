@@ -5,18 +5,19 @@ import { CAVES, EVENTS, TERRAIN } from './env';
 import { PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
-import { BALANCE, CAPITAL, TICK_HZ } from '../src/sim/constants';
+import { BALANCE, CAPITAL, SUPPLY, TICK_HZ } from '../src/sim/constants';
 
 const games = Number(process.argv[2] ?? 40);
 const size = (process.argv[3] ?? 'medium') as 'small' | 'medium' | 'large';
 const bots = Number(process.argv[4] ?? 3);
 const base = { ...BALANCE };
 const baseCap = { ...CAPITAL };
+const baseSupply = { ...SUPPLY };
 
 const variants: [string, () => void][] = [
   ['current', () => {}],
   ['linear nests (exp 1.0)', () => (BALANCE.nestExponent = 1)],
-  ['no soft cap', () => (BALANCE.softCap = 1e9)],
+  ['no supply cap', () => (SUPPLY.base = 1e9)],
   ['no home armor', () => (BALANCE.homeArmor = 1)],
   ['no capital defense', () => { CAPITAL.armor = 1; CAPITAL.dps = 0; }],
   ['no underdog energy', () => (BALANCE.underdogEnergy = 0)],
@@ -25,6 +26,7 @@ const variants: [string, () => void][] = [
 for (const [name, apply] of variants) {
   Object.assign(BALANCE, base);
   Object.assign(CAPITAL, baseCap);
+  Object.assign(SUPPLY, baseSupply);
   apply();
   const places: number[] = [];
   let wins = 0, minutes = 0;

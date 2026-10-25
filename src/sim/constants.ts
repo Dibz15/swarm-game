@@ -148,11 +148,16 @@ export const CAPITAL = { range: 88, dps: 11, targets: 2, armor: 0.6 };
  * - Factions behind the leader charge energy faster.
  * - Each extra nest adds less production than the last.
  */
+/**
+ * Supply: your army can't grow past base + perNest per nest held + perLevel
+ * per upgrade level above 1. At the cap your nests stop producing (nothing
+ * dies), so expanding is the way to grow and hoarding at home stalls. Late in
+ * the match escalation lifts the per-nest part by up to `escalation`x more,
+ * so leaders can still close it out.
+ */
+export const SUPPLY = { base: 20, perNest: 16, perLevel: 6, escalation: 1 };
+
 export const BALANCE = {
-  softCap: 30,
-  /** extra soft-cap headroom per nest held, so hoarding on one nest stalls sooner */
-  capPerNest: 25,
-  softScale: 160,
   homeRadius: 70,
   homeArmor: 0.75,
   underdogEnergy: 1.5,

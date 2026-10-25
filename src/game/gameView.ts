@@ -5,7 +5,7 @@ import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
-import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, type MatchSetup, type NestPower } from '../sim/index';
+import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
 import { feedNeed, hasPower, powerBoost } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { LocalSession } from './session';
@@ -43,6 +43,10 @@ export class GameView {
   private spawnSeen: number[] = [];
   private domSecs = -1;
   private frame = 0;
+  /** supply state last frame, to announce hitting the cap once */
+  private supplyBlocked = false;
+  private supplyNests = 0;
+  private supplyToastTick = -1e9;
 
   constructor(
     readonly setup: MatchSetup,
@@ -70,6 +74,7 @@ export class GameView {
       if (me?.eliminated) this.finish('defeat', time);
       else if (w.over) this.finish(w.winnerTeam === w.teamOf[this.human] ? 'victory' : 'defeat', time);
     }
+    if (!this.result) this.checkSupply();
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
     // Domination countdown ticks in the last ten seconds.
     const ds = this.result ? null : dominationStatus(w);
@@ -202,6 +207,34 @@ export class GameView {
       if (n) r.shape(true, n.x, n.y, n.r * 1.6, 0, 1, 0, 0.06, ok ? WHITE : [255, 93, 115], 220);
       else r.shape(true, cur[0], cur[1], 14, 0, 1, 0, 0.1, [255, 93, 115], 160);
     }
+  }
+
+  /** Your army vs your supply cap. */
+  supply(): { units: number; cap: number; blocked: boolean } {
+    const w = this.world;
+    const units = w.unitCount[this.human] ?? 0;
+    const cap = supplyCap(w, this.human);
+    return { units, cap, blocked: units >= cap };
+  }
+
+  /** Say so when production stops at the cap (at most every 20s), louder if a lost nest caused it. */
+  private checkSupply(): void {
+    const w = this.world;
+    const { units, cap, blocked } = this.supply();
+    let nests = 0;
+    for (const n of w.nests) if (n.owner === this.human) nests++;
+    if (blocked && !this.supplyBlocked && w.tick - this.supplyToastTick > 20 * TICK_HZ && nests > 0) {
+      this.supplyToastTick = w.tick;
+      this.s.sfx.fail();
+      this.s.toast(
+        nests < this.supplyNests
+          ? `Lost a nest: over supply (${units}/${cap}). Production paused`
+          : `Supply cap reached (${cap}). Take or upgrade nests to grow your army`,
+        '#ffb627',
+      );
+    }
+    this.supplyBlocked = blocked;
+    this.supplyNests = nests;
   }
 
   private drainEvents(): void {

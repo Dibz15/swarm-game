@@ -3,18 +3,18 @@ import { CAVES, EVENTS, TERRAIN } from './env';
 import { PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
-import { BALANCE, TICK_HZ } from '../src/sim/constants';
+import { SUPPLY, TICK_HZ } from '../src/sim/constants';
 
 const games = Number(process.argv[2] ?? 20);
-const base = { ...BALANCE };
+const base = { ...SUPPLY };
 const variants: [string, () => void][] = [
-  ['current (exp 0.75, cap 110)', () => {}],
-  ['A exp .85 cap 30+25/n s160', () => Object.assign(BALANCE, { nestExponent: 0.85, softCap: 30, capPerNest: 25, softScale: 160 })],
-  ['B exp .9 cap 30+25/n s160', () => Object.assign(BALANCE, { nestExponent: 0.9, softCap: 30, capPerNest: 25, softScale: 160 })],
-  ['C exp .85 cap 20+30/n s120', () => Object.assign(BALANCE, { nestExponent: 0.85, softCap: 20, capPerNest: 30, softScale: 120 })],
+  ['current supply', () => {}],
+  ['no supply cap', () => (SUPPLY.base = 1e9)],
+  ['tight 15+14/n', () => Object.assign(SUPPLY, { base: 15, perNest: 14 })],
+  ['loose 30+20/n', () => Object.assign(SUPPLY, { base: 30, perNest: 20 })],
 ];
 for (const [name, apply] of variants) {
-  Object.assign(BALANCE, base);
+  Object.assign(SUPPLY, base);
   apply();
   const at = [2, 3, 4].map(() => ({ idle: 0, top: 0, mean: 0, n: 0 }));
   for (let g = 0; g < games; g++) {

@@ -142,7 +142,7 @@ function howToPlayMobile(onBack: () => void): HTMLDivElement {
       <div class="card wide howto-mobile">
         <h2>How to play</h2>
         <h3>The goal</h3>
-        <p>Capture <b>nests</b>: they're the only way to make more dots. Win by wiping out every rival, or by holding most of the nests for 30 seconds.</p>
+        <p>Capture <b>nests</b>: they're the only way to make more dots, and each one raises how big your army can get (shown at the top as army / cap). Win by wiping out every rival, or by holding most of the nests for 30 seconds.</p>
         <h3>Play</h3>
         <ul class="steps">
           <li><b>Drag</b> across your dots to select them.</li>
@@ -184,7 +184,9 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
             <h3>Fighting</h3>
             <p>Dots fight automatically. Any dot near an enemy locks on and shoots. The thin lines are the shots. Your job is to decide where your dots go and when they go there.</p>
             <h3>Capturing</h3>
-            <p>Park dots on a nest while no enemies are on it, and the ring fills. Neutral nests have gray guards, so clear them out first. A nest that's under attack stops spawning. Your dots take less damage near your own nests, and huge armies spawn more slowly, so a comeback is always possible. From minute 5 those comeback bonuses fade out (<b>escalation</b>), so every match reaches an endgame.</p>
+            <p>Park dots on a nest while no enemies are on it, and the ring fills. Neutral nests have gray guards, so clear them out first. A nest that's under attack stops spawning. Your dots take less damage near your own nests, so a comeback is always possible. From minute 5 those comeback bonuses fade out (<b>escalation</b>), so every match reaches an endgame.</p>
+            <h3>Supply</h3>
+            <p>Your army can only grow so big: <b>20 + 16 per nest you hold</b>, plus a little for each upgrade level. Your count at the top shows army / cap. At the cap your nests stop producing (nothing dies), so to grow, take more nests. Escalation raises the cap late in the match.</p>
           </div>
           <div>
             <h3>Nests</h3>
