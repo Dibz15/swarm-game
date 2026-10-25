@@ -8,6 +8,7 @@ import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
 import { feedNeed, hasPower, powerBoost } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
+import { Recorder, type SelectMethod } from './recording';
 import { LocalSession } from './session';
 
 export interface Services {
@@ -39,6 +40,8 @@ export class GameView {
   brush: { x: number; y: number; r: number } | null = null;
   result: MatchResult | null = null;
   resultTime = 0;
+  /** match recorder (#29), when the player opted in */
+  readonly rec: Recorder | null;
   private mask = new Uint8Array(MAX_UNITS);
   private spawnSeen: number[] = [];
   private domSecs = -1;
@@ -51,9 +54,17 @@ export class GameView {
   constructor(
     readonly setup: MatchSetup,
     private readonly s: Services,
+    record: { scenario?: string; mobile: boolean } | null = null,
   ) {
     this.session = new LocalSession(setup);
     this.human = setup.players.find((p) => p.human)?.faction ?? -1;
+    this.rec = record
+      ? new Recorder(setup, this.human, { mobile: record.mobile, touch: matchMedia('(pointer: coarse)').matches, w: innerWidth, h: innerHeight }, record.scenario)
+      : null;
+    if (this.rec) {
+      const rec = this.rec;
+      this.session.onIssue = (c) => rec.order(this.world, c);
+    }
     s.camera.setMap(this.world.width, this.world.height);
     s.camera.fit();
     s.particles.clear();
@@ -69,6 +80,7 @@ export class GameView {
     this.drainEvents();
     this.selection.prune(this.world, this.human);
     const w = this.world;
+    this.rec?.frame(w, this.s.camera);
     if (!this.result) {
       const me = w.factions[this.human];
       if (me?.eliminated) this.finish('defeat', time);
@@ -438,6 +450,17 @@ export class GameView {
       .map((n) => n.id);
     this.selection.set(units, nests, additive);
     if (units.length || nests.length) this.s.sfx.click();
+    this.noteSelection('box');
+  }
+
+  /** Tell the recorder how the selection just changed. */
+  noteSelection(method: SelectMethod): void {
+    this.rec?.select(this.world, method, this.selection.units.size, this.selection.nests.size);
+  }
+
+  clearSelection(): void {
+    this.selection.clear();
+    this.noteSelection('clear');
   }
 
   /**
@@ -454,6 +477,7 @@ export class GameView {
       if (additive && this.selection.nests.has(own.id)) this.selection.nests.delete(own.id);
       else this.selection.set([], [own.id], additive);
       this.s.sfx.click();
+      this.noteSelection('click');
       return true;
     }
     if (units.length) {
@@ -470,6 +494,7 @@ export class GameView {
       const R = radius * 2.2;
       this.selection.set(this.ownUnitsIn((x, y) => (x - cx) ** 2 + (y - cy) ** 2 <= R * R), [], additive);
       this.s.sfx.click();
+      this.noteSelection('click');
       return true;
     }
     if (!additive) this.selection.clear();
@@ -482,13 +507,17 @@ export class GameView {
     for (const u of this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= radius * radius)) {
       this.selection.units.add(u);
     }
-    if (this.selection.units.size > before) this.s.sfx.click();
+    if (this.selection.units.size > before) {
+      this.s.sfx.click();
+      this.noteSelection('paint');
+    }
   }
 
   selectAll(): void {
     this.selection.set(this.ownUnitsIn(() => true), [], false);
     this.typeCycle = null;
     this.s.sfx.click();
+    this.noteSelection('all');
   }
 
   // ---- picking unit types out of a selection ------------------------------
@@ -519,6 +548,7 @@ export class GameView {
     this.selection.set(keep, [], false);
     this.typeCycle = null;
     this.s.sfx.click();
+    this.noteSelection('filter');
   }
 
   /** Every own unit of `kind` inside the given world rect (the screen). */
@@ -533,6 +563,7 @@ export class GameView {
     this.selection.set(units, [], false);
     this.typeCycle = null;
     this.s.sfx.click();
+    this.noteSelection('kind');
   }
 
   /**
@@ -547,6 +578,7 @@ export class GameView {
     this.selection.set(pick, [], false);
     this.typeCycle = { base, idx: [0, 1, 2, 3].filter((k) => base.some((u) => this.kindOf(u) === k)).indexOf(kind) };
     this.s.sfx.click();
+    this.noteSelection('type');
   }
 
   /** Every own unit of `kind` currently on screen. */
@@ -587,6 +619,7 @@ export class GameView {
     this.selection.set(units, [], false);
     this.typeCycle = { base, idx };
     this.s.sfx.click();
+    this.noteSelection('cycle');
   }
 
   commandAt(wx: number, wy: number): boolean {

@@ -521,3 +521,5 @@ body.mobile .aimhint button { min-height: 40px; }
   body.mobile .actions button { min-height: 44px; }
   body.mobile .hud-top { width: calc(100% - 200px); }
 }
+.settings .rec-actions { align-items: center; gap: 8px; margin-top: 6px; }
+.settings .rec-actions .rec-count { margin: 0 auto 0 0; }

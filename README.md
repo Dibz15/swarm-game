@@ -37,6 +37,15 @@ npx esbuild scripts/bench.ts --bundle --platform=node --format=esm --outfile=$TM
 TERRAIN=heavy node $TMPDIR/bench.mjs 5000
 ```
 
+Recording your own games (#29): turn on Settings → Recording → "Record my games". Each match is stored in the browser (IndexedDB) with its setup, command log and a client trace (camera, selections, input source, nest alerts, pauses, per-faction stats every 5 s). Skirmish setup then offers fixed **Recording session** scenarios on fixed seeds. Settings → Download exports everything as one JSON file; nothing is uploaded.
+
+```bash
+npx vite-node scripts/replay.ts swarm-recordings-*.json         # re-run headlessly, check the final hash
+npx vite-node scripts/human-profile.ts swarm-recordings-*.json  # human vs bot tempo, expansion, attention, per scenario
+```
+
+Replays only reproduce on the commit that recorded them (stored as `build`); the trace and stats work on any build.
+
 Dev URL flags:
 - `?debug` shows the fps / sim-ms overlay (press `` ` `` to toggle it) and exposes the app as `window.swarm` for console poking.
 - `?bench=5000` runs a stress battle with about 5,000 units.
