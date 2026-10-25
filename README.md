@@ -27,6 +27,7 @@ EVENTS=normal npx vite-node scripts/event-probe.ts 4 medium 20   # events per ga
 npx vite-node scripts/upgrade-probe.ts turtler medium 40   # mirror match: eager upgrader vs never-upgrader
 npx vite-node scripts/supply-probe.ts 20         # army size vs nests held per minute (supply cap headroom)
 npx vite-node scripts/hoard-probe.ts 20          # idle hoarder vs bots under supply cap variants
+npx vite-node scripts/takeoff-probe.ts 24        # runaway leaders: top/2nd army ratio, comebacks per supply variant
 ```
 
 Every probe takes `TERRAIN=none|light|standard|heavy`, `CAVES=off|belt|full` and `EVENTS=off|calm|normal|wild` (defaults `none` / `off` / `off`), e.g. `TERRAIN=standard npx vite-node scripts/balance.ts 4 medium 40`. For sim timing without vite-node overhead:
@@ -68,7 +69,7 @@ Dev URL flags:
   - Nests keep their level when captured, so upgraded nests are prizes.
   - Feeding a damaged nest repairs its control first (the button reads **Repair**).
 - **Energy** builds up over time and from kills and captures. **Surge** (Q) costs 30: the selected dots get faster, stronger and tougher for 6 seconds. **Nova** (E) costs 60: it sacrifices about 20% of the selected dots and sends out a shockwave.
-- **Supply:** your army can't grow past 20 + 16 per nest held + 6 per upgrade level above 1 (the HUD shows army / cap). At the cap nests stop producing, so expanding is how you grow; escalation raises the per-nest part late in the match.
+- **Supply:** your army can't grow past 20 + 16 per nest held (8 for each nest past six) + 3 per upgrade level above 1 (the HUD shows army / cap). Production slows as you near the cap (upkeep) and stops at it, so expanding is how you grow and runaway leaders cool off; escalation removes the upkeep and raises the per-nest part late in the match.
 - **Anti-snowball:** each extra nest adds less production (nests^0.9), dots near their own nests take less damage, factions that are behind charge energy faster, starting nests are defended capitals, and bots gang up on a runaway leader.
 - **Selecting by type:** 1–4 keep Swarmers / Shields / Spears / Raiders from your group (or grab that type on screen), and Shift+1–4 drops a type. Double-click a unit to grab all of its type on screen. The type chips and counter wheel icons work the same way, and Tab cycles. Control groups are Ctrl+5–9 / 5–9.
 - **Escalation:** from minute 5, those comeback rules fade out over 3 minutes so every match reaches an endgame.

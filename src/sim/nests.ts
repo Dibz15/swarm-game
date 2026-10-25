@@ -47,7 +47,9 @@ export function supplyCap(w: World, f: number): number {
 }
 
 function capFor(nests: number, levels: number, L: number): number {
-  return Math.floor(SUPPLY.base + (SUPPLY.perNest * nests + SUPPLY.perLevel * levels) * (1 + SUPPLY.escalation * L));
+  const full = Math.min(nests, SUPPLY.fullNests);
+  const counted = full + (nests - full) * SUPPLY.tail;
+  return Math.floor(SUPPLY.base + (SUPPLY.perNest * counted + SUPPLY.perLevel * levels) * (1 + SUPPLY.escalation * L));
 }
 
 export function updateNests(w: World): void {
@@ -187,15 +189,20 @@ function spawn(w: World, n: Nest): void {
   const kind = NEST_KIND[n.type];
   if (kind < 0) return;
   // Supply blocked: no production until the army shrinks or the cap grows.
-  if (w.unitCount[n.owner] >= Math.min(FACTION_UNIT_CAP, capOf[n.owner])) return;
+  const cap = capOf[n.owner];
+  if (w.unitCount[n.owner] >= Math.min(FACTION_UNIT_CAP, cap)) return;
   const f = w.factions[n.owner];
+  const L = escalation(w.tick);
+  // Upkeep: the closer to the cap, the slower the nests (big armies cost more
+  // to feed). Fades with escalation like the other comeback rules.
+  const fill = w.unitCount[n.owner] / cap;
+  const upkeep = 1 - SUPPLY.upkeep * (1 - L) * fill * fill;
   // Diminishing returns on width: k nests produce like k^exp nests. Relaxes
   // as the match escalates.
-  const L = escalation(w.tick);
   const k = nestCount[n.owner];
   const exp = BALANCE.nestExponent + (1 - BALANCE.nestExponent) * L;
   const wide = k > 1 ? Math.pow(k, exp - 1) : 1;
-  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * wide;
+  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * wide * upkeep;
   const interval = UNIT_STATS[kind].interval;
   if (n.spawnAcc < interval) return;
   n.spawnAcc -= interval;

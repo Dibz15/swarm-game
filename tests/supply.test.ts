@@ -37,6 +37,26 @@ describe('supply', () => {
     expect(supplyCap(w, 0)).toBe(SUPPLY.base + (2 * SUPPLY.perNest + 2 * SUPPLY.perLevel) * (1 + SUPPLY.escalation));
   });
 
+  it('nests past the first few add less supply', () => {
+    const w = arena();
+    for (let k = 0; k < SUPPLY.fullNests + 4; k++) nest(w, 0, 100 + k * 90, 300);
+    expect(supplyCap(w, 0)).toBe(Math.floor(SUPPLY.base + SUPPLY.perNest * (SUPPLY.fullNests + 4 * SUPPLY.tail)));
+  });
+
+  it('upkeep: a nearly capped army produces slower than a small one', () => {
+    const grow = (start: number) => {
+      const w = arena();
+      nest(w, 0, 200, 400);
+      nest(w, 0, 500, 400);
+      nest(w, 1, 1100, 400);
+      park(w, 0, start, 60, 60);
+      park(w, 1, 4, 1100, 700);
+      for (let t = 0; t < 10 * TICK_HZ; t++) step(w, []);
+      return w.unitCount[0] - start;
+    };
+    expect(grow(SUPPLY.base + 2 * SUPPLY.perNest - 20)).toBeLessThan(grow(4));
+  });
+
   it('nests stop producing at the cap, and a new nest restarts them', () => {
     const w = arena();
     nest(w, 0, 200, 400);

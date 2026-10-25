@@ -186,7 +186,7 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
             <h3>Capturing</h3>
             <p>Park dots on a nest while no enemies are on it, and the ring fills. Neutral nests have gray guards, so clear them out first. A nest that's under attack stops spawning. Your dots take less damage near your own nests, so a comeback is always possible. From minute 5 those comeback bonuses fade out (<b>escalation</b>), so every match reaches an endgame.</p>
             <h3>Supply</h3>
-            <p>Your army can only grow so big: <b>20 + 16 per nest you hold</b>, plus a little for each upgrade level. Your count at the top shows army / cap. At the cap your nests stop producing (nothing dies), so to grow, take more nests. Escalation raises the cap late in the match.</p>
+            <p>Your army can only grow so big: <b>20 + 16 per nest you hold</b> (half that for each nest past six), plus a little for each upgrade level. Your count at the top shows army / cap. Nests slow down as you near the cap and stop at it (nothing dies), so to grow, take more nests. Escalation lifts the cap and the slowdown late in the match.</p>
           </div>
           <div>
             <h3>Nests</h3>
