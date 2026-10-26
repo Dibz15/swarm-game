@@ -1,6 +1,6 @@
 // Timeline of one bot match: units/nests per player every 30s.
 // Usage: npx vite-node scripts/trace.ts [players] [size] [seed]
-import { CAVES, EVENTS, TERRAIN } from './env';
+import { CAVES, EVENTS, LAYOUT, TERRAIN } from './env';
 import { PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -10,7 +10,7 @@ const players = Number(process.argv[2] ?? 5);
 const size = (process.argv[3] ?? 'large') as 'small' | 'medium' | 'large';
 const seed = Number(process.argv[4] ?? 1000);
 const pers = Array.from({ length: players }, (_, i) => PERSONALITIES[(i + seed - 1000 + 4000) % 4] /* same seating as balance.ts */);
-const w = createWorld({ terrain: TERRAIN, caves: CAVES, events: EVENTS,  seed, size, players: pers.map((p, i) => ({ faction: i, team: i, human: false, bot: { difficulty: 1, personality: p } })) });
+const w = createWorld({ terrain: TERRAIN, caves: CAVES, layout: LAYOUT, events: EVENTS,  seed, size, players: pers.map((p, i) => ({ faction: i, team: i, human: false, bot: { difficulty: 1, personality: p } })) });
 console.log(`${players}p ${size} seed ${seed}, ${w.nests.length} nests, domination needs ${Math.ceil(w.nests.length * w.domShare)}`);
 console.log('time  ' + pers.map((p) => p.slice(0, 9).padEnd(10)).join('') + 'neutral');
 while (!w.over && w.tick < 15 * 60 * TICK_HZ) {

@@ -3,7 +3,7 @@
 // doesn't bias results. Finish order: winner 1st, then survivors by nests,
 // then eliminated players by how long they lasted.
 // Usage: npx vite-node scripts/personality-probe.ts [players] [size] [games] [difficulty]
-import { CAVES, EVENTS, TERRAIN } from './env';
+import { CAVES, EVENTS, LAYOUT, TERRAIN } from './env';
 import { PERSONALITIES, type Personality } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -19,7 +19,7 @@ for (const p of PERSONALITIES) stat.set(p, { games: 0, wins: 0, place: 0, spawne
 
 for (let g = 0; g < games; g++) {
   const pers = Array.from({ length: players }, (_, i) => PERSONALITIES[(i + g) % 4]);
-  const w = createWorld({ terrain: TERRAIN, caves: CAVES, events: EVENTS, 
+  const w = createWorld({ terrain: TERRAIN, caves: CAVES, layout: LAYOUT, events: EVENTS, 
     seed: 5000 + g, size,
     players: pers.map((p, i) => ({ faction: i, team: i, human: false, bot: { difficulty, personality: p } })),
   });

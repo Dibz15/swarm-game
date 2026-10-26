@@ -1,7 +1,7 @@
 // Headless balance probe: run bot FFAs and report match length, how they
 // ended, and how often the lead changed hands.
 // Usage: npx vite-node scripts/balance.ts [players] [size] [games] [difficulty]
-import { CAVES, EVENTS, TERRAIN } from './env';
+import { CAVES, EVENTS, LAYOUT, TERRAIN } from './env';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
 import { PERSONALITIES } from '../src/sim/ai/bot';
@@ -13,7 +13,7 @@ const games = Number(process.argv[4] ?? 12);
 const difficulty = Number(process.argv[5] ?? 1);
 let totalMin = 0, totalChanges = 0, comebacks = 0, firstOut = 0, straggle = 0;
 for (let g = 0; g < games; g++) {
-  const w = createWorld({ terrain: TERRAIN, caves: CAVES, events: EVENTS, 
+  const w = createWorld({ terrain: TERRAIN, caves: CAVES, layout: LAYOUT, events: EVENTS, 
     seed: 1000 + g,
     size,
     players: Array.from({ length: players }, (_, i) => ({

@@ -1,6 +1,6 @@
 import { FACTION_HEX, FACTION_NAMES } from '../content/factions';
 import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
-import { CAVE_LEVELS, EVENT_LEVELS, TERRAIN_LEVELS, type CaveLevel, type EventLevel, type MapSize, type TerrainLevel } from '../sim/mapgen';
+import { CAVE_LEVELS, EVENT_LEVELS, MAP_LAYOUTS, TERRAIN_LEVELS, type CaveLevel, type EventLevel, type MapLayout, type MapSize, type TerrainLevel } from '../sim/mapgen';
 import { hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import type { World } from '../sim/world';
@@ -135,6 +135,7 @@ export function randomSetup(difficulty: number): MatchSetup {
       size,
       terrain: weighted<TerrainLevel>([['light', 2], ['standard', 5], ['heavy', 2]]),
       caves: weighted<CaveLevel>([['off', 6], ['belt', 2], ['full', 1]]),
+      layout: 'random',
       events: weighted<EventLevel>([['calm', 2], ['normal', 6], ['wild', 1]]),
       teams: false,
       bots: others.slice(0, bots).map((faction, i) => ({ faction, difficulty, personality: 'random', team: i + 1 })),
@@ -464,18 +465,21 @@ export interface SetupPrefs {
   size: MapSize;
   terrain: TerrainLevel;
   caves: CaveLevel;
+  layout: MapLayout | 'random';
   events: EventLevel;
   teams: boolean;
   bots: BotRow[];
 }
 
 const CAVE_LABEL: Record<CaveLevel, string> = { off: 'Open', belt: 'Cave belt', full: 'Caves' };
+const LAYOUT_LABEL: Record<MapLayout | 'random', string> = { random: 'Random', classic: 'Classic', open: 'Open center', core: 'Core', clusters: 'Clusters', lanes: 'Lanes' };
 
 const DEFAULT_PREFS: SetupPrefs = {
   color: 0,
   size: 'medium',
   terrain: 'standard',
   caves: 'off',
+  layout: 'random',
   events: 'normal',
   teams: false,
   bots: [
@@ -522,6 +526,7 @@ export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
     size: p.size,
     terrain: p.terrain,
     caves: p.caves,
+    layout: p.layout,
     events: p.events,
     portrait: window.innerHeight > window.innerWidth * 1.15,
     players: [
@@ -594,9 +599,15 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
           </div>
         </div>
         <div class="field">
-          <label>Layout <small>open ground, a ring of caves around the center, or one big cave system</small></label>
+          <label>Ground <small>open, a ring of caves around the center, or one big cave system</small></label>
           <div class="seg" data-a="caves">
             ${CAVE_LEVELS.map((t) => `<button data-v="${t}">${CAVE_LABEL[t]}</button>`).join('')}
+          </div>
+        </div>
+        <div class="field">
+          <label>Map <small>how the nests are spread</small></label>
+          <div class="seg wrap" data-a="layout">
+            ${(['random', ...MAP_LAYOUTS] as const).map((t) => `<button data-v="${t}">${LAYOUT_LABEL[t]}</button>`).join('')}
           </div>
         </div>
         <div class="field two">
@@ -637,6 +648,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     prefs.size = scenario.size;
     prefs.terrain = 'standard';
     prefs.caves = scenario.caves;
+    prefs.layout = 'random';
     prefs.events = 'normal';
     prefs.teams = false;
     teamsBox.checked = false;
@@ -684,6 +696,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     m.querySelectorAll<HTMLButtonElement>('[data-a=size] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.size));
     m.querySelectorAll<HTMLButtonElement>('[data-a=terrain] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.terrain));
     m.querySelectorAll<HTMLButtonElement>('[data-a=caves] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.caves));
+    m.querySelectorAll<HTMLButtonElement>('[data-a=layout] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.layout));
     m.querySelectorAll<HTMLButtonElement>('[data-a=events] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.events));
   };
 
@@ -758,6 +771,13 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     const v = (e.target as HTMLElement).dataset.v as CaveLevel | undefined;
     if (v) {
       prefs.caves = v;
+      render();
+    }
+  });
+  m.querySelector('[data-a=layout]')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).dataset.v as SetupPrefs['layout'] | undefined;
+    if (v) {
+      prefs.layout = v;
       render();
     }
   });
