@@ -151,8 +151,11 @@ export function skirmishMenu(h: { quick: (difficulty: number) => void; custom: (
         <h2>Skirmish</h2>
         <div class="menu-buttons">
           <div class="quick">
-            <button class="primary" data-a="quick"><b>Quick match</b><span>random map and opponents</span></button>
+            <b>Quick match</b>
+            <span>Random map and opponents</span>
+            <label>Bot difficulty</label>
             <div class="seg" data-a="diff">${DIFFICULTY_NAMES.map((d, k) => `<button data-v="${k}">${d}</button>`).join('')}</div>
+            <button class="primary" data-a="quick">Play quick match</button>
           </div>
           <button data-a="custom"><b>Custom skirmish</b><span>choose map, opponents and teams</span></button>
         </div>

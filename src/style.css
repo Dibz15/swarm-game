@@ -623,6 +623,13 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
   border: 1px solid var(--line-strong); font-size: 12px; color: #fff;
 }
 .menu-corner:hover { color: #fff; border-color: var(--line-strong); }
-.card.campaign .quick { display: flex; flex-direction: column; gap: 6px; }
+/* Quick match: one panel, so the difficulty clearly belongs to it. */
+.card.campaign .quick {
+  display: flex; flex-direction: column; gap: 6px; text-align: left;
+  padding: 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: rgba(45, 226, 230, 0.06);
+}
+.card.campaign .quick > span { font-size: 13px; color: var(--muted); margin-top: -4px; }
+.card.campaign .quick label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
 .card.campaign .quick .seg { display: flex; }
 .card.campaign .quick .seg button { flex: 1; }
+.card.campaign .quick button.primary { margin-top: 6px; align-items: center; }
