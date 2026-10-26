@@ -23,6 +23,8 @@ export class LocalSession {
   private acc = 0;
   speed = 1;
   paused = false;
+  /** held without the pause menu (the tutorial's reading pause) */
+  held = false;
   /** interpolation factor between the previous and current tick */
   alpha = 0;
   lastStepMs = 0;
@@ -40,7 +42,7 @@ export class LocalSession {
   }
 
   update(dt: number): number {
-    if (this.paused || this.world.over) {
+    if (this.paused || this.held || this.world.over) {
       this.alpha = 1;
       return 0;
     }

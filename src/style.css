@@ -523,3 +523,103 @@ body.mobile .aimhint button { min-height: 40px; }
 }
 .settings .rec-actions { align-items: center; gap: 8px; margin-top: 6px; }
 .settings .rec-actions .rec-count { margin: 0 auto 0 0; }
+
+/* Tutorial coach (#17): the current step, under the top panel. */
+.coach {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 80px;
+  /* clear of the counter wheel (top right) on desktop */
+  width: min(560px, calc(100% - 180px));
+  display: none;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  pointer-events: auto;
+}
+.coach.on { display: block; }
+.coach.pop { animation: coach-pop 0.35s ease-out; }
+@keyframes coach-pop { from { box-shadow: 0 0 0 3px rgba(45, 226, 230, 0.55); } to { box-shadow: 0 0 0 0 rgba(45, 226, 230, 0); } }
+.coach small { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+.coach p { margin: 4px 0 6px; line-height: 1.35; }
+.coach-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.coach .pips { display: flex; gap: 5px; }
+.coach .pips i { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
+.coach .pips i.done { background: var(--accent); }
+.coach .pips i.now { background: #fff; }
+body.mobile .coach { font-size: 13px; padding: 5px 10px; width: calc(100% - 24px); }
+body.mobile .coach small { font-size: 11px; }
+body.mobile .coach p { margin: 2px 0 4px; }
+body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
+.card.tutorial h2 small { font-size: 13px; color: var(--muted); font-weight: normal; margin-left: 6px; }
+.missions { list-style: none; padding: 0; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
+.missions button { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; }
+.missions button span { font-size: 13px; color: var(--muted); }
+.missions li.done b::after { content: ' ✓'; color: var(--accent); }
+.card.brief { max-width: 460px; }
+.card.brief .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+.card.brief h2 { margin-top: 4px; }
+.coach p small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; text-transform: none; letter-spacing: 0; }
+
+/* Tutorial demo (#17): a ghost cursor / finger acting out the current step. */
+.demo { position: absolute; inset: 0; pointer-events: none; display: none; transition: opacity 0.3s; z-index: 2; }
+.demo.on { display: block; }
+.demo.resting .demo-pointer { opacity: 0; }
+.demo-pointer {
+  position: absolute; left: 0; top: 0; width: 22px; height: 22px;
+  transition: opacity 0.25s;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 22'%3E%3Cpath d='M2 1 L2 17 L6.5 13 L9.5 20 L12.5 18.6 L9.6 12 L15.5 12 Z' fill='white' stroke='%230e1122' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat;
+  filter: drop-shadow(0 0 6px rgba(45, 226, 230, 0.8));
+}
+.demo-pointer.touch {
+  width: 34px; height: 34px; margin: -17px 0 0 -17px; background: rgba(255, 255, 255, 0.35);
+  border: 2px solid rgba(255, 255, 255, 0.85); border-radius: 50%;
+}
+.demo-pointer.touch.down { background: rgba(45, 226, 230, 0.45); }
+.demo-box { position: absolute; display: none; border: 1.5px dashed rgba(255, 255, 255, 0.85); background: rgba(45, 226, 230, 0.12); border-radius: 3px; }
+.demo-ripple { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.demo-ripple::after {
+  content: ''; position: absolute; left: -18px; top: -18px; width: 36px; height: 36px; border-radius: 50%;
+  border: 2px solid var(--accent); opacity: 0;
+}
+.demo-ripple.go::after { animation: demo-ripple 0.6s ease-out; }
+@keyframes demo-ripple { from { transform: scale(0.3); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+.demo-label {
+  position: absolute; left: 0; top: 0; font-size: 12px; padding: 2px 6px; border-radius: 4px;
+  background: rgba(14, 17, 34, 0.85); color: #fff; opacity: 0; white-space: nowrap;
+}
+.demo-label.go { animation: demo-label 1.1s ease-out; }
+@keyframes demo-label { 0% { opacity: 0; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+/* A HUD element the current tutorial step is about. */
+.coach-pulse { animation: coach-pulse 1.2s ease-in-out infinite; opacity: 1 !important; }
+@keyframes coach-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(45, 226, 230, 0); } 50% { box-shadow: 0 0 0 4px rgba(45, 226, 230, 0.75); } }
+/* Narrow desktop windows: line up with the top panel, clear of the wheel. */
+@media (max-width: 720px) {
+  body:not(.mobile) .coach { left: 12px; transform: none; width: calc(100% - 150px); }
+}
+.coach-status { margin: -2px 0 6px; font-size: 13px; color: #ffd166; }
+.coach-hold { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.coach-hold i { flex: 1; height: 4px; border-radius: 2px; background: var(--line-strong); overflow: hidden; }
+.coach-hold i b { display: block; height: 100%; background: var(--accent); }
+.coach-hold button { padding: 2px 12px; }
+.card.campaign .menu-buttons { width: 100%; margin: 12px 0 4px; }
+.card.campaign .menu-buttons button { display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.card.campaign .menu-buttons span { font-size: 13px; color: var(--muted); font-weight: normal; }
+.card.campaign .menu-buttons button.primary span { color: rgba(255, 255, 255, 0.8); }
+/* Secondary main-menu action, out of the main list (#17: the tutorial teaches the basics now). */
+.menu-corner {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  right: calc(14px + env(safe-area-inset-right));
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; font-size: 13px; color: var(--muted);
+  background: rgba(14, 17, 34, 0.6); border: 1px solid var(--line); border-radius: 16px;
+}
+.menu-corner span {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  border: 1px solid var(--line-strong); font-size: 12px; color: #fff;
+}
+.menu-corner:hover { color: #fff; border-color: var(--line-strong); }

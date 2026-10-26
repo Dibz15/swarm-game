@@ -5,6 +5,7 @@ import { GameView, type Services } from './game/gameView';
 import type { EndReason } from './game/recording';
 import { recordingEnabled, saveRecording } from './game/recordStore';
 import { LocalSession } from './game/session';
+import { loadProgress, MISSIONS, MissionRun, nextMission, saveProgress, type NextStep } from './game/tutorial';
 import { InputController } from './input/controller';
 import { Camera } from './render/camera';
 import { Particles, Rings } from './render/particles';
@@ -14,9 +15,10 @@ import { PERSONALITIES } from './sim/ai/bot';
 import { Kind, MAX_UNITS, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
+import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
-import { buildSetup, endScreen, howToPlay, loadPrefs, mainMenu, mobileNotice, pauseMenu, randomSeed, settingsScreen, skirmishSetup } from './ui/screens';
+import { buildSetup, campaignMenu, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
 
 class App {
   private canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -39,6 +41,11 @@ class App {
   private endShown = false;
   /** the current match's recording was saved at its end */
   private recSaved = false;
+  /** the current match is the tutorial's graduation 1v1 */
+  private graduation = false;
+  /** ghost cursor acting out the current tutorial step */
+  private demoOverlay: DemoOverlay | null = null;
+  private demoKey = '';
   private last = 0;
   private time = 0;
   private frames = 0;
@@ -117,9 +124,11 @@ class App {
     this.setModal(null);
     const menu = mainMenu({
       skirmish: () => this.showSetup(),
+      campaign: () => this.showCampaign(),
       howto: () => this.setModal(howToPlay(() => this.setModal(null))),
       settings: () => this.setModal(settingsScreen(this.sfx, () => this.setModal(null))),
     });
+    const card = this.menuSuggestion();
     if (shouldShowMobileNotice()) {
       const n = mobileNotice({
         ok: () => {
@@ -133,8 +142,132 @@ class App {
         },
       });
       menu.appendChild(n);
-    }
+    } else if (card) menu.appendChild(card);
     this.setScreen(menu);
+  }
+
+  // ---- tutorial (#17) ------------------------------------------------------
+
+  /** The menu's one suggestion: try the tutorial, continue it, or what to play next. */
+  private menuSuggestion(): HTMLElement | null {
+    const p = loadProgress();
+    const dismiss = (patch: Partial<typeof p>) => () => {
+      saveProgress({ ...loadProgress(), ...patch });
+      this.showMenu();
+    };
+    if (!p.graduated && p.done.length === 0 && !p.offered) {
+      const c = menuCard('<b>New to SWARM?</b> The tutorial teaches the basics in about 10 minutes, then sets you up for a real match.', [
+        {
+          label: 'Start tutorial',
+          primary: true,
+          on: () => {
+            saveProgress({ ...p, offered: true });
+            c.remove();
+            this.briefMission(0);
+          },
+        },
+        { label: 'Not now', on: dismiss({ offered: true }) },
+      ]);
+      return c;
+    }
+    if (!p.graduated && p.done.length > 0) {
+      const i = nextMission(p);
+      const c = menuCard(`<b>Continue the tutorial:</b> mission ${i + 1} of ${MISSIONS.length}, ${MISSIONS[i].title}.`, [
+        { label: 'Continue', primary: true, on: () => this.briefMission(i) },
+        { label: 'Not now', on: () => c.remove() },
+      ]);
+      return c;
+    }
+    if (p.next) {
+      const buttons: { label: string; primary?: boolean; on: () => void }[] =
+        p.next === 'ffa'
+          ? [{ label: 'Play a 4-player FFA', primary: true, on: () => this.playSuggested('ffa') }]
+          : p.next === 'rematch'
+            ? [
+                { label: 'Rematch Normal', primary: true, on: () => this.playSuggested('normal1v1') },
+                { label: '1v1 vs Easy', on: () => this.playSuggested('easy1v1') },
+              ]
+            : [{ label: 'Play the 1v1', primary: true, on: () => this.playSuggested('normal1v1', true) }];
+      buttons.push({ label: 'Dismiss', on: dismiss({ next: undefined }) });
+      return menuCard(NEXT_STEP_TEXT[p.next], buttons);
+    }
+    return null;
+  }
+
+  private playSuggested(kind: 'normal1v1' | 'easy1v1' | 'ffa', graduation = false): void {
+    if (!graduation) saveProgress({ ...loadProgress(), next: undefined });
+    this.startGame(quickSetup(kind));
+    this.graduation = graduation;
+  }
+
+  private showCampaign(): void {
+    this.setModal(campaignMenu(loadProgress(), { tutorial: () => this.showTutorial(), back: () => this.setModal(null) }));
+  }
+
+  private showTutorial(): void {
+    // Back from a mission's briefing returns here, and from here to the Campaign menu.
+    this.setModal(tutorialMenu(loadProgress(), { play: (i) => this.briefMission(i, () => this.showTutorial()), back: () => this.showCampaign() }));
+  }
+
+  private briefMission(i: number, back: () => void = () => this.setModal(null)): void {
+    if (this.game) this.showMenu();
+    this.setModal(missionBriefing(MISSIONS[i], i, { start: () => this.playMission(i), back }));
+  }
+
+  private playMission(i: number, prevEnd: EndReason = 'quit'): void {
+    const m = MISSIONS[i];
+    this.startGame(m.setup(window.innerHeight > window.innerWidth * 1.15), { scenario: `tutorial: ${m.title}` }, prevEnd);
+    const g = this.game!;
+    g.mission = new MissionRun(m, i);
+    g.locked = new Set(m.locked);
+    this.demoOverlay = new DemoOverlay(this.ui, this.camera, () => this.renderer.dpr, isMobile);
+    // Tutorial maps are small: show all of it.
+    this.camera.fit();
+  }
+
+  /** Restart the ghost-cursor demo whenever the tutorial step changes. */
+  private updateDemo(g: GameView, dt: number): void {
+    const d = this.demoOverlay;
+    const m = g.mission;
+    if (!d || !m) return;
+    const key = `${m.step}`;
+    if (key !== this.demoKey) {
+      this.demoKey = key;
+      const step = m.current;
+      d.play(step?.demo ? () => step.demo!({ w: g.world, human: g.human, log: g.session.log }) : null);
+    }
+    // The demo is decoration: if it ever breaks, drop it rather than the game loop.
+    try {
+      d.update(dt, !g.result && !g.session.paused && !this.input.busy);
+    } catch (err) {
+      console.error('tutorial demo stopped', err);
+      d.destroy();
+      this.demoOverlay = null;
+    }
+  }
+
+  /** Record a finished (or skipped) mission and move on. */
+  private completeMission(i: number): void {
+    const p = loadProgress();
+    if (!p.done.includes(MISSIONS[i].id)) p.done.push(MISSIONS[i].id);
+    if (i === MISSIONS.length - 1) {
+      p.graduated = true;
+      p.next = 'graduate';
+    }
+    saveProgress(p);
+  }
+
+  /** Straight into the next mission: the debrief already said what's next, and the coach names it. */
+  private afterMission(i: number): void {
+    if (i < MISSIONS.length - 1) this.playMission(i + 1);
+    else this.playSuggested('normal1v1', true);
+  }
+
+  private skipMission(): void {
+    const m = this.game?.mission;
+    if (!m) return;
+    this.completeMission(m.index);
+    this.afterMission(m.index);
   }
 
   private showSetup(): void {
@@ -178,6 +311,7 @@ class App {
     this.setScreen(null);
     this.endShown = false;
     this.recSaved = false;
+    this.graduation = false;
     const record = opts.record !== false && recordingEnabled();
     this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null);
     this.input.game = this.game;
@@ -195,20 +329,22 @@ class App {
       barrage: () => this.game?.startAim('barrage'),
       blink: () => this.game?.startAim('blink'),
       lockdown: () => this.game?.startAim('lockdown'),
+      skip: () => this.skipMission(),
+      go: () => this.game?.skipRead(),
     });
     this.hud.setMuted(this.sfx.muted);
     this.applyInsets();
     if (record) this.hud.toast(opts.scenario ? `Recording: ${opts.scenario}` : 'Recording this match', '#8aa0b8');
     // Open on the player's home, zoomed in a little.
     const [hx, hy] = this.game.homePoint();
-    this.camera.zoom = this.camera.fitZoom * 1.15;
-    this.camera.cx = hx;
-    this.camera.cy = hy;
-    this.camera.clampPos();
+    this.camera.focus(hx, hy, this.camera.fitZoom * 1.15);
   }
 
   private endGame(reason: EndReason = 'quit'): void {
     this.saveRec(reason, true);
+    this.demoOverlay?.destroy();
+    this.demoOverlay = null;
+    this.demoKey = '';
     this.hud?.destroy();
     this.hud = null;
     this.camera.setInsets(0, 0);
@@ -238,7 +374,7 @@ class App {
       this.setModal(
         pauseMenu({
           resume: () => this.togglePause(),
-          restart: () => this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart'),
+          restart: () => (g.mission ? this.playMission(g.mission.index, 'restart') : this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart')),
           quit: () => this.showMenu(),
           audio: this.sfx,
         }),
@@ -256,6 +392,23 @@ class App {
     this.endShown = true;
     this.input.enabled = false;
     this.input.reset();
+    const won = g.result === 'victory';
+    if (g.mission) {
+      const i = g.mission.index;
+      if (won) this.completeMission(i);
+      this.setModal(
+        missionDebrief(g.mission.mission, i, won, {
+          next: () => (won ? this.afterMission(i) : this.skipMission()),
+          retry: () => this.playMission(i, 'restart'),
+          menu: () => this.showMenu(),
+        }),
+      );
+      return;
+    }
+    if (this.graduation) {
+      const next: NextStep = won ? 'ffa' : 'rematch';
+      saveProgress({ ...loadProgress(), next });
+    }
     this.setModal(
       endScreen(g.world, g.human, g.result === 'victory', {
         rematch: () => this.startGame(g.setup, { scenario: g.rec?.scenario }),
@@ -347,6 +500,7 @@ class App {
       if (g.result) this.saveRec(g.result, true);
       this.hud?.update(g, dt);
       this.applyInsets();
+      this.updateDemo(g, dt);
       g.render(this.time);
       if (g.result && !this.endShown && this.time - g.resultTime > 1.6) this.showEnd();
     } else if (this.demo) {

@@ -44,7 +44,7 @@ const ENEMY_TIPS = [
 
 export type HudAction =
   | 'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'pause' | 'mute'
-  | 'fortify' | 'barrage' | 'blink' | 'lockdown';
+  | 'fortify' | 'barrage' | 'blink' | 'lockdown' | 'skip' | 'go';
 
 export function formatTime(ticks: number): string {
   const s = Math.floor(ticks / TICK_HZ);
@@ -70,6 +70,8 @@ export class Hud {
   private aimHint: HTMLDivElement;
   private bottom: HTMLDivElement;
   private top: HTMLDivElement;
+  private coach: HTMLDivElement;
+  private coachKey = '';
   /** CSS px of the view covered by the top panel and the bottom bar (for the camera) */
   insetTop = 0;
   insetBottom = 0;
@@ -104,6 +106,7 @@ export class Hud {
       <div class="nestcard"></div>
       <div class="aimhint"><span></span><button class="cancel">Cancel</button></div>
       <div class="tip"><span></span><button class="x" title="Hide tips">✕</button></div>
+      <div class="coach"><small></small><p></p><div class="coach-status"></div><div class="coach-hold"><span>Paused to read</span><i><b></b></i><button class="small primary" data-a="go">Go</button></div><div class="coach-row"><span class="pips"></span><button class="small" data-a="skip">Skip mission</button></div></div>
       <div class="counters" title="Spears pierce Shields · Shields stop Swarmers · Swarmers overrun Spears">
         <svg viewBox="0 0 120 92" aria-hidden="true">
           <defs>
@@ -177,6 +180,7 @@ export class Hud {
     this.aimHint = q('.aimhint');
     this.bottom = q('.hud-bottom');
     this.top = q('.hud-top');
+    this.coach = q('.coach');
     this.measure();
     q<HTMLButtonElement>('.aimhint .cancel').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -231,9 +235,45 @@ export class Hud {
   /** How much of the screen the top panel and bottom bar cover. */
   measure(): void {
     const h = this.el.clientHeight || window.innerHeight;
-    this.insetTop = Math.max(0, this.top.getBoundingClientRect().bottom);
+    const topBottom = Math.max(0, this.top.getBoundingClientRect().bottom);
+    this.coach.style.top = `${Math.round(topBottom + 8)}px`;
+    const coach = this.coach.getBoundingClientRect();
+    this.insetTop = coach.height > 0 ? Math.max(topBottom, coach.bottom) : topBottom;
+    // Toasts drop below the tutorial coach while it's up.
+    this.toasts.style.top = coach.height > 0 ? `${Math.round(coach.bottom + 8)}px` : '';
     const b = this.bottom.getBoundingClientRect();
     this.insetBottom = b.height > 0 ? Math.max(0, h - b.top) : 0;
+  }
+
+  /** Tutorial coach: the current step's instruction and progress (#17). */
+  private updateCoach(g: GameView, mobile: boolean): void {
+    const m = g.mission;
+    // The live status line changes on its own; everything else only when the step does.
+    const status = m?.current?.status?.({ w: g.world, human: g.human, log: g.session.log }) ?? '';
+    const hold = this.coach.querySelector('.coach-hold') as HTMLElement;
+    hold.style.display = g.readLeft > 0 ? '' : 'none';
+    (hold.querySelector('b') as HTMLElement).style.width = `${Math.round(g.readLeft * 100)}%`;
+    const st = this.coach.querySelector('.coach-status') as HTMLElement;
+    if (st.innerHTML !== status) st.innerHTML = status;
+    st.style.display = status ? '' : 'none';
+    const key = m ? `${m.index}:${m.step}:${mobile}` : '';
+    if (key === this.coachKey) return;
+    this.coachKey = key;
+    this.coach.classList.toggle('on', !!m);
+    if (!m) {
+      this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
+      return;
+    }
+    this.tip.style.display = 'none';
+    const step = m.current;
+    (this.coach.querySelector('small') as HTMLElement).textContent = `Mission ${m.index + 1} of 5 · ${m.mission.title}`;
+    (this.coach.querySelector('p') as HTMLElement).innerHTML = step ? (mobile ? step.text.mobile : step.text.desktop) : 'Mission complete!';
+    (this.coach.querySelector('.pips') as HTMLElement).innerHTML = m.mission.steps.map((_, i) => `<i class="${i < m.step ? 'done' : i === m.step ? 'now' : ''}"></i>`).join('');
+    this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
+    if (step?.pulse) this.el.querySelector(step.pulse)?.classList.add('coach-pulse');
+    this.coach.classList.remove('pop');
+    void this.coach.offsetWidth;
+    this.coach.classList.add('pop');
   }
 
   update(g: GameView, dt: number): void {
@@ -253,6 +293,7 @@ export class Hud {
     this.clock.textContent = formatTime(w.tick);
     // Floating panels sit above the bottom bar, whose height depends on what's in it.
     this.el.style.setProperty('--hudb', `${this.bottom.offsetHeight}px`);
+    this.updateCoach(g, mobile);
     this.measure();
     this.aimHint.classList.toggle('on', !!g.aim);
     if (g.aim) (this.aimHint.firstElementChild as HTMLElement).textContent = `Tap where to cast ${g.aim[0].toUpperCase()}${g.aim.slice(1)}`;
@@ -331,7 +372,7 @@ export class Hud {
     ];
     for (const [p, cost, ok] of nestPowers) {
       const b = this.btn[p];
-      const owned = g.canUse(p);
+      const owned = g.canUse(p) && !g.locked.has(p);
       b.style.display = owned ? '' : 'none';
       b.disabled = e < cost || !ok;
       b.classList.toggle('ready', e >= cost);
@@ -339,7 +380,9 @@ export class Hud {
     }
     this.btn.nova.classList.toggle('ready', e >= POWER.novaCost);
     const up = g.upgradeInfo();
-    this.btn.upgrade.style.display = up ? '' : 'none';
+    this.btn.upgrade.style.display = up && !g.locked.has('upgrade') ? '' : 'none';
+    this.btn.surge.style.display = g.locked.has('surge') ? 'none' : '';
+    this.btn.nova.style.display = g.locked.has('nova') ? 'none' : '';
     if (up) {
       (this.btn.upgrade.querySelector('.ucost') as HTMLElement).textContent = `${Math.max(0, up.cost)} dots`;
       (this.btn.upgrade.querySelector('.ulabel') as HTMLElement).textContent = up.repair ? 'Repair' : 'Upgrade';

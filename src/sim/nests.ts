@@ -43,7 +43,9 @@ export function supplyCap(w: World, f: number): number {
     nests++;
     levels += n.level - 1;
   }
-  return capFor(nests, levels, escalation(w.tick));
+  const cap = capFor(nests, levels, escalation(w.tick));
+  const hard = w.factions[f]?.unitCap ?? 0;
+  return hard > 0 ? Math.min(cap, hard) : cap;
 }
 
 function capFor(nests: number, levels: number, L: number): number {
@@ -62,7 +64,11 @@ export function updateNests(w: World): void {
     levelCount[n.owner] += n.level - 1;
   }
   const L = escalation(w.tick);
-  for (let f = 0; f < NUM_FACTIONS; f++) capOf[f] = capFor(nestCount[f], levelCount[f], L);
+  for (let f = 0; f < NUM_FACTIONS; f++) {
+    capOf[f] = capFor(nestCount[f], levelCount[f], L);
+    const hard = w.factions[f]?.unitCap ?? 0;
+    if (hard > 0) capOf[f] = Math.min(capOf[f], hard);
+  }
   for (const n of w.nests) {
     updateControl(w, n);
     applyArmor(w, n);

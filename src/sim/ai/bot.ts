@@ -12,6 +12,8 @@ export const DIFFICULTY_NAMES = ['Easy', 'Normal', 'Hard', 'Brutal'] as const;
 export interface BotConfig {
   difficulty: number; // 0..3
   personality: Personality;
+  /** tutorial opponent: defends and expands on its own half, never attacks players */
+  passive?: boolean;
 }
 
 interface DifficultyKnobs {
@@ -381,8 +383,15 @@ export class Bot {
     const capped = myUnits >= supplyCap(w, me) * SUPPLY_BOT.near;
     const reserve = threatened ? 0 : Math.floor(total * this.p.reserve * (capped ? SUPPLY_BOT.reserve : 1) * (opening ? this.d.openReserve : 1));
     const available = idle.length - used.size - reserve;
+    // A passive bot keeps to the nests nearer its home than any rival's.
+    const rivalHomes = this.cfg.passive ? w.nests.filter((n) => n.capital && n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] !== myTeam) : [];
     for (const n of w.nests) {
       if (n.owner >= 0 && w.teamOf[n.owner] === myTeam) continue;
+      if (this.cfg.passive) {
+        if (n.owner >= 0 && n.owner !== NEUTRAL) continue;
+        const mineD = (n.x - hx) ** 2 + (n.y - hy) ** 2;
+        if (rivalHomes.some((r) => (n.x - r.x) ** 2 + (n.y - r.y) ** 2 < mineD)) continue;
+      }
       const def = hostile[n.id];
       let value = n.type === NestType.Bastion ? 0.95 * this.p.bastion : n.type === NestType.Hive ? 1 : 1.1;
       value *= 0.6 + 0.4 * n.level;
