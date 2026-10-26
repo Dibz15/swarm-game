@@ -290,14 +290,14 @@ function drawBarrages(r: Renderer, w: World, o: SceneOpts): void {
     const H = Math.min(240, 50 + Math.sqrt(dx * dx + dy * dy) * 0.45);
     const at = (t: number): [number, number] => [b.x0 + dx * t, b.y0 + dy * t - 4 * t * (1 - t) * H];
     if (k < 0.15) r.shape(true, b.x0, b.y0, 14 + k * 160, 0, 1, 0, 0.12, c, Math.round(200 * (1 - k / 0.15)));
-    r.shape(true, b.x0 + dx * k, b.y0 + dy * k, 4 + 3 * k, 7, 1, 0, 0, SHADOW, 110);
-    for (let s = 6; s >= 1; s--) {
-      const [tx, ty] = at(Math.max(0, k - s * 0.025));
-      r.shape(true, tx, ty, 4.2 - s * 0.45, 7, 1, 0, 0, c, 200 - s * 28);
+    r.shape(true, b.x0 + dx * k, b.y0 + dy * k, 6 + 5 * k, 7, 1, 0, 0, SHADOW, 130);
+    for (let s = 8; s >= 1; s--) {
+      const [tx, ty] = at(Math.max(0, k - s * 0.022));
+      r.shape(true, tx, ty, 6.5 - s * 0.6, 7, 1, 0, 0, c, 220 - s * 24);
     }
     const [hx, hy] = at(k);
-    r.shape(true, hx, hy, 9, 7, 1, 0, 0, c, 90);
-    r.shape(true, hx, hy, 4.5, 7, 1, 0, 0, WHITE, 255);
+    r.shape(true, hx, hy, 16, 7, 1, 0, 0, c, 80);
+    r.shape(true, hx, hy, 7, 7, 1, 0, 0, WHITE, 255);
     r.shape(true, b.x, b.y, R, 0, 1, 0, 0.025, c, 150);
     r.shape(true, b.x, b.y, R * (1 + left * 1.2), 0, 1, 0, 0.04, c, Math.round(220 * (1 - left * 0.5)));
     r.shape(true, b.x, b.y, R, 7, 1, 0, 0, c, Math.round(40 + 60 * (1 - left)));
