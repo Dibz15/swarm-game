@@ -175,6 +175,8 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; border-radius: 0; padding: 6px 12px; background: transparent; font-size: 14px; }
 .seg button.on { background: rgba(45, 226, 230, 0.22); color: #fff; }
+.seg.wrap { display: flex; flex-wrap: wrap; }
+.seg.wrap button { flex: 1 0 auto; }
 
 .controls { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; font-size: 14px; }
 .controls dt { color: var(--accent); }

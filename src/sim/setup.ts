@@ -1,6 +1,6 @@
 import { DOMINATION, Kind, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
-import { generateMap, type MapSpec, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
+import { generateMap, type MapSpec, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapLayout, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
 import { initEvents } from './events';
 import { TAU, dcos, dsin } from './mathx';
 import { spawnUnit, World } from './world';
@@ -31,6 +31,8 @@ export interface MatchSetup {
   caves?: CaveLevel | CaveParams;
   /** neutral map events preset or explicit schedule (default: off) */
   events?: EventLevel | EventParams;
+  /** how nests are spread (default: picked by the seed) */
+  layout?: MapLayout | 'random';
   /** a hand-authored map (tutorial missions); replaces generation from the fields above */
   map?: MapSpec;
   /** nobody wins by elimination or domination: the mission script ends the match */
@@ -50,6 +52,7 @@ export function createWorld(setup: MatchSetup): World {
     terrain: setup.terrain,
     caves: setup.caves,
     events: setup.events,
+    layout: setup.layout,
   });
   const w = new World(setup.seed, map.width, map.height, map.terrain);
   w.domShare = setup.domShare ?? DOMINATION.share[setup.size] ?? 0.7;

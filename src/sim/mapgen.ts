@@ -114,6 +114,8 @@ export interface MapParams {
   nestsPerSector?: number;
   /** relative odds of each nest type, indexed by NestType */
   typeWeights?: readonly number[];
+  /** how nests are spread (default: picked by the seed) */
+  layout?: MapLayout | 'random';
 }
 
 export interface NestSpec {
@@ -135,6 +137,8 @@ export interface MapSpec {
   nests: NestSpec[];
   terrain: TerrainSpec;
   events: EventSpec;
+  /** the layout a generated map used */
+  layout?: MapLayout;
 }
 
 /** Hive, Forge, Spire, Den, Bastion */
@@ -157,14 +161,123 @@ export function terrainParams(t: MapParams['terrain']): TerrainParams {
 }
 
 /**
+ * How nests are spread over the map (#38). Every layout is still generated in
+ * player 0's sector and rotated into the others, so starts stay symmetric.
+ * - classic: a ring of nests around a strong center Hive
+ * - open: no center nest (a contested crystal when the map has crystals), most nests out near the rim
+ * - core: nests crowd toward the middle around a small center Hive
+ * - clusters: a few tight pockets of nests with open ground between them
+ * - lanes: nests strung along routes from each start to the center and the neighbors
+ */
+export type MapLayout = 'classic' | 'open' | 'core' | 'clusters' | 'lanes';
+export const MAP_LAYOUTS: readonly MapLayout[] = ['classic', 'open', 'core', 'clusters', 'lanes'];
+
+/** odds of each layout when the seed picks one */
+const LAYOUT_ODDS: readonly number[] = [3, 2, 2, 2, 2];
+
+interface LayoutCtx {
+  sector: number;
+  /** capital radius (fraction of the map ellipse) */
+  capR: number;
+  /** px per polar unit, roughly */
+  unit: number;
+}
+
+interface LayoutSpec {
+  center: 'hive2' | 'hive1' | 'crystal';
+  /** 'one' natural expansion by each start, or 'pair': none or two small ones */
+  naturals: 'one' | 'pair';
+  /** scales the minimum spacing between nests */
+  spacing: number;
+  /** nests per sector beyond the size's default (tighter layouts fit more) */
+  extra?: number;
+  /** Set up one placement attempt; returns a sampler of candidate spots (radius, angle offset). */
+  sampler: (rng: Rng, c: LayoutCtx) => () => [number, number];
+}
+
+const LAYOUTS: Record<MapLayout, LayoutSpec> = {
+  classic: {
+    center: 'hive2',
+    naturals: 'one',
+    spacing: 1,
+    sampler: (rng, c) => () => [rng.range(0.28, 1.0), rng.range(-0.46, 0.46) * c.sector],
+  },
+  open: {
+    center: 'crystal',
+    naturals: 'one',
+    spacing: 1.05,
+    sampler: (rng, c) => () => {
+      const u = rng.next();
+      return [1 - 0.6 * u * u, rng.range(-0.48, 0.48) * c.sector];
+    },
+  },
+  core: {
+    center: 'hive1',
+    naturals: 'one',
+    spacing: 0.9,
+    sampler: (rng, c) => () => {
+      const u = rng.next();
+      return [0.22 + 0.6 * u * u, rng.range(-0.46, 0.46) * c.sector];
+    },
+  },
+  clusters: {
+    center: 'crystal',
+    naturals: 'one',
+    spacing: 0.72,
+    extra: 1,
+    sampler: (rng, c) => {
+      // One pocket on each border between neighbors, filled from both sides,
+      // so every border holds a dense contested cluster; open ground elsewhere.
+      const r = rng.range(0.52, 0.72), a = (rng.next() < 0.5 ? -1 : 1) * 0.5 * c.sector;
+      return () => {
+        const off = rng.range(0.25, 1) * 120, t = rng.range(0, TAU);
+        return [r + (off * dcos(t)) / c.unit, a + (off * dsin(t)) / c.unit / r];
+      };
+    },
+  },
+  lanes: {
+    center: 'hive2',
+    naturals: 'pair',
+    spacing: 0.85,
+    extra: 1,
+    sampler: (rng, c) => {
+      // Polar polylines out of the capital: one to the center, one or two to the neighbors.
+      const side = rng.next() < 0.5 ? -1 : 1;
+      const lanes: [number, number, number, number][] = [
+        [c.capR, 0, 0.16, rng.range(-0.08, 0.08) * c.sector],
+        [c.capR, 0, rng.range(0.5, 0.72), side * 0.5 * c.sector],
+      ];
+      return () => {
+        const [r1, a1, r2, a2] = lanes[rng.int(lanes.length)];
+        const t = rng.range(0.3, 1);
+        return [r1 + (r2 - r1) * t + rng.range(-0.02, 0.02), a1 + (a2 - a1) * t + rng.range(-0.02, 0.02) * c.sector];
+      };
+    },
+  },
+};
+
+function pickLayout(rng: Rng): MapLayout {
+  let total = 0;
+  for (const o of LAYOUT_ODDS) total += o;
+  let r = rng.next() * total;
+  for (let i = 0; i < MAP_LAYOUTS.length; i++) {
+    r -= LAYOUT_ODDS[i];
+    if (r < 0) return MAP_LAYOUTS[i];
+  }
+  return 'classic';
+}
+
+/**
  * Rotationally symmetric map: nests and terrain are generated in player 0's
  * sector (in polar coordinates on the map's ellipse) and copied into every
- * other sector, so each start has the same options.
+ * other sector, so each start has the same options. The layout, nest count,
+ * spacing and start placement vary by seed (#38).
  */
 export function generateMap(p: MapParams): MapSpec {
   const rng = new Rng(p.seed ^ 0xa5a5a5);
   const dims = MAP_SIZES[p.size];
-  const perSector = p.nestsPerSector ?? dims.perSector;
+  const layout = !p.layout || p.layout === 'random' ? pickLayout(rng) : p.layout;
+  const L = LAYOUTS[layout];
   const weights = p.typeWeights ?? DEFAULT_TYPE_WEIGHTS;
   const portrait = !!p.portrait;
   const w = portrait ? dims.h : dims.w;
@@ -172,80 +285,144 @@ export function generateMap(p: MapParams): MapSpec {
   const players = p.players;
   const P = Math.max(2, players);
   const cx = w / 2, cy = h / 2;
-  const ax = w * 0.5 * 0.88, ay = h * 0.5 * 0.84;
   const sector = TAU / P;
-  const base = portrait ? PI / 2 : PI; // player 0 starts bottom / left
+
+  // Per-map variety: ±1 nest per sector, looser or tighter spacing, starts a
+  // little in or out and turned, and a slightly squashed or stretched ellipse.
+  const perSector = p.nestsPerSector ?? Math.max(2, dims.perSector + (L.extra ?? 0) + rng.int(3) - 1);
+  const spacing = L.spacing * rng.range(0.85, 1.2);
+  const capR = rng.range(0.76, 0.9);
+  const base = (portrait ? PI / 2 : PI) + rng.range(-0.15, 0.15) * sector; // player 0 starts bottom / left
+  const ax = w * 0.5 * 0.88 * rng.range(0.96, 1.04), ay = h * 0.5 * 0.84 * rng.range(0.96, 1.04);
   const pos = (r: number, a: number): [number, number] => [cx + dcos(a) * r * ax, cy + dsin(a) * r * ay];
+  const ctx: LayoutCtx = { sector, capR, unit: Math.min(w * 0.44, h * 0.42) };
+  const minDist = (p.size === 'small' ? 100 : 110) * spacing;
 
-  const nests: NestSpec[] = [];
-  /** where each nest sits in polar terms: radius, angle from `base`, sector */
-  const polar: Polar[] = [];
-  for (let k = 0; k < P; k++) {
-    const [x, y] = pos(0.86, base + k * sector);
-    nests.push({ x, y, type: NestType.Hive, level: 1, player: k < players ? k : -1, garrison: k < players ? 0 : 8 });
-    polar.push({ r: 0.86, a: k * sector, sec: k });
-  }
-  nests.push({ x: cx, y: cy, type: NestType.Hive, level: 2, player: -1, garrison: 14 + P * 2 });
-  polar.push({ r: 0, a: 0, sec: 0 });
-
-  const minDist = p.size === 'small' ? 100 : 110;
-  const fits = (r: number, da: number) => {
+  /** One placement attempt: all nests, in polar terms too. */
+  const attempt = (rng: Rng) => {
+    const nests: NestSpec[] = [];
+    /** where each nest sits in polar terms: radius, angle from `base`, sector */
+    const polar: Polar[] = [];
     for (let k = 0; k < P; k++) {
-      const [x, y] = pos(r, base + da + k * sector);
-      if (x < 60 || x > w - 60 || y < 60 || y > h - 60) return false;
-      for (const n of nests) {
-        if ((n.x - x) ** 2 + (n.y - y) ** 2 < minDist * minDist) return false;
+      const [x, y] = pos(capR, base + k * sector);
+      nests.push({ x, y, type: NestType.Hive, level: 1, player: k < players ? k : -1, garrison: k < players ? 0 : 8 });
+      polar.push({ r: capR, a: k * sector, sec: k });
+    }
+    if (L.center !== 'crystal') {
+      const big = L.center === 'hive2';
+      nests.push({ x: cx, y: cy, type: NestType.Hive, level: big ? 2 : 1, player: -1, garrison: big ? 14 + P * 2 : 8 + P });
+      polar.push({ r: 0, a: 0, sec: 0 });
+    }
+
+    const fits = (r: number, da: number) => {
+      if (r < 0.12 || r > 1.02) return false;
+      for (let k = 0; k < P; k++) {
+        const [x, y] = pos(r, base + da + k * sector);
+        if (x < 60 || x > w - 60 || y < 60 || y > h - 60) return false;
+        for (const n of nests) {
+          if ((n.x - x) ** 2 + (n.y - y) ** 2 < minDist * minDist) return false;
+        }
+      }
+      // Clear of the open middle, kept for its crystal.
+      if (L.center === 'crystal' && (pos(r, base + da)[0] - cx) ** 2 + (pos(r, base + da)[1] - cy) ** 2 < 90 * 90) return false;
+      return true;
+    };
+    const place = (r: number, da: number, type: number, level: number, garrison: number) => {
+      for (let k = 0; k < P; k++) {
+        const [x, y] = pos(r, base + da + k * sector);
+        nests.push({ x, y, type, level, player: -1, garrison });
+        polar.push({ r, a: da + k * sector, sec: k });
+      }
+    };
+
+    // Keep the mix varied: at most one Bastion and two of any other type per
+    // sector, so a seed can't produce a map that is mostly turrets.
+    const typeCount = new Map<number, number>();
+    const allowed = (t: number) => (typeCount.get(t) ?? 0) < (t === NestType.Bastion ? 1 : 2);
+
+    let placed = 0;
+    if (L.naturals === 'one') {
+      // A cheap "natural expansion" right next to each start: Hive, Forge or Spire.
+      const naturalType = rng.pick([NestType.Hive, NestType.Forge, NestType.Spire]);
+      for (let tries = 0; tries < 40; tries++) {
+        const da = (rng.next() < 0.5 ? -1 : 1) * rng.range(0.12, 0.28) * sector;
+        const r = capR - rng.range(0.18, 0.31);
+        if (fits(r, da)) {
+          place(r, da, naturalType, 1, naturalType === NestType.Forge ? 6 : 4);
+          typeCount.set(naturalType, 1);
+          placed++;
+          break;
+        }
+      }
+    } else if (rng.next() < 0.5) {
+      // Two small Hives flanking the start, or none at all.
+      for (const side of [-1, 1]) {
+        for (let tries = 0; tries < 30; tries++) {
+          const da = side * rng.range(0.14, 0.26) * sector;
+          const r = capR - rng.range(0.16, 0.28);
+          if (fits(r, da)) {
+            place(r, da, NestType.Hive, 1, 3);
+            typeCount.set(NestType.Hive, (typeCount.get(NestType.Hive) ?? 0) + 1);
+            placed++;
+            break;
+          }
+        }
       }
     }
-    return true;
-  };
-  const place = (r: number, da: number, type: number, level: number, garrison: number) => {
-    for (let k = 0; k < P; k++) {
-      const [x, y] = pos(r, base + da + k * sector);
-      nests.push({ x, y, type, level, player: -1, garrison });
-      polar.push({ r, a: da + k * sector, sec: k });
+
+    const sample = L.sampler(rng, ctx);
+    for (let tries = 0; tries < 400 && placed < perSector; tries++) {
+      const [r, da] = sample();
+      if (!fits(r, da)) continue;
+      let type = pickType(rng, weights);
+      for (let k = 0; k < 6 && !allowed(type); k++) type = pickType(rng, weights);
+      if (!allowed(type)) type = [NestType.Forge, NestType.Spire, NestType.Swift, NestType.Hive].find(allowed) ?? NestType.Hive;
+      typeCount.set(type, (typeCount.get(type) ?? 0) + 1);
+      const level = rng.next() < 0.15 ? 2 : 1;
+      let g = Math.round(4 + (1 - Math.min(1, r)) * 9 + rng.int(4) + (level - 1) * 6);
+      if (type === NestType.Bastion) g = Math.round(g * 0.6);
+      if (type === NestType.Forge) g += 2;
+      place(r, da, type, level, g);
+      placed++;
     }
+    return { nests, polar };
   };
 
-  // Keep the mix varied: at most one Bastion and two of any other type per
-  // sector, so a seed can't produce a map that is mostly turrets.
-  const typeCount = new Map<number, number>();
-  const allowed = (t: number) => (typeCount.get(t) ?? 0) < (t === NestType.Bastion ? 1 : 2);
-
-  // A cheap "natural expansion" right next to each start: Hive, Forge or Spire.
-  const naturalType = rng.pick([NestType.Hive, NestType.Forge, NestType.Spire]);
-  for (let tries = 0; tries < 40; tries++) {
-    const da = (rng.next() < 0.5 ? -1 : 1) * rng.range(0.12, 0.28) * sector;
-    const r = rng.range(0.55, 0.68);
-    if (fits(r, da)) {
-      place(r, da, naturalType, 1, naturalType === NestType.Forge ? 6 : 4);
-      typeCount.set(naturalType, 1);
-      break;
+  // The ellipse stretches each sector differently, so with 3+ players one
+  // start can end up with nearer expansions. Try a few and keep the fairest.
+  let best = attempt(rng), bestSpread = expansionSpread(best.nests, P);
+  for (let k = 0; k < 6 && bestSpread > 1.08; k++) {
+    const next = attempt(new Rng(rng.int(0x7fffffff)));
+    const spread = expansionSpread(next.nests, P);
+    if (spread < bestSpread) {
+      best = next;
+      bestSpread = spread;
     }
   }
-
-  let placed = 1;
-  for (let tries = 0; tries < 400 && placed < perSector; tries++) {
-    const r = rng.range(0.28, 1.0);
-    const da = rng.range(-0.46, 0.46) * sector;
-    if (!fits(r, da)) continue;
-    let type = pickType(rng, weights);
-    for (let k = 0; k < 6 && !allowed(type); k++) type = pickType(rng, weights);
-    if (!allowed(type)) type = [NestType.Forge, NestType.Spire, NestType.Swift, NestType.Hive].find(allowed) ?? NestType.Hive;
-    typeCount.set(type, (typeCount.get(type) ?? 0) + 1);
-    const level = rng.next() < 0.15 ? 2 : 1;
-    let g = Math.round(4 + (1 - r) * 9 + rng.int(4) + (level - 1) * 6);
-    if (type === NestType.Bastion) g = Math.round(g * 0.6);
-    if (type === NestType.Forge) g += 2;
-    place(r, da, type, level, g);
-    placed++;
-  }
+  const { nests, polar } = best;
 
   // Terrain gets its own stream so tuning it never reshuffles the nests.
-  const frame: Frame = { w, h, P, sector, base, pos, nests, polar, size: p.size };
+  const frame: Frame = { w, h, P, sector, base, pos, nests, polar, size: p.size, centerCrystal: L.center === 'crystal' };
   const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), terrainParams(p.terrain), caveParams(p.caves), frame);
   const events = generateEvents(new Rng(p.seed ^ 0x3c9d17), eventParams(p.events), terrain, frame);
-  return { width: w, height: h, nests, terrain, events };
+  return { width: w, height: h, nests, terrain, events, layout };
+}
+
+/**
+ * How unevenly the starts are served: each capital's walk (straight line) to
+ * its 3 nearest neutral nests, as max over min across capitals.
+ */
+export function expansionSpread(nests: readonly NestSpec[], P: number): number {
+  const reach: number[] = [];
+  for (let k = 0; k < P; k++) {
+    const c = nests[k];
+    const d = nests
+      .filter((n, i) => i >= P && n.player < 0)
+      .map((n) => Math.sqrt((n.x - c.x) ** 2 + (n.y - c.y) ** 2))
+      .sort((a, b) => a - b);
+    reach.push(d.slice(0, 3).reduce((s, v) => s + v, 0));
+  }
+  return Math.max(...reach) / Math.max(1, Math.min(...reach));
 }
 
 function generateEvents(rng: Rng, params: EventParams, terrain: TerrainSpec, f: Frame): EventSpec {
@@ -295,6 +472,8 @@ interface Frame {
   nests: NestSpec[];
   polar: Polar[];
   size: MapSize;
+  /** no center nest: the middle is open, with a crystal when the map has any */
+  centerCrystal: boolean;
 }
 
 interface Polar {
@@ -343,6 +522,8 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
   // go deeper into each sector.
   const crystals = Math.round(tp.crystals);
   const crystalPolar: { r: number; a: number }[] = [];
+  // Open-center layouts put one more in the middle, shared by everyone.
+  if (f.centerCrystal && crystals > 0) spec.crystals.push({ x: w / 2, y: h / 2, r: 34 * scale });
   for (let k = 0, tries = 0; k < crystals && tries < 40; tries++) {
     const a = k === 0 ? (0.5 + rng.range(-0.06, 0.06)) * sector : rng.range(-0.35, 0.35) * sector;
     const r = rng.range(0.42, 0.66);
@@ -472,7 +653,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
  */
 function fairestCave(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number; a: number }[], crystalR: number, scale: number): CaveSpec {
   const { w, h, P, nests } = f;
-  const center = nests[P];
+  const center = { x: w / 2, y: h / 2 };
   let best: CaveSpec | null = null, bestSpread = Infinity;
   for (let attempt = 0; attempt < 16 && bestSpread > 1.05; attempt++) {
     const cave = generateCaves(new Rng(rng.int(0x7fffffff)), cp, f, crystals, crystalR, scale);
@@ -517,6 +698,8 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
     nodes.push({ r: p.r, a: p.a, R: NEST_RADIUS[n.type] + cp.chamber * boost * scale });
   });
   for (const c of crystals) nodes.push({ r: c.r, a: c.a, R: crystalR + 34 * scale });
+  // No center nest: still carve a chamber there (around its crystal, if any), so the sectors meet.
+  if (f.centerCrystal) nodes.push({ r: 0, a: 0, R: 34 * scale + 40 * scale });
 
   for (const n of nodes) {
     rotate(n.r, n.a, n.r, n.a, n.R);

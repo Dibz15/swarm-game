@@ -1,7 +1,7 @@
 // Living-map events: how often each fires, who profits, and whether the
 // profits decide matches. Every game seats all personalities, rotated.
 // Usage: EVENTS=normal TERRAIN=standard npx vite-node scripts/event-probe.ts [players] [size] [games] [difficulty]
-import { CAVES, EVENTS, TERRAIN } from './env';
+import { CAVES, EVENTS, LAYOUT, TERRAIN } from './env';
 import { PERSONALITIES } from '../src/sim/ai/bot';
 import { NEUTRAL, TICK_HZ } from '../src/sim/constants';
 import { createWorld } from '../src/sim/setup';
@@ -21,7 +21,7 @@ let winnerHadMostDrops = 0, decided = 0, minutes = 0;
 for (let g = 0; g < games; g++) {
   const pers = Array.from({ length: players }, (_, i) => PERSONALITIES[(i + g) % 4]);
   const w = createWorld({
-    terrain: TERRAIN, caves: CAVES, events: EVENTS, seed: 6000 + g, size,
+    terrain: TERRAIN, caves: CAVES, layout: LAYOUT, events: EVENTS, seed: 6000 + g, size,
     players: pers.map((p, i) => ({ faction: i, team: i, human: false, bot: { difficulty, personality: p } })),
   });
   const drops = new Array(players).fill(0);

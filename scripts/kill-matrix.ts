@@ -1,5 +1,5 @@
 // Who kills whom: are the eventual losers killed by the winner, or by each other?
-import { CAVES, EVENTS, TERRAIN } from './env';
+import { CAVES, EVENTS, LAYOUT, TERRAIN } from './env';
 import { Bot, PERSONALITIES } from '../src/sim/ai/bot';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -27,7 +27,7 @@ const orig = (Bot.prototype as any).issue;
 };
 
 for (let g = 0; g < games; g++) {
-  const w = createWorld({ terrain: TERRAIN, caves: CAVES, events: EVENTS, 
+  const w = createWorld({ terrain: TERRAIN, caves: CAVES, layout: LAYOUT, events: EVENTS, 
     seed: 3000 + g, size,
     players: Array.from({ length: players }, (_, i) => ({ faction: i, team: i, human: false, bot: { difficulty: 1, personality: PERSONALITIES[(i + g) % 4] } })),
   });

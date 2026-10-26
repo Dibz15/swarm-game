@@ -125,7 +125,7 @@ describe('terrain mapgen', () => {
   });
 
   it('places terrain symmetrically: each sector gets the same amount', () => {
-    const m = generateMap({ seed: 77, size: 'medium', players: 4, terrain: 'standard' });
+    const m = generateMap({ seed: 77, size: 'medium', players: 4, terrain: 'standard', layout: 'classic' });
     expect(m.terrain.walls.length % 4).toBe(0);
     expect(m.terrain.fields.length % 4).toBe(0);
     expect(m.terrain.crystals.length % 4).toBe(0);

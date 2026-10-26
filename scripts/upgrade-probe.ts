@@ -1,7 +1,7 @@
 // Do upgrades pay? Mirror matches between the same personality, where one
 // side upgrades eagerly and the other never does. Seats swap every game.
 // Usage: npx vite-node scripts/upgrade-probe.ts [personality] [size] [games] [difficulty]
-import { CAVES, EVENTS, TERRAIN } from './env';
+import { CAVES, EVENTS, LAYOUT, TERRAIN } from './env';
 import { type Personality } from '../src/sim/ai/bot';
 import { TICK_HZ } from '../src/sim/constants';
 import { createWorld } from '../src/sim/setup';
@@ -15,7 +15,7 @@ const difficulty = Number(process.argv[5] ?? 2);
 let upWins = 0, decided = 0, levels = 0, minutes = 0;
 for (let g = 0; g < games; g++) {
   const w = createWorld({
-    terrain: TERRAIN, caves: CAVES, events: EVENTS, seed: 4000 + g, size,
+    terrain: TERRAIN, caves: CAVES, layout: LAYOUT, events: EVENTS, seed: 4000 + g, size,
     players: [0, 1].map((i) => ({ faction: i, team: i, human: false, bot: { difficulty, personality: pers } })),
   });
   const up = g % 2; // which seat upgrades

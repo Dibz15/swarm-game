@@ -69,7 +69,7 @@ describe('cave mapgen', () => {
 
 describe('fighting in caves', () => {
   it('units stay out of rock and get through tunnels', () => {
-    const m = generateMap({ seed: 77, size: 'small', players: 2, caves: 'full' });
+    const m = generateMap({ seed: 77, size: 'small', players: 2, caves: 'full', layout: 'classic' });
     const w = new World(1, m.width, m.height, m.terrain);
     for (const f of [0, 1]) {
       w.factions[f].active = true;
