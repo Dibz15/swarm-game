@@ -24,7 +24,7 @@ export interface Services {
 export type MatchResult = 'victory' | 'defeat';
 
 /** Seconds the game holds when a tutorial instruction changes (missions with readPause). */
-const READ_PAUSE = 5;
+const READ_PAUSE = 10;
 
 /** A match in progress: owns the session, selection and event feedback. */
 export class GameView {
