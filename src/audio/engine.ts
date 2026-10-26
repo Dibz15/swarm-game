@@ -153,7 +153,7 @@ export class AudioEngine {
     for (let i = 0; i < nlen; i++) nd[i] = Math.random() * 2 - 1;
 
     // Battle beds: crackle for fights in view, muffled rumble for fights elsewhere.
-    this.nearBed = this.bed('bandpass', 2600, 0.8, 0.25);
+    this.nearBed = this.bed('bandpass', 1000, 0.8, 0.25);
     this.farBed = this.bed('lowpass', 260, 0.7, 0.5);
 
     this.ambience = new Ambience(ctx, this.buses.ambience, this.reverbIn);
@@ -232,7 +232,7 @@ export class AudioEngine {
 
   /** Overall loudness from camera height: ~0.5 at full-map zoom, 1 up close. */
   heightGain(): number {
-    return 1 / (1 + this.height());
+    return 1 / (2 + this.height());
   }
 
   place(x: number, y: number): Placement {
@@ -438,15 +438,15 @@ export class AudioEngine {
     const out = this.at(x, y, 0.8, 1.5, 0.05);
     if (!out) return;
     // Falling whistle across the telegraph time.
-    this.tone(out, note(19), 1.1, 'sine', 0.035, { slide: 0.35, attack: 0.05 });
+    this.tone(out, note(19), 1.3, 'sine', 0.20, { slide: 0.35, attack: 0.05 });
   }
 
   barrageHit(x: number, y: number, mine: boolean): void {
     if (!this.ctx) return;
     const out = this.at(x, y, mine ? 1.1 : 0.9, 2, 0.0);
     if (!out) return;
-    this.tone(out, 92, 0.8, 'sine', 0.32, { slide: 0.45, attack: 0.008 });
-    this.noise(out, 0.7, 0.22, 'lowpass', 1400, 80);
+    this.tone(out, note(-4), 0.8, 'sine', 0.35, { slide: 0.45, attack: 0.014 });
+    this.noise(out, 0.7, 0.17, 'lowpass', 1400, 80);
   }
 
   blink(x0: number, y0: number, x: number, y: number, mine: boolean): void {
@@ -600,7 +600,7 @@ export class AudioEngine {
     this.farLevel += (Math.min(1, far / 900) - this.farLevel) * k;
     const t = this.ctx.currentTime;
     this.nearBed.gain.gain.setTargetAtTime(this.nearLevel * 0.12 * this.heightGain(), t, 0.1);
-    this.nearBed.filter.frequency.setTargetAtTime(2000 + this.nearLevel * 2200, t, 0.2);
+    this.nearBed.filter.frequency.setTargetAtTime(800 + this.nearLevel * 900, t, 0.2);
     this.farBed.gain.gain.setTargetAtTime(this.farLevel * 0.35, t, 0.2);
 
     this.tension += (Math.min(1, this.nearLevel * 0.8 + this.farLevel * 0.35 + danger * 0.35) - this.tension) * (1 - Math.exp(-dt * 0.8));
