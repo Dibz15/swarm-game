@@ -9,6 +9,7 @@ import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES,
 import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
+import { nearestNestOrders } from './nearest';
 import { LocalSession } from './session';
 import type { Lock, MissionRun } from './tutorial';
 
@@ -708,6 +709,27 @@ export class GameView {
     this.s.rings.add({ x: tx, y: ty, r0: n ? n.r * 1.8 : 22, r1: n ? n.r * 1.1 : 4, dur: 0.35, c, thick: 2 });
     this.s.sfx.order();
     return true;
+  }
+
+  /** N: send the selected dots to the nearest nest we own; split groups go to their own. Returns the first nest. */
+  toNearestNest(): Nest | null {
+    if (!this.selection.units.size) {
+      this.s.toast('Select dots first, then N', '#9aa4c7');
+      return null;
+    }
+    const orders = nearestNestOrders(this.world, this.human, [...this.selection.units]);
+    if (!orders.length) {
+      this.s.toast('No nest to fall back to', '#9aa4c7');
+      return null;
+    }
+    const c = FACTION_RGB[this.human];
+    for (const o of orders) {
+      const n = this.world.nests[o.nest];
+      this.session.issue({ t: 'move', p: this.human, units: o.units, x: n.x, y: n.y, nest: n.id });
+      this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.8, r1: n.r * 1.1, dur: 0.35, c, thick: 2 });
+    }
+    this.s.sfx.order();
+    return this.world.nests[orders[0].nest];
   }
 
   surge(): void {

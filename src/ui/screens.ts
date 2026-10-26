@@ -36,6 +36,7 @@ export const CONTROLS_HTML = `
     <dt>Q / E</dt><dd>Surge / Nova on the selected dots</dd>
     <dt>R / F / G / T</dt><dd>Nest powers: Fortify, Barrage, Blink, Lockdown (at the cursor). They appear when you hold a Forge, Spire, Den or Bastion</dd>
     <dt>U</dt><dd>Upgrade the selected nest (feeds it nearby dots)</dd>
+    <dt>N</dt><dd>Send the selected dots to your nearest nest (double-tap to look there)</dd>
     <dt>Ctrl+5–9, 5–9</dt><dd>Save / recall control groups</dd>
     <dt>WASD / arrows</dt><dd>Pan · wheel zooms · middle-drag pans · 0 fits the map · C centers on selection · H goes home</dd>
     <dt>Touch</dt><dd>Drag selects, tap sends, two fingers pan and zoom</dd>
@@ -47,6 +48,7 @@ export const TOUCH_CONTROLS_HTML = `
     <dt>Tap</dt><dd>Send the selected dots there · tap a nest to send them onto it</dd>
     <dt>Tap a nest</dt><dd>With nothing selected: select your nest. Then tap the map to set its rally point</dd>
     <dt>Two fingers</dt><dd>Pan and pinch to zoom</dd>
+    <dt>⌂</dt><dd>Send the selected dots to your nearest nest</dd>
     <dt>✕</dt><dd>Clear the selection</dd>
     <dt>Type chips</dt><dd>Keep only that type from your group</dd>
     <dt>Powers</dt><dd>Surge and Nova fire at once · nest powers: tap the button, then tap the target</dd>
