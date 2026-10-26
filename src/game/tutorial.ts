@@ -51,6 +51,8 @@ export interface Mission {
   learned: string[];
   setup: (portrait: boolean) => MatchSetup;
   locked: Lock[];
+  /** hold the game for a few seconds whenever the instruction changes, so it can be read first */
+  readPause?: boolean;
   steps: Step[];
 }
 
@@ -320,6 +322,7 @@ export const MISSIONS: Mission[] = [
     teaches: 'Level up nests, and use Barrage and Nova.',
     learned: ['Feeding dots into a nest levels it up: faster spawns and a turret.', 'Holding a nest type unlocks its power: a Spire gives Barrage.', 'Nova blasts everything around the selected dots: save it for big fights.'],
     locked: ['fortify', 'blink', 'lockdown'],
+    readPause: true,
     setup: (portrait) =>
       solo(
         map(
@@ -386,6 +389,7 @@ export const MISSIONS: Mission[] = [
     teaches: 'Terrain, crystals, and winning by holding most of the map.',
     learned: ['Walls block movement and fire; nebula slows everything inside it.', 'Dots standing on a crystal charge your energy.', 'Hold the marked share of nests for 30 seconds to win by domination.'],
     locked: ['fortify', 'blink', 'lockdown'],
+    readPause: true,
     // 5 of 9 nests: room to lose one to a raid and keep the countdown going.
     setup: (portrait) => ({
       domShare: 0.55,

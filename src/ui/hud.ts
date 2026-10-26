@@ -44,7 +44,7 @@ const ENEMY_TIPS = [
 
 export type HudAction =
   | 'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'pause' | 'mute'
-  | 'fortify' | 'barrage' | 'blink' | 'lockdown' | 'skip';
+  | 'fortify' | 'barrage' | 'blink' | 'lockdown' | 'skip' | 'go';
 
 export function formatTime(ticks: number): string {
   const s = Math.floor(ticks / TICK_HZ);
@@ -106,7 +106,7 @@ export class Hud {
       <div class="nestcard"></div>
       <div class="aimhint"><span></span><button class="cancel">Cancel</button></div>
       <div class="tip"><span></span><button class="x" title="Hide tips">✕</button></div>
-      <div class="coach"><small></small><p></p><div class="coach-status"></div><div class="coach-row"><span class="pips"></span><button class="small" data-a="skip">Skip mission</button></div></div>
+      <div class="coach"><small></small><p></p><div class="coach-status"></div><div class="coach-hold"><span>Paused to read</span><i><b></b></i><button class="small primary" data-a="go">Go</button></div><div class="coach-row"><span class="pips"></span><button class="small" data-a="skip">Skip mission</button></div></div>
       <div class="counters" title="Spears pierce Shields · Shields stop Swarmers · Swarmers overrun Spears">
         <svg viewBox="0 0 120 92" aria-hidden="true">
           <defs>
@@ -250,6 +250,9 @@ export class Hud {
     const m = g.mission;
     // The live status line changes on its own; everything else only when the step does.
     const status = m?.current?.status?.({ w: g.world, human: g.human, log: g.session.log }) ?? '';
+    const hold = this.coach.querySelector('.coach-hold') as HTMLElement;
+    hold.style.display = g.readLeft > 0 ? '' : 'none';
+    (hold.querySelector('b') as HTMLElement).style.width = `${Math.round(g.readLeft * 100)}%`;
     const st = this.coach.querySelector('.coach-status') as HTMLElement;
     if (st.innerHTML !== status) st.innerHTML = status;
     st.style.display = status ? '' : 'none';

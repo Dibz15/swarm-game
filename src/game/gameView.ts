@@ -23,6 +23,9 @@ export interface Services {
 
 export type MatchResult = 'victory' | 'defeat';
 
+/** Seconds the game holds when a tutorial instruction changes (missions with readPause). */
+const READ_PAUSE = 5;
+
 /** A match in progress: owns the session, selection and event feedback. */
 export class GameView {
   readonly session: LocalSession;
@@ -48,6 +51,12 @@ export class GameView {
   /** actions this mission hides */
   locked = new Set<Lock>();
   private highlightAt = 0;
+  /** reading pause: the step it is for, and when it ends (seconds); see READ_PAUSE */
+  private readStep = -1;
+  readUntil = 0;
+  readFrom = 0;
+  /** 0..1 of the reading pause left, for the coach's bar */
+  readLeft = 0;
   private mask = new Uint8Array(MAX_UNITS);
   private spawnSeen: number[] = [];
   private domSecs = -1;
@@ -120,13 +129,31 @@ export class GameView {
       const c = this.s.camera;
       this.s.sfx.levelUp(c.cx, c.cy, true);
     }
-    if (m.complete) return this.finish('victory', time);
+    if (m.complete) {
+      this.session.held = false;
+      return this.finish('victory', time);
+    }
+    // Hold the game briefly on each new instruction, so it can be read before things move.
+    if (m.mission.readPause && this.readStep !== m.step) {
+      this.readStep = m.step;
+      this.readFrom = time;
+      this.readUntil = time + READ_PAUSE;
+    }
+    this.session.held = time < this.readUntil;
+    this.readLeft = this.session.held ? (this.readUntil - time) / READ_PAUSE : 0;
     if (time - this.highlightAt < 1.1) return;
     this.highlightAt = time;
     for (const id of m.current?.highlight?.(ctx) ?? []) {
       const n = this.world.nests[id];
       if (n) this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.3, r1: n.r * 2.6, dur: 0.9, c: WHITE, thick: 3 });
     }
+  }
+
+  /** End the reading pause now (the coach's Go button). */
+  skipRead(): void {
+    this.readUntil = 0;
+    this.readLeft = 0;
+    this.session.held = false;
   }
 
   /** A mission hides this action: say so instead of doing it. */

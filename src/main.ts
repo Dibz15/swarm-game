@@ -326,6 +326,7 @@ class App {
       blink: () => this.game?.startAim('blink'),
       lockdown: () => this.game?.startAim('lockdown'),
       skip: () => this.skipMission(),
+      go: () => this.game?.skipRead(),
     });
     this.hud.setMuted(this.sfx.muted);
     this.applyInsets();

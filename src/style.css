@@ -601,3 +601,7 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
   body:not(.mobile) .coach { left: 12px; transform: none; width: calc(100% - 150px); }
 }
 .coach-status { margin: -2px 0 6px; font-size: 13px; color: #ffd166; }
+.coach-hold { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+.coach-hold i { flex: 1; height: 4px; border-radius: 2px; background: var(--line-strong); overflow: hidden; }
+.coach-hold i b { display: block; height: 100%; background: var(--accent); }
+.coach-hold button { padding: 2px 12px; }
