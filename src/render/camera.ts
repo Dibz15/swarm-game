@@ -82,7 +82,7 @@ export class Camera {
    * comfortable size (`cssPerUnit` CSS px per world unit, so phones zoom in
    * more), within kMin..kMax of the fit. Held until the player pans or zooms.
    */
-  open(x: number, y: number, dpr: number, cssPerUnit = 0.9, kMin = 1.3, kMax = 2.5): void {
+  open(x: number, y: number, dpr: number, cssPerUnit = 0.75, kMin = 1.3, kMax = 1.8): void {
     this.computeFit();
     const k = clamp((dpr * cssPerUnit) / this.fitZoom, kMin, kMax);
     this.place(x, y, this.fitZoom * k);
