@@ -18,8 +18,8 @@ function fight(cast: Cast, seed: number, kind: number) {
     w.factions[f].active = true;
     w.setTeam(f, f);
   }
-  // side 0 holds a Spire far away so Barrage is allowed
-  w.nests.push({ id: 0, x: 40, y: 40, r: 26, type: NestType.Spire, owner: 0, level: 1, control: 1, controller: 0, spawnAcc: 0, rallyX: 40, rallyY: 40, feedProgress: 0, feedIncoming: 0, lastSpawn: 0, contested: false, capital: false, lockedUntil: 0, garrison: 0, visited: 0 });
+  // side 0 holds a Spire behind its army, in Barrage range of the fight
+  w.nests.push({ id: 0, x: 60, y: 250, r: 26, type: NestType.Spire, owner: 0, level: 1, control: 1, controller: 0, spawnAcc: 0, rallyX: 60, rallyY: 250, feedProgress: 0, feedIncoming: 0, lastSpawn: 0, contested: false, capital: false, lockedUntil: 0, garrison: 0, visited: 0 });
   const mine: number[] = [];
   for (let i = 0; i < size; i++) {
     mine.push(w.uid[spawnUnit(w, 0, kind, 250 + (i % 8) * 7, 200 + Math.floor(i / 8) * 8 + (seed % 5), 450, 250, 40)]);
@@ -43,7 +43,7 @@ function fight(cast: Cast, seed: number, kind: number) {
         w.factions[0].energy += 20;
       }
       // count kills by the power over its window
-      const until = w.tick + POWER.barrageDelay + 3;
+      const until = (w.barrages[0]?.impact ?? w.tick) + 3;
       while (w.tick < until && !w.over) step(w, []);
       killedByPower = before - w.unitCount[1];
       if (cast === 'barrage x1.5') {

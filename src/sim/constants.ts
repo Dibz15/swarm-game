@@ -210,11 +210,18 @@ export const POWER = {
   fortifyTicks: 5 * TICK_HZ,
   fortifyArmor: 0.5,
   fortifySlow: 0.55,
-  /** Spire: telegraphed artillery strike at a point */
+  /** Spire: telegraphed artillery strike at a point, launched from one of your nests */
   barrageCost: 40,
-  barrageDelay: Math.round(1.2 * TICK_HZ),
+  /** the shell flies at a fixed speed (px/s) after a short launch, so longer shots give more warning */
+  barrageLaunch: 0.6,
+  barrageSpeed: 320,
   barrageRadius: 58,
+  /** most damage one unit takes (at the center; 60% at the edge) */
   barrageDamage: 20,
+  /** the target must be this close to a nest you own (#41) */
+  barrageRange: 450,
+  /** total damage one strike spreads over everything it hits, so a packed blob isn't wiped */
+  barrageBudget: 250,
   /** Swift: teleport the selected group toward a point */
   blinkCost: 30,
   blinkRange: 180,

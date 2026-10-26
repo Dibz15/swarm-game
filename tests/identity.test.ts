@@ -64,7 +64,7 @@ describe('nest powers', () => {
 
   it('Barrage lands after its delay and only hurts enemies', () => {
     const w = arena();
-    nest(w, NestType.Spire, 0, 100, 100);
+    nest(w, NestType.Spire, 0, 300, 275);
     w.factions[0].energy = 100;
     // 50 apart: both inside the blast, but beyond each other's notice range.
     const enemy = spawnUnit(w, 1, Kind.Tank, 600, 250, 600, 250, 4);
@@ -72,7 +72,7 @@ describe('nest powers', () => {
     const hp0 = w.hp[enemy], friendHp = w.hp[friend];
     w.grid.build(w);
     applyCommand(w, { t: 'barrage', p: 0, x: 600, y: 275 });
-    for (let t = 0; t < POWER.barrageDelay - 2; t++) step(w, []);
+    while (w.tick < w.barrages[0].impact - 2) step(w, []);
     expect(w.hp[enemy]).toBe(hp0); // telegraph only
     for (let t = 0; t < 4; t++) step(w, []);
     expect(w.hp[enemy]).toBeLessThan(hp0 - POWER.barrageDamage * 0.5);

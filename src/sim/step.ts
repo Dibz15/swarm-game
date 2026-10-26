@@ -52,6 +52,7 @@ export function step(w: World, commands: readonly Command[]): void {
 }
 
 const blast: number[] = [];
+const hits: { j: number; d: number }[] = [];
 const CRYSTAL_EVERY = 6;
 
 /** Crystals charge energy for the only team standing on them. */
@@ -97,11 +98,21 @@ function resolveBarrages(w: World): void {
       continue;
     }
     queryRadius(w, b.x, b.y, b.r, blast);
+    // Full damage (with falloff) from the center out, until the strike's
+    // budget is spent: a small group still dies, a big packed blob loses its core.
+    hits.length = 0;
     for (const j of blast) {
       if (!w.hostile(w.owner[j], b.owner)) continue;
-      const d = Math.sqrt((w.x[j] - b.x) ** 2 + (w.y[j] - b.y) ** 2);
-      w.dmg[j] += POWER.barrageDamage * (1 - 0.4 * (d / b.r));
+      hits.push({ j, d: Math.sqrt((w.x[j] - b.x) ** 2 + (w.y[j] - b.y) ** 2) });
+    }
+    hits.sort((p, q) => p.d - q.d || p.j - q.j);
+    let budget = POWER.barrageBudget * (b.r / POWER.barrageRadius);
+    for (const { j, d } of hits) {
+      if (budget <= 0) break;
+      const dmg = Math.min(budget, POWER.barrageDamage * (1 - 0.4 * (d / b.r)));
+      w.dmg[j] += dmg;
       w.lastHit[j] = b.owner;
+      budget -= dmg;
     }
     pushFx(w, 'barrageHit', b.x, b.y, b.owner, b.r);
   }

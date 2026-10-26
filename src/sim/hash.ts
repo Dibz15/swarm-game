@@ -39,6 +39,7 @@ export function worldHash(w: World): number {
     mix(Math.round(b.x * 64));
     mix(Math.round(b.y * 64));
     mix(b.impact);
+    mix(Math.round(b.x0 * 64) ^ Math.round(b.y0 * 64));
   }
   return h >>> 0;
 }

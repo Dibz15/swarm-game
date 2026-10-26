@@ -1,5 +1,5 @@
 import { ESCALATION, EVENTS, Kind, LEVEL, MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
-import { applyCommand, feedNeed, hasPower, type Command } from '../commands';
+import { applyCommand, barrageLaunch, feedNeed, hasPower, type Command } from '../commands';
 import { Rng } from '../rng';
 import { supplyCap } from '../nests';
 import { queryRadius } from '../spatial';
@@ -33,13 +33,15 @@ interface DifficultyKnobs {
   surgeAt: number;
   /** energy at which a bot stops saving and spends on any real fight (income is wasted at the max) */
   dumpAt: number;
+  /** odds of moving dots out from under an incoming Barrage */
+  dodge: number;
 }
 
 export const DIFFICULTY: readonly DifficultyKnobs[] = [
-  { think: 80, margin: 1.9, powers: false, upgradeSkill: 0.35, noise: 0.6, prod: 1, openReserve: 1, surgeAt: 10, dumpAt: 101 },
-  { think: 45, margin: 1.45, powers: true, upgradeSkill: 0.7, noise: 0.3, prod: 1, openReserve: 0.5, surgeAt: 8, dumpAt: 95 },
-  { think: 24, margin: 1.25, powers: true, upgradeSkill: 1, noise: 0.12, prod: 1, openReserve: 0, surgeAt: 6, dumpAt: 85 },
-  { think: 14, margin: 1.15, powers: true, upgradeSkill: 1, noise: 0.06, prod: 1.5, openReserve: 0, surgeAt: 6, dumpAt: 85 },
+  { think: 80, margin: 1.9, powers: false, upgradeSkill: 0.35, noise: 0.6, prod: 1, openReserve: 1, surgeAt: 10, dumpAt: 101, dodge: 0 },
+  { think: 45, margin: 1.45, powers: true, upgradeSkill: 0.7, noise: 0.3, prod: 1, openReserve: 0.5, surgeAt: 8, dumpAt: 95, dodge: 0.5 },
+  { think: 24, margin: 1.25, powers: true, upgradeSkill: 1, noise: 0.12, prod: 1, openReserve: 0, surgeAt: 6, dumpAt: 85, dodge: 0.85 },
+  { think: 14, margin: 1.15, powers: true, upgradeSkill: 1, noise: 0.06, prod: 1.5, openReserve: 0, surgeAt: 6, dumpAt: 85, dodge: 1 },
 ];
 
 interface PersonalityKnobs {
@@ -72,6 +74,8 @@ export const PERSONALITY: Record<Personality, PersonalityKnobs> = {
 };
 
 const scratch: number[] = [];
+/** ticks before a bot reacts to an announced Barrage */
+const DODGE_REACT = 8;
 
 /**
  * Opening phase: all bots favor neutral nests and mostly leave players alone,
@@ -167,8 +171,46 @@ export class Bot {
   update(w: World): void {
     const fa = w.factions[this.faction];
     if (fa.eliminated) return;
+    // Incoming Barrages get a look every tick: the warning is shorter than a think.
+    if (w.barrages.length) this.dodge(w);
+    else this.seen.clear();
     if ((w.tick + this.faction * 7) % this.d.think !== 0) return;
     this.think(w);
+  }
+
+  /** Barrages already reacted to (by landing tick and spot). */
+  private seen = new Set<number>();
+
+  /** Move dots out from under an enemy Barrage, a moment after it's announced. */
+  private dodge(w: World): void {
+    const me = this.faction;
+    for (const b of w.barrages) {
+      if (!w.hostile(b.owner, me) || w.tick < b.t0 + DODGE_REACT) continue;
+      const key = b.impact * 65536 + Math.round(b.x) * 256 + Math.round(b.y);
+      if (this.seen.has(key)) continue;
+      this.seen.add(key);
+      if (this.d.dodge <= 0 || this.rng.next() >= this.d.dodge) continue;
+      // Each quarter of the circle scatters its own way, so dots don't cross the blast.
+      queryRadius(w, b.x, b.y, b.r + 8, scratch);
+      const groups: number[][] = [[], [], [], []];
+      for (const s of scratch) {
+        if (w.owner[s] !== me || w.state[s] === UNIT_FEEDING) continue;
+        groups[(w.x[s] >= b.x ? 1 : 0) + (w.y[s] >= b.y ? 2 : 0)].push(s);
+      }
+      for (const g of groups) {
+        if (!g.length) continue;
+        let dx = 0, dy = 0;
+        for (const s of g) {
+          dx += w.x[s] - b.x;
+          dy += w.y[s] - b.y;
+        }
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 1e-6) dx = 1, dy = 0;
+        else dx /= len, dy /= len;
+        const out = b.r + 35;
+        this.issue(w, { t: 'move', p: me, units: g.map((s) => w.uid[s]), x: b.x + dx * out, y: b.y + dy * out, nest: -1 });
+      }
+    }
   }
 
   private issue(w: World, c: Command): void {
@@ -647,7 +689,7 @@ export class Bot {
     }
     // Barrage is artillery: for enemies massed apart from our own troops
     // (standing off or dug in), or, when energy allows, smaller fights.
-    if (ne >= 12 && fa.energy >= POWER.barrageCost && hasPower(w, me, 'barrage')) {
+    if (ne >= 12 && fa.energy >= POWER.barrageCost && hasPower(w, me, 'barrage') && barrageLaunch(w, me, ex / ne, ey / ne)) {
       const apart = own.length === 0 || (ex / ne - ox / own.length) ** 2 + (ey / ne - oy / own.length) ** 2 > 45 * 45;
       // In small skirmishes keep a cushion so energy can still build to a Nova.
       if (apart ? this.spendable(w, POWER.barrageCost) : !brawl && this.spendable(w, POWER.barrageCost + 20)) {

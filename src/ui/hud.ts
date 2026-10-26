@@ -135,7 +135,7 @@ export class Hud {
           <button data-a="surge" class="power">Surge<kbd>Q</kbd><small>${POWER.surgeCost}</small></button>
           <button data-a="nova" class="power">Nova<kbd>E</kbd><small>${POWER.novaCost}</small></button>
           <button data-a="fortify" class="power nest" title="Selected dots take half damage but move slower. From a Forge.">Fortify<kbd>R</kbd><small>${POWER.fortifyCost}</small></button>
-          <button data-a="barrage" class="power nest" title="Artillery strike at the cursor after a short warning. From a Spire.">Barrage<kbd>F</kbd><small>${POWER.barrageCost}</small></button>
+          <button data-a="barrage" class="power nest" title="Artillery shell launched from your nearest nest: lands at the cursor after a short warning. Needs a Spire; reaches about ${POWER.barrageRange} px from your nests.">Barrage<kbd>F</kbd><small>${POWER.barrageCost}</small></button>
           <button data-a="blink" class="power nest" title="Teleport the selected dots toward the cursor. From a Den.">Blink<kbd>G</kbd><small>${POWER.blinkCost}</small></button>
           <button data-a="lockdown" class="power nest" title="Stop an enemy nest spawning for a while. From a Bastion.">Lockdown<kbd>T</kbd><small>${POWER.lockdownCost}</small></button>
           <button data-a="upgrade" style="display:none"><span class="ulabel">Upgrade</span><kbd>U</kbd><small class="ucost"></small></button>
