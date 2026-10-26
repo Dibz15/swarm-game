@@ -61,13 +61,13 @@ export function controlsHtml(): string {
 export function mainMenu(handlers: { skirmish: () => void; campaign: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
   const m = el(`
     <div class="screen menu">
+      <button class="menu-corner" data-a="howto" title="How to play"><span aria-hidden="true">?</span> How to play</button>
       <div class="menu-inner">
         <h1 class="logo">${'SWARM'.split('').map((c, i) => `<span style="--c:${FACTION_HEX[i]}">${c}</span>`).join('')}</h1>
         <p class="tag">a tiny war of colors</p>
         <div class="menu-buttons">
           <button class="primary" data-a="skirmish">Skirmish</button>
           <button data-a="campaign">Campaign</button>
-          <button data-a="howto">How to play</button>
           <button data-a="settings">Settings</button>
         </div>
       </div>

@@ -609,3 +609,17 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .card.campaign .menu-buttons button { display: flex; flex-direction: column; gap: 2px; text-align: left; }
 .card.campaign .menu-buttons span { font-size: 13px; color: var(--muted); font-weight: normal; }
 .card.campaign .menu-buttons button.primary span { color: rgba(255, 255, 255, 0.8); }
+/* Secondary main-menu action, out of the main list (#17: the tutorial teaches the basics now). */
+.menu-corner {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  right: calc(14px + env(safe-area-inset-right));
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; font-size: 13px; color: var(--muted);
+  background: rgba(14, 17, 34, 0.6); border: 1px solid var(--line); border-radius: 16px;
+}
+.menu-corner span {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  border: 1px solid var(--line-strong); font-size: 12px; color: #fff;
+}
+.menu-corner:hover { color: #fff; border-color: var(--line-strong); }
