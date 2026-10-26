@@ -1,6 +1,7 @@
 import { ESCALATION, EVENTS, Kind, LEVEL, MAX_LEVEL, NEUTRAL, NestType, bastionTurret, escalation, POWER, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../constants';
 import { applyCommand, barrageLaunch, feedNeed, hasPower, type Command } from '../commands';
 import { Rng } from '../rng';
+import { nestMouths, type Mouth } from './chokes';
 import { supplyCap } from '../nests';
 import { queryRadius } from '../spatial';
 import { UNIT_FEEDING, WILD_COLOSSUS, type Nest, type World } from '../world';
@@ -14,6 +15,8 @@ export interface BotConfig {
   personality: Personality;
   /** tutorial opponent: defends and expands on its own half, never attacks players */
   passive?: boolean;
+  /** override the difficulty's choke odds (A/B probes) */
+  choke?: number;
 }
 
 interface DifficultyKnobs {
@@ -35,13 +38,15 @@ interface DifficultyKnobs {
   dumpAt: number;
   /** odds of moving dots out from under an incoming Barrage */
   dodge: number;
+  /** odds a decision plays the map's chokepoints: stage outside a mouth before pushing in, meet attackers at it (#25) */
+  choke: number;
 }
 
 export const DIFFICULTY: readonly DifficultyKnobs[] = [
-  { think: 80, margin: 1.9, powers: false, upgradeSkill: 0.35, noise: 0.6, prod: 1, openReserve: 1, surgeAt: 10, dumpAt: 101, dodge: 0 },
-  { think: 45, margin: 1.45, powers: true, upgradeSkill: 0.7, noise: 0.3, prod: 1, openReserve: 0.5, surgeAt: 8, dumpAt: 95, dodge: 0.5 },
-  { think: 24, margin: 1.25, powers: true, upgradeSkill: 1, noise: 0.12, prod: 1, openReserve: 0, surgeAt: 6, dumpAt: 85, dodge: 0.85 },
-  { think: 14, margin: 1.15, powers: true, upgradeSkill: 1, noise: 0.06, prod: 1.5, openReserve: 0, surgeAt: 6, dumpAt: 85, dodge: 1 },
+  { think: 80, margin: 1.9, powers: false, upgradeSkill: 0.35, noise: 0.6, prod: 1, openReserve: 1, surgeAt: 10, dumpAt: 101, dodge: 0, choke: 0 },
+  { think: 45, margin: 1.45, powers: true, upgradeSkill: 0.7, noise: 0.3, prod: 1, openReserve: 0.5, surgeAt: 8, dumpAt: 95, dodge: 0.5, choke: 0.35 },
+  { think: 24, margin: 1.25, powers: true, upgradeSkill: 1, noise: 0.12, prod: 1, openReserve: 0, surgeAt: 6, dumpAt: 85, dodge: 0.85, choke: 1 },
+  { think: 14, margin: 1.15, powers: true, upgradeSkill: 1, noise: 0.06, prod: 1.5, openReserve: 0, surgeAt: 6, dumpAt: 85, dodge: 1, choke: 1 },
 ];
 
 interface PersonalityKnobs {
@@ -121,6 +126,33 @@ const EVENT_BOT = {
 /** Crystal squads: how many units hold one, and how far bots will walk for it. */
 const CRYSTAL = { guard: 5, maxTrip: 650 };
 
+/** Playing chokepoints (#25). The switches are for A/B probes. */
+export const CHOKE_BOT = {
+  /** meet attackers of a threatened nest at its mouth */
+  defend: true,
+  stage: true,
+  flank: true,
+  /** an attack pushes in once this share of the group is at the staging point */
+  gather: 0.75,
+  gatherRadius: 70,
+  /** ...or after this long */
+  stageTicks: 12 * 30,
+  /** give up on a staged attack below this share of the group */
+  minLeft: 0.4,
+  /** extra walking px a defended mouth is worth avoiding, per defender */
+  flankCost: 35,
+};
+
+/** An attack waiting at a staging point before pushing through a mouth. */
+interface Staged {
+  uids: number[];
+  size: number;
+  target: number;
+  x: number;
+  y: number;
+  until: number;
+}
+
 /**
  * FFA pile-ons: a rival other players are already attacking is worth less to
  * us. Without this every bot sees the same undefended nests and jumps the same
@@ -159,6 +191,10 @@ export class Bot {
   private readonly p: PersonalityKnobs;
   /** nest id currently being pushed */
   private focus = -1;
+  /** odds a decision plays chokepoints */
+  private readonly choke: number;
+  /** attacks gathering outside a mouth */
+  private staged: Staged[] = [];
 
   constructor(faction: number, cfg: BotConfig, seed: number) {
     this.faction = faction;
@@ -166,6 +202,12 @@ export class Bot {
     this.rng = new Rng((seed ^ Math.imul(faction + 1, 0x9e3779b1)) >>> 0);
     this.d = DIFFICULTY[cfg.difficulty] ?? DIFFICULTY[1];
     this.p = PERSONALITY[cfg.personality];
+    this.choke = cfg.choke ?? this.d.choke;
+  }
+
+  /** Roll for choke play. Certain odds draw nothing, so bots that never roll keep their rng stream. */
+  private chokeRoll(): boolean {
+    return this.choke >= 1 || (this.choke > 0 && this.rng.next() < this.choke);
   }
 
   update(w: World): void {
@@ -259,6 +301,8 @@ export class Bot {
     }
 
     const mine = w.nests.filter((n) => n.owner === me);
+    // Chokepoints: only on maps with walls, and only for bots that ever play them.
+    const mouths = this.choke > 0 && w.terrain.hasWalls ? nestMouths(w) : null;
     const used = new Set<number>();
     const take = (cx: number, cy: number, count: number, maxDist: number): number[] => {
       const pool = idle.filter((s) => !used.has(s));
@@ -281,8 +325,16 @@ export class Bot {
       if (h <= 0) continue;
       threatened = true;
       const need = h * 1.3 + 3 - friendly[n.id];
-      if (need > 0) send(take(n.x, n.y, need * 1.3, 480), n);
+      if (need <= 0) continue;
+      const slots = take(n.x, n.y, need * 1.3, 480);
+      // Meet them at the mouth they're coming through, not on the nest.
+      const m = mouths && CHOKE_BOT.defend && slots.length ? this.mouthUnderAttack(w, n, mouths[n.id]) : null;
+      if (m) this.issue(w, { t: 'move', p: me, units: slots.map((s) => w.uid[s]), x: m.gx, y: m.gy, nest: -1 });
+      else send(slots, n);
     }
+
+    // Staged attacks: push once gathered; until then their dots stay out of other plans.
+    if (this.staged.length) this.advanceStaged(w, used);
 
     // Units holding a crystal or taking a drop for us stay put (unless needed for defense above).
     const holds = w.crystals.filter((c) => c.holder === me).map((c) => ({ x: c.x, y: c.y, r: c.r }));
@@ -491,8 +543,17 @@ export class Bot {
     if (best && available >= bestNeed) {
       this.focus = best.id;
       const group = take(best.x, best.y, Math.min(available, bestNeed * 1.6 + 8), 1e9);
-      send(group, best);
-      if (this.d.powers && group.length > 0) this.supportAttack(w, group, best);
+      // Into a held chamber: gather outside its mouth first instead of trickling in single file.
+      const rival = best.owner >= 0 && best.owner !== NEUTRAL;
+      const stage = mouths && CHOKE_BOT.stage && group.length >= 6 && (rival || hostile[best.id] >= 4) ? this.stageFor(w, group, best, mouths[best.id]) : null;
+      if (stage) {
+        const uids = group.map((s) => w.uid[s]);
+        this.issue(w, { t: 'move', p: me, units: uids, x: stage.sx, y: stage.sy, nest: -1 });
+        this.staged.push({ uids, size: uids.length, target: best.id, x: stage.sx, y: stage.sy, until: w.tick + CHOKE_BOT.stageTicks });
+      } else {
+        send(group, best);
+        if (this.d.powers && group.length > 0) this.supportAttack(w, group, best);
+      }
     }
 
     // 2b) Map objectives: crystals nobody on our team holds, supply drops
@@ -599,6 +660,94 @@ export class Bot {
 
     // 4) Powers at the biggest fight.
     if (this.d.powers && fa.energy >= POWER.surgeCost) this.usePowers(w);
+  }
+
+  /** The mouth of a threatened nest its attackers are coming through, if they're still out at it. */
+  private mouthUnderAttack(w: World, n: Nest, ms: Mouth[]): Mouth | null {
+    if (!ms.length || !this.chokeRoll()) return null;
+    queryRadius(w, n.x, n.y, n.r + 70, scratch);
+    let cx = 0, cy = 0, k = 0;
+    for (const s of scratch) {
+      if (!w.hostile(w.owner[s], this.faction)) continue;
+      cx += w.x[s];
+      cy += w.y[s];
+      k++;
+    }
+    if (!k) return null;
+    cx /= k;
+    cy /= k;
+    let best: Mouth | null = null, bd = Infinity;
+    for (const m of ms) {
+      // Past the guard post, measured along the nest -> mouth line.
+      const dx = m.gx - n.x, dy = m.gy - n.y;
+      const L2 = dx * dx + dy * dy;
+      if (L2 < 1 || (cx - n.x) * dx + (cy - n.y) * dy < L2) continue;
+      const d = (cx - m.x) ** 2 + (cy - m.y) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = m;
+      }
+    }
+    return best;
+  }
+
+  /** Where to gather an attack on `target`: outside its cheapest (least held, with flanking) mouth, or null to go straight in. */
+  private stageFor(w: World, group: number[], target: Nest, ms: Mouth[]): Mouth | null {
+    if (!ms.length || !this.chokeRoll()) return null;
+    const t = w.terrain;
+    let cx = 0, cy = 0;
+    for (const s of group) {
+      cx += w.x[s];
+      cy += w.y[s];
+    }
+    cx /= group.length;
+    cy /= group.length;
+    const direct = t.pathDist(cx, cy, target.x, target.y, w.tick);
+    let best: Mouth | null = null, bestCost = Infinity;
+    for (const m of ms) {
+      const toStage = t.pathDist(cx, cy, m.sx, m.sy, w.tick);
+      const stageIn = t.pathDist(m.sx, m.sy, target.x, target.y, w.tick);
+      // Already past this staging point, or the way there runs through the target.
+      if (direct <= stageIn + 60 || toStage > direct + stageIn * 0.9) continue;
+      let cost = toStage + stageIn;
+      if (CHOKE_BOT.flank) {
+        queryRadius(w, m.x, m.y, 100, scratch);
+        let held = 0;
+        for (const s of scratch) if (w.hostile(w.owner[s], this.faction)) held += UNIT_STATS[w.kind[s]].weight;
+        cost += held * CHOKE_BOT.flankCost;
+      }
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = m;
+      }
+    }
+    return best;
+  }
+
+  /** Push staged attacks that have gathered (or waited long enough); keep the rest out of other plans. */
+  private advanceStaged(w: World, used: Set<number>): void {
+    const me = this.faction;
+    const keep: Staged[] = [];
+    for (const st of this.staged) {
+      const target = w.nests[st.target];
+      const slots: number[] = [];
+      for (const u of st.uids) {
+        const s = w.uidToSlot.get(u);
+        if (s !== undefined && w.alive[s] && w.owner[s] === me && !used.has(s) && w.state[s] !== UNIT_FEEDING) slots.push(s);
+      }
+      if ((target.owner >= 0 && w.teamOf[target.owner] === w.teamOf[me]) || slots.length < st.size * CHOKE_BOT.minLeft) continue;
+      let near = 0;
+      for (const s of slots) if ((w.x[s] - st.x) ** 2 + (w.y[s] - st.y) ** 2 <= CHOKE_BOT.gatherRadius ** 2) near++;
+      if (near >= slots.length * CHOKE_BOT.gather || w.tick >= st.until) {
+        this.issue(w, { t: 'move', p: me, units: slots.map((s) => w.uid[s]), x: target.x, y: target.y, nest: target.id });
+        for (const s of slots) used.add(s);
+        if (this.d.powers) this.supportAttack(w, slots, target);
+        continue;
+      }
+      for (const s of slots) used.add(s);
+      keep.push(st);
+    }
+    this.staged = keep;
   }
 
   /**
