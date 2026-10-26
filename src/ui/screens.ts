@@ -58,7 +58,7 @@ export function controlsHtml(): string {
   return isMobile() ? TOUCH_CONTROLS_HTML : CONTROLS_HTML;
 }
 
-export function mainMenu(handlers: { skirmish: () => void; tutorial: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
+export function mainMenu(handlers: { skirmish: () => void; campaign: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
   const m = el(`
     <div class="screen menu">
       <div class="menu-inner">
@@ -66,8 +66,7 @@ export function mainMenu(handlers: { skirmish: () => void; tutorial: () => void;
         <p class="tag">a tiny war of colors</p>
         <div class="menu-buttons">
           <button class="primary" data-a="skirmish">Skirmish</button>
-          <button data-a="tutorial">Tutorial</button>
-          <button data-a="campaign" disabled>Campaign <small>soon</small></button>
+          <button data-a="campaign">Campaign</button>
           <button data-a="howto">How to play</button>
           <button data-a="settings">Settings</button>
         </div>
@@ -75,7 +74,7 @@ export function mainMenu(handlers: { skirmish: () => void; tutorial: () => void;
       <footer>v0.1 · fight for the nests</footer>
     </div>`);
   m.querySelector('[data-a=skirmish]')!.addEventListener('click', handlers.skirmish);
-  m.querySelector('[data-a=tutorial]')!.addEventListener('click', handlers.tutorial);
+  m.querySelector('[data-a=campaign]')!.addEventListener('click', handlers.campaign);
   m.querySelector('[data-a=howto]')!.addEventListener('click', handlers.howto);
   m.querySelector('[data-a=settings]')!.addEventListener('click', handlers.settings);
   return m;
@@ -103,6 +102,25 @@ export const NEXT_STEP_TEXT: Record<NextStep, string> = {
   ffa: '<b>Next step:</b> you beat a Normal bot. Try a 4-player free-for-all, where rivals fight each other too.',
   rematch: '<b>Next step:</b> take on the Normal bot again, or warm up against Easy first.',
 };
+
+/** Single-player modes beyond skirmish, so the main menu stays short as they grow. */
+export function campaignMenu(p: TutorialProgress, h: { tutorial: () => void; back: () => void }): HTMLDivElement {
+  const done = MISSIONS.filter((ms) => p.done.includes(ms.id)).length;
+  const m = el(`
+    <div class="screen modal">
+      <div class="card campaign">
+        <h2>Campaign</h2>
+        <div class="menu-buttons">
+          <button class="primary" data-a="tutorial"><b>Tutorial</b><span>${done === MISSIONS.length ? 'Complete ✓ · replay any mission' : `${done} of ${MISSIONS.length} missions · about 10 minutes`}</span></button>
+          <button data-a="run" disabled><b>Procedural campaign</b><span>coming soon</span></button>
+        </div>
+        <div class="row end"><button data-a="back">Back</button></div>
+      </div>
+    </div>`);
+  m.querySelector('[data-a=tutorial]')!.addEventListener('click', h.tutorial);
+  m.querySelector('[data-a=back]')!.addEventListener('click', h.back);
+  return m;
+}
 
 export function tutorialMenu(p: TutorialProgress, h: { play: (i: number) => void; back: () => void }): HTMLDivElement {
   const m = el(`

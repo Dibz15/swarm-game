@@ -605,3 +605,7 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .coach-hold i { flex: 1; height: 4px; border-radius: 2px; background: var(--line-strong); overflow: hidden; }
 .coach-hold i b { display: block; height: 100%; background: var(--accent); }
 .coach-hold button { padding: 2px 12px; }
+.card.campaign .menu-buttons { width: 100%; margin: 12px 0 4px; }
+.card.campaign .menu-buttons button { display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.card.campaign .menu-buttons span { font-size: 13px; color: var(--muted); font-weight: normal; }
+.card.campaign .menu-buttons button.primary span { color: rgba(255, 255, 255, 0.8); }

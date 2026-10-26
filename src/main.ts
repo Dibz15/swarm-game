@@ -18,7 +18,7 @@ import { spawnUnit } from './sim/world';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
-import { buildSetup, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
+import { buildSetup, campaignMenu, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
 
 class App {
   private canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -124,7 +124,7 @@ class App {
     this.setModal(null);
     const menu = mainMenu({
       skirmish: () => this.showSetup(),
-      tutorial: () => this.showTutorial(),
+      campaign: () => this.showCampaign(),
       howto: () => this.setModal(howToPlay(() => this.setModal(null))),
       settings: () => this.setModal(settingsScreen(this.sfx, () => this.setModal(null))),
     });
@@ -200,9 +200,13 @@ class App {
     this.graduation = graduation;
   }
 
+  private showCampaign(): void {
+    this.setModal(campaignMenu(loadProgress(), { tutorial: () => this.showTutorial(), back: () => this.setModal(null) }));
+  }
+
   private showTutorial(): void {
-    // Back from a mission's briefing returns here, not to the main menu.
-    this.setModal(tutorialMenu(loadProgress(), { play: (i) => this.briefMission(i, () => this.showTutorial()), back: () => this.setModal(null) }));
+    // Back from a mission's briefing returns here, and from here to the Campaign menu.
+    this.setModal(tutorialMenu(loadProgress(), { play: (i) => this.briefMission(i, () => this.showTutorial()), back: () => this.showCampaign() }));
   }
 
   private briefMission(i: number, back: () => void = () => this.setModal(null)): void {
