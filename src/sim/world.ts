@@ -106,9 +106,10 @@ export interface Barrage {
   impact: number;
   /** blast radius (bigger from a level-3 Spire) */
   r: number;
-  /** the nest it was launched from */
+  /** the nest it was launched from, and when */
   x0: number;
   y0: number;
+  t0: number;
 }
 
 /** An energy crystal; `holder` is the faction charging from it, or -1. */

@@ -43,7 +43,7 @@ function fight(cast: Cast, seed: number, kind: number) {
         w.factions[0].energy += 20;
       }
       // count kills by the power over its window
-      const until = w.tick + POWER.barrageDelay + 3;
+      const until = (w.barrages[0]?.impact ?? w.tick) + 3;
       while (w.tick < until && !w.over) step(w, []);
       killedByPower = before - w.unitCount[1];
       if (cast === 'barrage x1.5') {

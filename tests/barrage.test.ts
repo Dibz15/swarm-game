@@ -38,7 +38,8 @@ function strike(w: World, x: number, y: number): number {
   w.factions[0].energy = 100;
   w.grid.build(w);
   applyCommand(w, { t: 'barrage', p: 0, x, y });
-  for (let t = 0; t < POWER.barrageDelay + 2; t++) step(w, []);
+  const impact = w.barrages[0]?.impact ?? w.tick;
+  while (w.tick < impact + 2) step(w, []);
   return before - w.unitCount[1];
 }
 
@@ -61,6 +62,16 @@ describe('Barrage (#41)', () => {
     expect(barrageLaunch(w, 0, 1000, 300)).toBe(hive);
     applyCommand(w, { t: 'barrage', p: 0, x: 1000, y: 300 });
     expect(w.barrages[0]).toMatchObject({ x0: 700, y0: 300 });
+  });
+
+  it('flies at a fixed speed: a longer shot gives more warning', () => {
+    const w = arena();
+    nest(w, NestType.Spire, 0, 100, 300);
+    w.factions[0].energy = 100;
+    applyCommand(w, { t: 'barrage', p: 0, x: 150, y: 300 });
+    applyCommand(w, { t: 'barrage', p: 0, x: 500, y: 300 });
+    const [near, far] = w.barrages.map((b) => b.impact - b.t0);
+    expect(far - near).toBe(Math.round((350 / POWER.barrageSpeed) * 30));
   });
 
   it('still wipes a small group, but only takes a slice of a packed blob', () => {

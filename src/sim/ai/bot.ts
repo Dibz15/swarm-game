@@ -185,7 +185,7 @@ export class Bot {
   private dodge(w: World): void {
     const me = this.faction;
     for (const b of w.barrages) {
-      if (!w.hostile(b.owner, me) || w.tick < b.impact - POWER.barrageDelay + DODGE_REACT) continue;
+      if (!w.hostile(b.owner, me) || w.tick < b.t0 + DODGE_REACT) continue;
       const key = b.impact * 65536 + Math.round(b.x) * 256 + Math.round(b.y);
       if (this.seen.has(key)) continue;
       this.seen.add(key);

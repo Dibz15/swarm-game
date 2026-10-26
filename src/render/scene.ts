@@ -282,7 +282,7 @@ const SHADOW: RGB = [0, 0, 0];
 function drawBarrages(r: Renderer, w: World, o: SceneOpts): void {
   for (const b of w.barrages) {
     const c = FACTION_RGB[b.owner] ?? WHITE;
-    const left = Math.max(0, (b.impact - w.tick - o.alpha) / POWER.barrageDelay);
+    const left = Math.max(0, (b.impact - w.tick - o.alpha) / Math.max(1, b.impact - b.t0));
     const R = b.r;
     const k = 1 - left;
     const dx = b.x - b.x0, dy = b.y - b.y0;

@@ -49,6 +49,11 @@ export function barrageLaunch(w: World, p: number, x: number, y: number): Nest |
   return best;
 }
 
+/** Ticks a Barrage shell takes to land: a short launch, then a fixed speed over the distance. */
+export function barrageFlight(dx: number, dy: number): number {
+  return Math.round((POWER.barrageLaunch + Math.sqrt(dx * dx + dy * dy) / POWER.barrageSpeed) * TICK_HZ);
+}
+
 /** Dots still needed to repair a nest's control and finish its next level. */
 export function feedNeed(n: { control: number; level: number; feedProgress: number; feedIncoming: number }): number {
   const repair = n.control < 1 ? Math.ceil((1 - n.control) / LEVEL.repair - 1e-9) : 0;
@@ -221,7 +226,8 @@ export function applyCommand(w: World, c: Command): void {
       if (!from) return;
       f.energy -= POWER.barrageCost;
       const r = POWER.barrageRadius * powerBoost(w, c.p, 'barrage');
-      w.barrages.push({ x, y, owner: c.p, impact: w.tick + POWER.barrageDelay, r, x0: from.x, y0: from.y });
+      const impact = w.tick + barrageFlight(x - from.x, y - from.y);
+      w.barrages.push({ x, y, owner: c.p, impact, r, x0: from.x, y0: from.y, t0: w.tick });
       pushFx(w, 'barrage', x, y, c.p, r);
       return;
     }

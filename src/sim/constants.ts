@@ -212,7 +212,9 @@ export const POWER = {
   fortifySlow: 0.55,
   /** Spire: telegraphed artillery strike at a point, launched from one of your nests */
   barrageCost: 40,
-  barrageDelay: Math.round(1.8 * TICK_HZ),
+  /** the shell flies at a fixed speed (px/s) after a short launch, so longer shots give more warning */
+  barrageLaunch: 0.6,
+  barrageSpeed: 320,
   barrageRadius: 58,
   /** most damage one unit takes (at the center; 60% at the edge) */
   barrageDamage: 20,

@@ -72,7 +72,7 @@ describe('nest powers', () => {
     const hp0 = w.hp[enemy], friendHp = w.hp[friend];
     w.grid.build(w);
     applyCommand(w, { t: 'barrage', p: 0, x: 600, y: 275 });
-    for (let t = 0; t < POWER.barrageDelay - 2; t++) step(w, []);
+    while (w.tick < w.barrages[0].impact - 2) step(w, []);
     expect(w.hp[enemy]).toBe(hp0); // telegraph only
     for (let t = 0; t < 4; t++) step(w, []);
     expect(w.hp[enemy]).toBeLessThan(hp0 - POWER.barrageDamage * 0.5);
