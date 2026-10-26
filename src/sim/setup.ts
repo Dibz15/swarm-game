@@ -15,6 +15,8 @@ export interface PlayerSetup {
   energy?: number;
   /** hard army limit (tutorial opponents) */
   unitCap?: number;
+  /** production multiplier, instead of the difficulty's (tutorial opponents) */
+  prod?: number;
 }
 
 export interface MatchSetup {
@@ -64,7 +66,7 @@ export function createWorld(setup: MatchSetup): World {
     w.setTeam(p.faction, p.team);
     if (!p.human) {
       const cfg = p.bot ?? { difficulty: 1, personality: 'expander' };
-      f.prodMult = DIFFICULTY[cfg.difficulty]?.prod ?? 1;
+      f.prodMult = p.prod ?? DIFFICULTY[cfg.difficulty]?.prod ?? 1;
       w.bots.push(new Bot(p.faction, cfg, setup.seed));
     }
   }

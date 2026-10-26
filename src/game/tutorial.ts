@@ -93,13 +93,13 @@ const solo = (m: MapSpec, portrait: boolean, energy = 0): MatchSetup => ({
   players: [{ faction: 0, team: 0, human: true, energy }],
 });
 
-const versus = (m: MapSpec, portrait: boolean, personality: 'turtler' | 'expander', energy = 0, passive = false, unitCap = 0): MatchSetup => ({
+const versus = (m: MapSpec, portrait: boolean, personality: 'turtler' | 'expander', energy = 0, passive = false, unitCap = 0, prod?: number): MatchSetup => ({
   seed: 1702,
   size: 'small',
   map: orient(m, portrait),
   players: [
     { faction: 0, team: 0, human: true, energy },
-    { faction: 1, team: 1, human: false, bot: { difficulty: 0, personality, passive }, unitCap },
+    { faction: 1, team: 1, human: false, bot: { difficulty: 0, personality, passive }, unitCap, prod },
   ],
 });
 
@@ -415,6 +415,11 @@ export const MISSIONS: Mission[] = [
         ),
         portrait,
         'turtler',
+        0,
+        false,
+        0,
+        // Not a full match yet: it builds at 60% speed.
+        0.6,
       ),
     }),
     steps: [
