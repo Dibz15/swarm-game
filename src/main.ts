@@ -339,6 +339,7 @@ class App {
       nova: () => this.game?.nova(),
       upgrade: () => this.game?.upgrade(),
       clear: () => this.game?.clearSelection(),
+      nearest: () => this.game?.toNearestNest(),
       pause: () => this.togglePause(),
       mute: () => this.toggleMute(),
       fortify: () => this.game?.startAim('fortify'),

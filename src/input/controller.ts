@@ -14,6 +14,8 @@ interface Ptr {
 }
 
 const DRAG_PX = 6;
+/** `lastGroup` marker for the N key (control groups use 1-9) */
+const NEAREST = -2;
 
 /**
  * Mouse / touch / keyboard -> GameView actions.
@@ -355,6 +357,14 @@ export class InputController {
       case 'h':
         this.camera.focus(...g.homePoint());
         break;
+      case 'n': {
+        const nest = g.toNearestNest();
+        // double-tap N to look at where they're headed
+        if (nest && this.lastGroup === NEAREST && performance.now() - this.lastGroupT < 350) this.camera.focus(nest.x, nest.y);
+        this.lastGroup = NEAREST;
+        this.lastGroupT = performance.now();
+        break;
+      }
       case '0':
         this.camera.fit();
         break;

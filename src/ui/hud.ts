@@ -43,7 +43,7 @@ const ENEMY_TIPS = [
 ];
 
 export type HudAction =
-  | 'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'pause' | 'mute'
+  | 'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'nearest' | 'pause' | 'mute'
   | 'fortify' | 'barrage' | 'blink' | 'lockdown' | 'skip' | 'go';
 
 export function formatTime(ticks: number): string {
@@ -139,6 +139,7 @@ export class Hud {
           <button data-a="blink" class="power nest" title="Teleport the selected dots toward the cursor. From a Den.">Blink<kbd>G</kbd><small>${POWER.blinkCost}</small></button>
           <button data-a="lockdown" class="power nest" title="Stop an enemy nest spawning for a while. From a Bastion.">Lockdown<kbd>T</kbd><small>${POWER.lockdownCost}</small></button>
           <button data-a="upgrade" style="display:none"><span class="ulabel">Upgrade</span><kbd>U</kbd><small class="ucost"></small></button>
+          <button data-a="nearest" class="touch" title="Send the selected dots to your nearest nest">⌂</button>
           <button data-a="clear" class="touch">✕</button>
         </div>
       </div>`;
@@ -361,6 +362,7 @@ export class Hud {
     this.energyText.textContent = `Energy ${Math.floor(e)}${crystals ? `  ◆ crystal${crystals > 1 ? ` ×${crystals}` : ''}` : ''}`;
     const nUnits = g.selection.units.size;
     this.btn.surge.disabled = e < POWER.surgeCost || nUnits === 0;
+    this.btn.nearest.disabled = nUnits === 0;
     this.btn.nova.disabled = e < POWER.novaCost || nUnits < 4;
     this.btn.surge.classList.toggle('ready', e >= POWER.surgeCost);
     // Nest powers only show while you hold the matching nest type.
