@@ -64,7 +64,7 @@ describe('nest powers', () => {
 
   it('Barrage lands after its delay and only hurts enemies', () => {
     const w = arena();
-    nest(w, NestType.Spire, 0, 100, 100);
+    nest(w, NestType.Spire, 0, 300, 275);
     w.factions[0].energy = 100;
     // 50 apart: both inside the blast, but beyond each other's notice range.
     const enemy = spawnUnit(w, 1, Kind.Tank, 600, 250, 600, 250, 4);

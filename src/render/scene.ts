@@ -273,12 +273,31 @@ function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
   }
 }
 
-/** Pending Barrage strikes: a ring closing in on the impact zone. */
+const SHADOW: RGB = [0, 0, 0];
+
+/**
+ * Pending Barrage strikes: a shell arcs from the nest that launched it, its
+ * shadow sliding along the ground, while a ring closes in on the impact zone.
+ */
 function drawBarrages(r: Renderer, w: World, o: SceneOpts): void {
   for (const b of w.barrages) {
     const c = FACTION_RGB[b.owner] ?? WHITE;
     const left = Math.max(0, (b.impact - w.tick - o.alpha) / POWER.barrageDelay);
     const R = b.r;
+    const k = 1 - left;
+    const dx = b.x - b.x0, dy = b.y - b.y0;
+    // Apex height grows with range; "up" is up the screen (top-down view).
+    const H = Math.min(240, 50 + Math.sqrt(dx * dx + dy * dy) * 0.45);
+    const at = (t: number): [number, number] => [b.x0 + dx * t, b.y0 + dy * t - 4 * t * (1 - t) * H];
+    if (k < 0.15) r.shape(true, b.x0, b.y0, 14 + k * 160, 0, 1, 0, 0.12, c, Math.round(200 * (1 - k / 0.15)));
+    r.shape(true, b.x0 + dx * k, b.y0 + dy * k, 4 + 3 * k, 7, 1, 0, 0, SHADOW, 110);
+    for (let s = 6; s >= 1; s--) {
+      const [tx, ty] = at(Math.max(0, k - s * 0.025));
+      r.shape(true, tx, ty, 4.2 - s * 0.45, 7, 1, 0, 0, c, 200 - s * 28);
+    }
+    const [hx, hy] = at(k);
+    r.shape(true, hx, hy, 9, 7, 1, 0, 0, c, 90);
+    r.shape(true, hx, hy, 4.5, 7, 1, 0, 0, WHITE, 255);
     r.shape(true, b.x, b.y, R, 0, 1, 0, 0.025, c, 150);
     r.shape(true, b.x, b.y, R * (1 + left * 1.2), 0, 1, 0, 0.04, c, Math.round(220 * (1 - left * 0.5)));
     r.shape(true, b.x, b.y, R, 7, 1, 0, 0, c, Math.round(40 + 60 * (1 - left)));

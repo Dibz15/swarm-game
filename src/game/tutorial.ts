@@ -320,7 +320,7 @@ export const MISSIONS: Mission[] = [
     id: 'powers',
     title: 'Grow stronger',
     teaches: 'Level up nests, and use Barrage and Nova.',
-    learned: ['Feeding dots into a nest levels it up: faster spawns and a turret.', 'Holding a nest type unlocks its power: a Spire gives Barrage.', 'Nova blasts everything around the selected dots: save it for big fights.'],
+    learned: ['Feeding dots into a nest levels it up: faster spawns and a turret.', 'Holding a nest type unlocks its power: a Spire gives Barrage, which reaches targets near your nests.', 'Nova blasts everything around the selected dots: save it for big fights.'],
     locked: ['fortify', 'blink', 'lockdown'],
     readPause: true,
     setup: (portrait) =>
@@ -329,7 +329,8 @@ export const MISSIONS: Mission[] = [
           [
             nest(200, 340, NestType.Hive, 0, 30),
             nest(330, 160, NestType.Spire, 0, 2, { capital: false }),
-            nest(760, 340, NestType.Bastion, -1, 10),
+            // Within Barrage range of the Spire (#41).
+            nest(690, 330, NestType.Bastion, -1, 10),
             nest(600, 560, NestType.Hive, -1, 6),
           ],
           {
@@ -354,8 +355,8 @@ export const MISSIONS: Mission[] = [
       },
       {
         text: {
-          desktop: 'Your Spire unlocks <b>Barrage (F)</b>: artillery where you aim. Press it, then click the guards of the Bastion.',
-          mobile: 'Your Spire unlocks <b>Barrage</b>: artillery where you aim. Tap it, then tap the guards of the Bastion.',
+          desktop: 'Your Spire unlocks <b>Barrage (F)</b>: a shell launched from your nearest nest. Press it, then click the guards of the Bastion.',
+          mobile: 'Your Spire unlocks <b>Barrage</b>: a shell launched from your nearest nest. Tap it, then tap the guards of the Bastion.',
         },
         done: (c) => ordered(c, 'barrage'),
         highlight: () => [2],

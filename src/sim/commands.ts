@@ -1,7 +1,7 @@
 import { LEVEL, MAX_LEVEL, NEUTRAL, POWER, POWER_NEST, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, TICK_HZ, type NestPower } from './constants';
 import { clamp } from './mathx';
 import { queryRadius } from './spatial';
-import { pushFx, removeUnit, UNIT_FEEDING, type World } from './world';
+import { pushFx, removeUnit, UNIT_FEEDING, type Nest, type World } from './world';
 
 /**
  * Everything a player (human, bot, or later a remote peer) can do.
@@ -33,6 +33,20 @@ export function powerBoost(w: World, p: number, power: NestPower): number {
   const type = POWER_NEST[power];
   for (const n of w.nests) if (n.owner === p && n.type === type && n.control >= 1 && n.level >= 3) return LEVEL.powerBoost;
   return 1;
+}
+
+/** The nest a Barrage at (x, y) launches from: the nearest one p owns within range, or null. */
+export function barrageLaunch(w: World, p: number, x: number, y: number): Nest | null {
+  let best: Nest | null = null, bd = POWER.barrageRange * POWER.barrageRange;
+  for (const n of w.nests) {
+    if (n.owner !== p) continue;
+    const d = (n.x - x) ** 2 + (n.y - y) ** 2;
+    if (d <= bd) {
+      bd = d;
+      best = n;
+    }
+  }
+  return best;
 }
 
 /** Dots still needed to repair a nest's control and finish its next level. */
@@ -202,10 +216,12 @@ export function applyCommand(w: World, c: Command): void {
 
     case 'barrage': {
       if (f.energy < POWER.barrageCost || !hasPower(w, c.p, 'barrage')) return;
-      f.energy -= POWER.barrageCost;
       const x = clamp(c.x, 0, w.width), y = clamp(c.y, 0, w.height);
+      const from = barrageLaunch(w, c.p, x, y);
+      if (!from) return;
+      f.energy -= POWER.barrageCost;
       const r = POWER.barrageRadius * powerBoost(w, c.p, 'barrage');
-      w.barrages.push({ x, y, owner: c.p, impact: w.tick + POWER.barrageDelay, r });
+      w.barrages.push({ x, y, owner: c.p, impact: w.tick + POWER.barrageDelay, r, x0: from.x, y0: from.y });
       pushFx(w, 'barrage', x, y, c.p, r);
       return;
     }

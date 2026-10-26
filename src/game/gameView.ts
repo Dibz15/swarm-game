@@ -1,4 +1,4 @@
-import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb } from '../content/factions';
+import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
 import type { Particles, Rings } from '../render/particles';
@@ -6,7 +6,7 @@ import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
-import { feedNeed, hasPower, novaRadius, powerBoost } from '../sim/commands';
+import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { LocalSession } from './session';
@@ -25,6 +25,8 @@ export type MatchResult = 'victory' | 'defeat';
 
 /** Seconds the game holds when a tutorial instruction changes (missions with readPause). */
 const READ_PAUSE = 10;
+/** Barrage aim outside every nest's range */
+const OUT_OF_RANGE: RGB = [150, 155, 175];
 
 /** A match in progress: owns the session, selection and event feedback. */
 export class GameView {
@@ -257,6 +259,16 @@ export class GameView {
     const boost = powerBoost(this.world, this.human, power);
     if (power === 'barrage') {
       const R = POWER.barrageRadius * boost;
+      // Where it can reach: a ring around every nest we own.
+      for (const n of this.world.nests) {
+        if (n.owner === this.human) r.shape(true, n.x, n.y, POWER.barrageRange, 0, 1, 0, 0.006, c, 55);
+      }
+      const from = barrageLaunch(this.world, this.human, cur[0], cur[1]);
+      if (!from) {
+        r.shape(true, cur[0], cur[1], R, 0, 1, 0, 0.03, OUT_OF_RANGE, 160);
+        return;
+      }
+      r.beam(from.x, from.y, cur[0], cur[1], c[0], c[1], c[2], 60, 1.2);
       r.shape(true, cur[0], cur[1], R, 0, 1, 0, 0.03, c, 200);
       r.shape(true, cur[0], cur[1], R, 7, 1, 0, 0, c, 40);
     } else if (power === 'blink') {
@@ -766,6 +778,10 @@ export class GameView {
     if (power === 'fortify') return this.fortify();
     if (power === 'barrage') {
       if (!this.power('barrage', POWER.barrageCost)) return;
+      if (!barrageLaunch(this.world, this.human, wx, wy)) {
+        this.s.sfx.fail();
+        return this.s.toast('Out of range: Barrage launches from your nests', '#9aa4c7');
+      }
       this.session.issue({ t: 'barrage', p: this.human, x: wx, y: wy });
     } else if (power === 'blink') {
       if (!this.selection.units.size) return this.s.toast('Select dots first, then Blink', '#9aa4c7');

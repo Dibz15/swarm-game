@@ -3,7 +3,7 @@
 // every nest to where the blob is going, levels nests the blob walks past, and
 // spends energy freely on Surge, Barrage and Nova. It issues Commands from
 // outside the sim, the way a human client does.
-import { hasPower, feedNeed, type Command } from '../src/sim/commands';
+import { barrageLaunch, hasPower, feedNeed, type Command } from '../src/sim/commands';
 import { LEVEL, MAX_LEVEL, NEUTRAL, NestType, POWER, TICK_HZ, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, bastionTurret } from '../src/sim/constants';
 import { queryRadius } from '../src/sim/spatial';
 import { UNIT_FEEDING, type Nest, type World } from '../src/sim/world';
@@ -157,7 +157,7 @@ export class Proxy {
       ne++;
     }
     if (most >= 20 && own.length >= 15 && e >= POWER.novaCost) out.push({ t: 'nova', p: me, units: own });
-    else if (ne >= 12 && e >= POWER.barrageCost && hasPower(w, me, 'barrage')) out.push({ t: 'barrage', p: me, x: ex / ne, y: ey / ne });
+    else if (ne >= 12 && e >= POWER.barrageCost && hasPower(w, me, 'barrage') && barrageLaunch(w, me, ex / ne, ey / ne)) out.push({ t: 'barrage', p: me, x: ex / ne, y: ey / ne });
     else if (own.length >= 6 && e >= POWER.surgeCost) out.push({ t: 'surge', p: me, units: own });
   }
 }
