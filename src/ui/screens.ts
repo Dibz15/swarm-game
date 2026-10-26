@@ -103,6 +103,82 @@ export const NEXT_STEP_TEXT: Record<NextStep, string> = {
   rematch: '<b>Next step:</b> take on the Normal bot again, or warm up against Easy first.',
 };
 
+// ---- skirmish sub-menu (#43) --------------------------------------------------
+
+const QUICK_KEY = 'swarm.quickDifficulty';
+
+function quickDifficulty(): number {
+  try {
+    const v = Number(localStorage.getItem(QUICK_KEY));
+    return Number.isInteger(v) && v >= 0 && v < DIFFICULTY_NAMES.length && localStorage.getItem(QUICK_KEY) !== null ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/** Pick from weighted options with Math.random (menus only; the match itself is seeded). */
+function weighted<T>(opts: [T, number][]): T {
+  let r = Math.random() * opts.reduce((s, o) => s + o[1], 0);
+  for (const [v, wt] of opts) if ((r -= wt) < 0) return v;
+  return opts[opts.length - 1][0];
+}
+
+/** A random match: only the difficulty is chosen, for every bot. */
+export function randomSetup(difficulty: number): MatchSetup {
+  const p = loadPrefs();
+  const bots = weighted<number>([[1, 3], [2, 2], [3, 4], [4, 2], [5, 2]]);
+  const others = [0, 1, 2, 3, 4, 5].filter((c) => c !== p.color);
+  const size: MapSize = bots <= 1 ? 'small' : bots <= 3 ? weighted<MapSize>([['small', 1], ['medium', 3]]) : weighted<MapSize>([['medium', 1], ['large', 3]]);
+  return buildSetup(
+    {
+      ...p,
+      size,
+      terrain: weighted<TerrainLevel>([['light', 2], ['standard', 5], ['heavy', 2]]),
+      caves: weighted<CaveLevel>([['off', 6], ['belt', 2], ['full', 1]]),
+      events: weighted<EventLevel>([['calm', 2], ['normal', 6], ['wild', 1]]),
+      teams: false,
+      bots: others.slice(0, bots).map((faction, i) => ({ faction, difficulty, personality: 'random', team: i + 1 })),
+    },
+    randomSeed(),
+  );
+}
+
+export function skirmishMenu(h: { quick: (difficulty: number) => void; custom: () => void; back: () => void }): HTMLDivElement {
+  let difficulty = quickDifficulty();
+  const m = el(`
+    <div class="screen modal">
+      <div class="card campaign">
+        <h2>Skirmish</h2>
+        <div class="menu-buttons">
+          <div class="quick">
+            <button class="primary" data-a="quick"><b>Quick match</b><span>random map and opponents</span></button>
+            <div class="seg" data-a="diff">${DIFFICULTY_NAMES.map((d, k) => `<button data-v="${k}">${d}</button>`).join('')}</div>
+          </div>
+          <button data-a="custom"><b>Custom skirmish</b><span>choose map, opponents and teams</span></button>
+        </div>
+        <div class="row end"><button data-a="back">Back</button></div>
+      </div>
+    </div>`);
+  const segs = [...m.querySelectorAll<HTMLButtonElement>('[data-a=diff] button')];
+  const mark = () => segs.forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === difficulty));
+  segs.forEach((b) =>
+    b.addEventListener('click', () => {
+      difficulty = Number(b.dataset.v);
+      try {
+        localStorage.setItem(QUICK_KEY, String(difficulty));
+      } catch {
+        /* ignore */
+      }
+      mark();
+    }),
+  );
+  mark();
+  m.querySelector('[data-a=quick]')!.addEventListener('click', () => h.quick(difficulty));
+  m.querySelector('[data-a=custom]')!.addEventListener('click', h.custom);
+  m.querySelector('[data-a=back]')!.addEventListener('click', h.back);
+  return m;
+}
+
 /** Single-player modes beyond skirmish, so the main menu stays short as they grow. */
 export function campaignMenu(p: TutorialProgress, h: { tutorial: () => void; back: () => void }): HTMLDivElement {
   const done = MISSIONS.filter((ms) => p.done.includes(ms.id)).length;

@@ -623,3 +623,6 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
   border: 1px solid var(--line-strong); font-size: 12px; color: #fff;
 }
 .menu-corner:hover { color: #fff; border-color: var(--line-strong); }
+.card.campaign .quick { display: flex; flex-direction: column; gap: 6px; }
+.card.campaign .quick .seg { display: flex; }
+.card.campaign .quick .seg button { flex: 1; }

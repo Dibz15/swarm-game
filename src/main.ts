@@ -18,7 +18,7 @@ import { spawnUnit } from './sim/world';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
-import { buildSetup, campaignMenu, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
+import { buildSetup, campaignMenu, randomSetup, skirmishMenu, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
 
 class App {
   private canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -43,6 +43,8 @@ class App {
   private recSaved = false;
   /** the current match is the tutorial's graduation 1v1 */
   private graduation = false;
+  /** difficulty of the current quick match, so "New map" rolls another one */
+  private quick: number | null = null;
   /** ghost cursor acting out the current tutorial step */
   private demoOverlay: DemoOverlay | null = null;
   private demoKey = '';
@@ -123,7 +125,7 @@ class App {
     this.startDemo();
     this.setModal(null);
     const menu = mainMenu({
-      skirmish: () => this.showSetup(),
+      skirmish: () => this.showSkirmish(),
       campaign: () => this.showCampaign(),
       howto: () => this.setModal(howToPlay(() => this.setModal(null))),
       settings: () => this.setModal(settingsScreen(this.sfx, () => this.setModal(null))),
@@ -270,8 +272,21 @@ class App {
     this.afterMission(m.index);
   }
 
+  private showSkirmish(): void {
+    this.setModal(
+      skirmishMenu({
+        quick: (difficulty) => {
+          this.startGame(randomSetup(difficulty));
+          this.quick = difficulty;
+        },
+        custom: () => this.showSetup(),
+        back: () => this.setModal(null),
+      }),
+    );
+  }
+
   private showSetup(): void {
-    this.setModal(skirmishSetup((setup, scenario) => this.startGame(setup, { scenario }), () => this.setModal(null)));
+    this.setModal(skirmishSetup((setup, scenario) => this.startGame(setup, { scenario }), () => this.showSkirmish()));
   }
 
   private startDemo(): void {
@@ -312,6 +327,7 @@ class App {
     this.endShown = false;
     this.recSaved = false;
     this.graduation = false;
+    this.quick = null;
     const record = opts.record !== false && recordingEnabled();
     this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null);
     this.input.game = this.game;
@@ -411,8 +427,16 @@ class App {
     }
     this.setModal(
       endScreen(g.world, g.human, g.result === 'victory', {
-        rematch: () => this.startGame(g.setup, { scenario: g.rec?.scenario }),
-        newMap: () => this.startGame(buildSetup(loadPrefs(), randomSeed())),
+        rematch: () => {
+          const q = this.quick;
+          this.startGame(g.setup, { scenario: g.rec?.scenario });
+          this.quick = q;
+        },
+        newMap: () => {
+          const q = this.quick;
+          this.startGame(q !== null ? randomSetup(q) : buildSetup(loadPrefs(), randomSeed()));
+          this.quick = q;
+        },
         quit: () => this.showMenu(),
       }),
     );
