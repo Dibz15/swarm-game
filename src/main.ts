@@ -352,8 +352,7 @@ class App {
     this.applyInsets();
     if (record) this.hud.toast(opts.scenario ? `Recording: ${opts.scenario}` : 'Recording this match', '#8aa0b8');
     // Open on the player's home, zoomed in a little.
-    const [hx, hy] = this.game.homePoint();
-    this.camera.focus(hx, hy, this.camera.fitZoom * 1.15);
+    this.camera.open(...this.game.homePoint(), this.renderer.dpr);
   }
 
   private endGame(reason: EndReason = 'quit'): void {

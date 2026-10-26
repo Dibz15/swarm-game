@@ -15,8 +15,12 @@ export class Camera {
   inset = { top: 0, right: 0, bottom: 0, left: 0 };
   /** device px of empty space allowed beyond a map edge, at least */
   edgePad = 40;
-  /** showing the fitted view, untouched since: refit when the HUD changes size */
-  private fitted = false;
+  /**
+   * A view set by the game (the fitted map, the opening view on your home),
+   * kept as a point and a zoom relative to the fit: re-applied when the HUD
+   * changes size, until the player moves the camera.
+   */
+  private anchor: { x: number; y: number; k: number } | null = null;
   shake = 0;
   private shakeX = 0;
   private shakeY = 0;
@@ -26,6 +30,8 @@ export class Camera {
     this.viewH = h;
     this.computeFit();
     this.zoom = clamp(this.zoom, this.fitZoom * 0.7, this.fitZoom * 5);
+    // Rotating a phone keeps a held view (fitted map, opening view) aimed.
+    if (this.anchor) this.place(this.anchor.x, this.anchor.y, this.fitZoom * this.anchor.k);
   }
 
   setMap(w: number, h: number): void {
@@ -39,8 +45,10 @@ export class Camera {
     const i = this.inset;
     if (i.top === top && i.bottom === bottom && i.left === left && i.right === right) return false;
     this.inset = { top, right, bottom, left };
-    if (this.fitted) {
-      this.fit();
+    const a = this.anchor;
+    if (a) {
+      this.computeFit();
+      this.place(a.x, a.y, this.fitZoom * a.k);
       return true;
     }
     this.computeFit();
@@ -65,24 +73,37 @@ export class Camera {
   /** Whole map, centered in the visible area. */
   fit(): void {
     this.computeFit();
-    this.zoom = this.fitZoom;
-    this.cx = this.mapW / 2;
-    this.cy = this.mapH / 2;
-    this.clampPos();
-    this.fitted = true;
+    this.place(this.mapW / 2, this.mapH / 2, this.fitZoom);
+    this.anchor = { x: this.mapW / 2, y: this.mapH / 2, k: 1 };
   }
 
-  /** Center on a world point (optionally at a new zoom); leaves the fitted view. */
-  focus(x: number, y: number, zoom = this.zoom): void {
-    this.fitted = false;
+  /**
+   * Opening view of a match: centered on (x, y), zoomed so dots read at a
+   * comfortable size (`cssPerUnit` CSS px per world unit, so phones zoom in
+   * more), within kMin..kMax of the fit. Held until the player pans or zooms.
+   */
+  open(x: number, y: number, dpr: number, cssPerUnit = 0.9, kMin = 1.3, kMax = 2.5): void {
+    this.computeFit();
+    const k = clamp((dpr * cssPerUnit) / this.fitZoom, kMin, kMax);
+    this.place(x, y, this.fitZoom * k);
+    this.anchor = { x, y, k };
+  }
+
+  private place(x: number, y: number, zoom: number): void {
     this.zoom = clamp(zoom, this.fitZoom * 0.7, this.fitZoom * 5);
     this.cx = x;
     this.cy = y;
     this.clampPos();
   }
 
+  /** Center on a world point (optionally at a new zoom); leaves the fitted view. */
+  focus(x: number, y: number, zoom = this.zoom): void {
+    this.anchor = null;
+    this.place(x, y, zoom);
+  }
+
   zoomAt(sx: number, sy: number, factor: number): void {
-    this.fitted = false;
+    this.anchor = null;
     const [wx, wy] = this.toWorld(sx, sy);
     this.zoom = clamp(this.zoom * factor, this.fitZoom * 0.7, this.fitZoom * 5);
     const [nx, ny] = this.toWorld(sx, sy);
@@ -92,7 +113,7 @@ export class Camera {
   }
 
   pan(dxPx: number, dyPx: number): void {
-    this.fitted = false;
+    this.anchor = null;
     this.cx -= dxPx / this.zoom;
     this.cy -= dyPx / this.zoom;
     this.clampPos();
