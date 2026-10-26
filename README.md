@@ -2,58 +2,127 @@
 
 A fast, colorful dot-swarm RTS for the browser. You command one neon color of tiny square dots and fight rival colors for control of the map's **nests** (spawners). Dots fight automatically when they get close to an enemy. Your job is to decide where they go and when.
 
+Play the latest build at https://dibz15.github.io/swarm-game/.
+
+## Development
+
+### Requirements
+- **Node 22** (`.nvmrc`; CI uses 22) and **npm 10**.
+- Any modern browser with WebGL2.
+- No other services: the game is a static site, and bots, maps and tests all run locally.
+
+### Setup
 ```bash
-npm install
-npm run dev        # http://localhost:5173
-npm test           # determinism, spatial, capture, upgrade, bot-FFA smoke test
-npm run build      # static site in dist/ — host anywhere (GitHub Pages, Netlify, S3…)
+npm ci             # exact versions from package-lock.json
 ```
 
-CI: `.github/workflows/ci.yml` runs typecheck, tests and build on every push and PR. Pushes to `main` publish `dist/` to the `gh-pages` branch, and every PR from this repo gets a playable preview at `…/pr-preview/pr-<n>/` (linked in a PR comment, removed when the PR closes). Settings → Pages → Source must be "Deploy from a branch: `gh-pages` / root".
-
-Balance tools (headless bot matches):
-
-```bash
-npx vite-node scripts/balance.ts 4 medium 10   # players, size, games: length, lead changes, stragglers
-npx vite-node scripts/map-mix.ts               # nest-type mix across generated maps
-npx vite-node scripts/bastion-probe.ts         # stress test: every neutral nest is a Bastion
-npx vite-node scripts/personality-probe.ts 4 medium 120   # win rate per bot personality
-npx vite-node scripts/ffa-probe.ts             # who attacks whom, knockout timing
-npx vite-node scripts/collapse-probe.ts        # how the first-out player loses
-npx vite-node scripts/kill-matrix.ts           # winner vs loser kill shares
-npx vite-node scripts/trace.ts 5 large 1005    # 30s timeline of one match
-npx vite-node scripts/terrain-probe.ts heavy 40 7 3   # terrain amounts, connectivity, gen time (+ ASCII map)
-EVENTS=normal npx vite-node scripts/event-probe.ts 4 medium 20   # events per game, who profits, drop/winner correlation
-npx vite-node scripts/upgrade-probe.ts turtler medium 40   # mirror match: eager upgrader vs never-upgrader
-npx vite-node scripts/supply-probe.ts 20         # army size vs nests held per minute (supply cap headroom)
-npx vite-node scripts/hoard-probe.ts 20          # idle hoarder vs bots under supply cap variants
-npx vite-node scripts/takeoff-probe.ts 24        # runaway leaders: top/2nd army ratio, comebacks per supply variant
-npx vite-node scripts/duel-probe.ts 12 2         # 1v1: each personality vs the human proxy (scripts/proxy.ts), per difficulty
-npx vite-node scripts/dogpile-probe.ts 16 2       # FFA: share of bot attacks aimed at the proxy over time (pile-ons)
-```
-
-`scripts/proxy.ts` is a scripted stand-in for a human, built from recorded games (#29): it expands at once, moves one big blob and spends energy freely. Tuning overrides: `BOT='{"level":2,"surgeAt":6}'` changes one difficulty's knobs, `PERS='{"turtler":{"reserve":0.2}}'` a personality's, `CROWD='{"k":2}'` the FFA pile-on rule, `PROXY='{"react":2}'` the proxy's.
-
-Every probe takes `TERRAIN=none|light|standard|heavy`, `CAVES=off|belt|full` and `EVENTS=off|calm|normal|wild` (defaults `none` / `off` / `off`), e.g. `TERRAIN=standard npx vite-node scripts/balance.ts 4 medium 40`. For sim timing without vite-node overhead:
-
-```bash
-npx esbuild scripts/bench.ts --bundle --platform=node --format=esm --outfile=$TMPDIR/bench.mjs
-TERRAIN=heavy node $TMPDIR/bench.mjs 5000
-```
-
-Recording your own games (#29): turn on Settings → Recording → "Record my games". Each match is stored in the browser (IndexedDB) with its setup, command log and a client trace (camera, selections, input source, nest alerts, pauses, per-faction stats every 5 s). Skirmish setup then offers fixed **Recording session** scenarios on fixed seeds. Settings → Download exports everything as one JSON file; nothing is uploaded.
-
-```bash
-npx vite-node scripts/replay.ts swarm-recordings-*.json         # re-run headlessly, check the final hash
-npx vite-node scripts/human-profile.ts swarm-recordings-*.json  # human vs bot tempo, expansion, attention, per scenario
-```
-
-Replays only reproduce on the commit that recorded them (stored as `build`); the trace and stats work on any build.
+### Everyday commands
+| Command | What it does |
+|---|---|
+| `npm run dev` | Dev server with hot reload at http://localhost:5173 |
+| `npm run dev -- --host` | Same, also reachable from a phone on the same network (use the printed LAN address) |
+| `npm test` | All tests once (`vitest run`): determinism, sim, mapgen, caves, bots, tutorial and more |
+| `npx vitest` | Tests in watch mode |
+| `npx vitest run tests/chokes.test.ts` | One test file |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run check` | Typecheck, then tests: what CI runs before building |
+| `npm run build` | Typecheck and build the static site into `dist/` (host anywhere) |
+| `npm run preview` | Serve the built `dist/` at http://localhost:4173 |
 
 Dev URL flags:
 - `?debug` shows the fps / sim-ms overlay (press `` ` `` to toggle it) and exposes the app as `window.swarm` for console poking.
 - `?bench=5000` runs a stress battle with about 5,000 units.
 - `?eventdemo` starts a small match where the wild swarm, a supply drop and the Colossus all arrive in the first seconds.
+
+### Working offline
+Everything for day-to-day work runs without a network:
+- **Dev server, build, tests and every script** in `scripts/` use only `node_modules`. `npx vite-node …` resolves the local binary and downloads nothing.
+- **The UI font** (Chakra Petch) is vendored in `src/assets/fonts/`. The game makes no network requests.
+- **Headless bot games and probes** (below) are the offline stand-in for PR-preview playtests.
+
+Before you lose the network:
+1. Run `npm ci` once, so `node_modules` matches the lockfile. This also fills the npm cache.
+2. Check that a reinstall would work from the cache alone: `rm -rf node_modules && npm ci --offline`. If `node_modules` gets broken mid-flight, the same command fixes it.
+3. Run `git fetch` and `git pull` so `main` is current.
+
+While offline, keep the usual one-branch-per-issue flow and commit locally. These steps wait for the network:
+- `git push`
+- opening PRs (`gh`)
+- CI
+- PR previews and the live site
+- installing any new package
+
+If you need a new dependency on the plane, there's no way to get it: note it and add it when you land.
+
+### Deploys and CI
+`.github/workflows/ci.yml` runs typecheck, tests and build on every push and PR. Pushes to `main` publish `dist/` to the `gh-pages` branch. Every PR from this repo gets a playable preview at `…/pr-preview/pr-<n>/`, linked in a PR comment and removed when the PR closes. Settings → Pages → Source must be "Deploy from a branch: `gh-pages` / root".
+
+## Tools: headless bot matches and probes
+The sim runs in Node, so balance questions are answered by running many bot-vs-bot games. Each script's header comment documents its arguments.
+
+**Shared options** (from `scripts/env.ts`):
+- **Map:** every probe takes `TERRAIN=none|light|standard|heavy`, `CAVES=off|belt|full`, `LAYOUT=classic|open|core|clusters|lanes` and `EVENTS=off|calm|normal|wild`. The defaults are `none`, `off`, picked by seed, and `off`.
+  - Example: `CAVES=full npx vite-node scripts/personality-probe.ts 4 medium 40 2`.
+- **Tuning overrides** (JSON):
+  - `BOT='{"level":2,"surgeAt":6}'` changes one difficulty's knobs.
+  - `PERS='{"turtler":{"reserve":0.2}}'` changes a personality's knobs.
+  - `CROWD='{"k":2}'` changes the FFA pile-on rule.
+  - `CHOKE='{"flank":false}'` changes chokepoint play.
+  - `SUPPLY='{"upkeep":0.4}'` changes supply.
+  - `PROXY='{"react":2}'` changes the human proxy.
+
+**Balance and bots:**
+```bash
+npx vite-node scripts/balance.ts 4 medium 10            # players, size, games: length, lead changes, stragglers
+npx vite-node scripts/personality-probe.ts 4 medium 120 # win rate per bot personality (last arg: difficulty)
+npx vite-node scripts/choke-probe.ts 400 2 2            # A/B: chokepoint play on vs off (games, difficulty, players)
+npx vite-node scripts/duel-probe.ts 12 2                # 1v1: each personality vs the human proxy (scripts/proxy.ts)
+npx vite-node scripts/dogpile-probe.ts 16 2             # FFA: share of bot attacks aimed at the proxy over time
+npx vite-node scripts/ffa-probe.ts                      # who attacks whom, knockout timing
+npx vite-node scripts/collapse-probe.ts                 # how the first-out player loses
+npx vite-node scripts/kill-matrix.ts                    # winner vs loser kill shares
+npx vite-node scripts/upgrade-probe.ts turtler medium 40   # mirror match: eager upgrader vs never-upgrader
+npx vite-node scripts/supply-probe.ts 20                # army size vs nests held per minute
+npx vite-node scripts/hoard-probe.ts 20                 # idle hoarder vs bots under supply cap variants
+npx vite-node scripts/takeoff-probe.ts 24               # runaway leaders: top/2nd army ratio, comebacks
+npx vite-node scripts/power-value-probe.ts              # what each power is worth in a fight
+npx vite-node scripts/power-usage-probe.ts              # how often bots cast each power
+EVENTS=normal npx vite-node scripts/event-probe.ts 4 medium 20   # events per game, who profits
+npx vite-node scripts/trace.ts 5 large 1005             # 30 s timeline of one match
+```
+
+**Maps:**
+```bash
+npx vite-node scripts/terrain-probe.ts heavy 40 7 3     # terrain amounts, connectivity, gen time (+ ASCII map)
+npx vite-node scripts/map-variety.ts                    # layout stats and start fairness
+npx vite-node scripts/map-sheet.ts out.svg medium 4     # SVG contact sheet, one row per layout
+CAVES=full npx vite-node scripts/choke-sheet.ts out.svg # SVG of each nest's tunnel mouths and staging points
+npx vite-node scripts/map-mix.ts                        # nest-type mix across generated maps
+npx vite-node scripts/bastion-probe.ts                  # stress test: every neutral nest is a Bastion
+```
+
+Also in `scripts/`: `matchup-probe.ts` (unit-kind rock-paper-scissors), `idle-probe.ts`, `late-start-probe.ts` and `recordings.ts`.
+
+`scripts/proxy.ts` is a scripted stand-in for a human, built from recorded games (#29): it expands at once, moves one big blob and spends energy freely.
+
+For sim timing without vite-node overhead:
+```bash
+npx esbuild scripts/bench.ts --bundle --platform=node --format=esm --outfile=$TMPDIR/bench.mjs
+TERRAIN=heavy node $TMPDIR/bench.mjs 5000
+```
+
+### Recording your own games (#29)
+1. Turn on Settings → Recording → "Record my games".
+   - Each match is stored in the browser (IndexedDB) with its setup, command log and a client trace: camera, selections, input source, nest alerts, pauses, and per-faction stats every 5 s.
+   - Skirmish setup then offers fixed **Recording session** scenarios on fixed seeds.
+2. Settings → Download exports everything as one JSON file. Nothing is uploaded.
+3. Analyze the export:
+   ```bash
+   npx vite-node scripts/replay.ts swarm-recordings-*.json         # re-run headlessly, check the final hash
+   npx vite-node scripts/human-profile.ts swarm-recordings-*.json  # human vs bot tempo, expansion, attention, per scenario
+   ```
+
+Replays only reproduce on the commit that recorded them (stored as `build`); the trace and stats work on any build. Keep exports in `recordings/` (gitignored).
 
 ## How it plays
 
@@ -106,6 +175,7 @@ src/sim/      deterministic simulation — no DOM, no Math.random, no clock
   nests.ts      capture/control, spawning, Bastion turrets
   commands.ts   the only way to change the world: move / rally / upgrade / surge / nova
   ai/bot.ts     bot players — run inside the sim and issue the same Commands as humans
+  ai/chokes.ts  tunnel-mouth map bots read: where chambers narrow, where to stage an attack
   mapgen.ts     MapParams → MapSpec: rotationally symmetric nests + terrain from a seed (portrait variant for phones)
   terrain.ts    walls/fields as capsules + cave rock as a distance grid; tile flags, collision, line of sight, cached flow fields
   events.ts     living-map director: wild swarms, supply drops, the Colossus, garrison regrowth
@@ -116,6 +186,9 @@ src/render/   WebGL2: instanced units, beams, SDF nest shapes, terrain baked to 
 src/input/    mouse / touch / keyboard → actions; client-only selection
 src/ui/       DOM HUD, menus, settings, end screen; mobile mode (body.mobile: touch layout + wording)
 src/audio/    procedural WebAudio sound effects
+src/assets/   vendored font (Chakra Petch, OFL)
+scripts/      headless probes and map tools (run with vite-node)
+tests/        vitest suites, all headless
 ```
 
 **Why deterministic:** the same seed and command log always produce the same match, and `tests/sim.test.ts` checks this. That gives us:

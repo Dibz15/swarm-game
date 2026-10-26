@@ -1,3 +1,5 @@
+@import './assets/fonts/chakra-petch.css';
+
 :root {
   --bg: #06070f;
   --panel: rgba(14, 17, 34, 0.82);
