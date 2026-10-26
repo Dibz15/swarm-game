@@ -51,6 +51,13 @@ describe('map layouts (#38)', () => {
     expect(starts.size).toBeGreaterThanOrEqual(4);
   });
 
+  it('1v1 maps are never sparser than the old fixed count', () => {
+    const floor: Record<MapSize, number> = { small: 9, medium: 11, large: 13 };
+    for (const size of ['small', 'medium', 'large'] as MapSize[]) {
+      for (let s = 0; s < 60; s++) expect(generateMap({ seed: s, size, players: 2 }).nests.length).toBeGreaterThanOrEqual(floor[size]);
+    }
+  });
+
   it('keeps starts fair: nearest expansions are about as close for everyone', () => {
     for (const players of [3, 4, 6]) {
       for (let s = 0; s < 30; s++) {

@@ -289,7 +289,11 @@ export function generateMap(p: MapParams): MapSpec {
 
   // Per-map variety: ±1 nest per sector, looser or tighter spacing, starts a
   // little in or out and turned, and a slightly squashed or stretched ellipse.
-  const perSector = p.nestsPerSector ?? Math.max(2, dims.perSector + (L.extra ?? 0) + rng.int(3) - 1);
+  const roll = rng.int(3) - 1;
+  let perSector = p.nestsPerSector ?? Math.max(2, dims.perSector + (L.extra ?? 0) + roll);
+  // A 1v1 has only two sectors to fill: never sparser than the size's
+  // default (one more each when there's no center nest), and only varies upward.
+  if (!p.nestsPerSector && P === 2) perSector = Math.max(perSector, dims.perSector + (L.center === 'crystal' ? 1 : 0) + Math.max(0, roll));
   const spacing = L.spacing * rng.range(0.85, 1.2);
   const capR = rng.range(0.76, 0.9);
   const base = (portrait ? PI / 2 : PI) + rng.range(-0.15, 0.15) * sector; // player 0 starts bottom / left
