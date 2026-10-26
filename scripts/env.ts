@@ -1,6 +1,6 @@
 // Shared probe options from the environment, e.g. TERRAIN=standard CAVES=full EVENTS=normal npx vite-node scripts/balance.ts
 import { SUPPLY } from '../src/sim/constants';
-import { CROWD, DIFFICULTY, PERSONALITY } from '../src/sim/ai/bot';
+import { CHOKE_BOT, CROWD, DIFFICULTY, PERSONALITY } from '../src/sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, TerrainLevel } from '../src/sim/mapgen';
 
 export const TERRAIN = (process.env.TERRAIN ?? 'none') as TerrainLevel;
@@ -24,3 +24,5 @@ if (process.env.PERS) {
 }
 // FFA pile-on knobs, e.g. CROWD='{"k":2}'
 if (process.env.CROWD) Object.assign(CROWD, JSON.parse(process.env.CROWD));
+// Chokepoint play switches (#25), e.g. CHOKE='{"flank":false}'
+if (process.env.CHOKE) Object.assign(CHOKE_BOT, JSON.parse(process.env.CHOKE));

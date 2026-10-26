@@ -604,6 +604,40 @@ export class Terrain {
     return d === UNREACHED ? Infinity : (d / 10) * TILE;
   }
 
+  /**
+   * The walking path from (fx, fy) toward (tx, ty), as flat x, y pairs about
+   * a tile apart, stopping once it is maxPx long. For bots reading the map.
+   */
+  trace(fx: number, fy: number, tx: number, ty: number, tick: number, maxPx = Infinity): number[] {
+    const out: number[] = [];
+    const line = (x: number, y: number, len: number) => {
+      const dx = tx - x, dy = ty - y;
+      const L = Math.sqrt(dx * dx + dy * dy);
+      for (let s = TILE; s < L && len + s <= maxPx; s += TILE) out.push(x + (dx * s) / L, y + (dy * s) / L);
+      if (len + L <= maxPx) out.push(tx, ty);
+    };
+    if (!this.hasPaths) {
+      out.push(fx, fy);
+      line(fx, fy, 0);
+      return out;
+    }
+    const f = this.field(this.tileOf(tx, ty), tick);
+    let t = this.nearestFreeIn(f, this.tileOf(fx, fy));
+    let len = 0;
+    for (;;) {
+      const x = ((t % this.cols) + 0.5) * TILE, y = (((t / this.cols) | 0) + 0.5) * TILE;
+      out.push(x, y);
+      const d = f.dir[t];
+      if (d === STRAIGHT) {
+        line(x, y, len);
+        return out;
+      }
+      if (d === NONE || len >= maxPx) return out;
+      t += NY[d] * this.cols + NX[d];
+      len += d >= 4 ? TILE * 1.4142135623730951 : TILE;
+    }
+  }
+
   private nearestFreeIn(f: FlowField, t: number): number {
     return f.dist[t] !== UNREACHED ? t : this.nearestFree(t);
   }
