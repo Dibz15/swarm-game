@@ -210,6 +210,8 @@ export interface MelodyNote {
   /** index into the theme's lead notes, past the end = higher octaves */
   idx: number;
   len: number;
+  /** the closing note: it fades out exactly at the end of the phrase */
+  final?: boolean;
 }
 
 /**
@@ -250,9 +252,16 @@ export function phrase(style: Style, leadCount: number, rand: () => number): Mel
   const out: MelodyNote[] = [];
   const bars = [bar(cellA, a, keepA), bar(cellA, a2, keepA), bar(cellB, b, keepB), bar(cellA, a3, keepA)];
   bars.forEach((ns, k) => ns.forEach((n) => out.push({ ...n, at: n.at + k * style.steps })));
-  // Before a breath, the closing note rings to the end of the bar, and for
-  // at least a half note, so the phrase lands instead of falling off.
-  const last = out[out.length - 1];
-  if (style.lead.breath > 0 && last) last.len = Math.max(HALF, 4 * style.steps - last.at);
-  return out;
+  if (style.lead.breath === 0) return out;
+  // Before a breath the phrase has to land on the bar line, or the closing
+  // note rings into the rest and the gap sounds short. The last note starts
+  // where at least a half note still fits, holds to the end of the bar on
+  // the tonic, and anything after it is dropped.
+  const end = 4 * style.steps;
+  const landed = out.filter((n) => n.at <= end - HALF);
+  const last = landed[landed.length - 1];
+  last.len = end - last.at;
+  last.idx = last.idx >= leadCount ? leadCount : 0;
+  last.final = true;
+  return landed;
 }

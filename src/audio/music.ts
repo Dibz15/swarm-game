@@ -273,7 +273,9 @@ export class Music {
     for (const n of this.phrase) {
       if (n.at !== at) continue;
       const semi = lead[n.idx % lead.length] + 12 * Math.floor(n.idx / lead.length);
-      this.lead(hz(root + semi + 12), t, STEP * n.len * st.lead.length);
+      // lead() rings on for half its length again; the closing note is
+      // shortened so its tail ends exactly on the bar line.
+      this.lead(hz(root + semi + 12), t, n.final ? (STEP * n.len) / 1.5 : STEP * n.len * st.lead.length);
     }
   }
 
