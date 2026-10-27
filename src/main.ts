@@ -15,6 +15,10 @@ import { PERSONALITIES } from './sim/ai/bot';
 import { Kind, MAX_UNITS, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
+import { needsBattle, newRun, resolveTurn, type RunState } from './campaign/run';
+import { nodeSetup } from './campaign/battle';
+import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
+import { runDebrief, runHub, runMap, type MapIntro } from './ui/campaign';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
@@ -45,6 +49,8 @@ class App {
   private graduation = false;
   /** difficulty of the current quick match, so "New map" rolls another one */
   private quick: number | null = null;
+  /** the campaign run and node the current battle belongs to */
+  private run: { state: RunState; node: number } | null = null;
   /** ghost cursor acting out the current tutorial step */
   private demoOverlay: DemoOverlay | null = null;
   private demoKey = '';
@@ -203,7 +209,79 @@ class App {
   }
 
   private showCampaign(): void {
-    this.setModal(campaignMenu(loadProgress(), { tutorial: () => this.showTutorial(), back: () => this.setModal(null) }));
+    this.setModal(
+      campaignMenu(loadProgress(), listRuns().length, {
+        tutorial: () => this.showTutorial(),
+        run: () => this.showRunHub(),
+        back: () => this.setModal(null),
+      }),
+    );
+  }
+
+  // ---- procedural campaign (#18) --------------------------------------------
+
+  private showRunHub(): void {
+    if (this.game) this.showMenu();
+    this.setModal(
+      runHub(listRuns(), loadHistory(), randomSeed(), this.sfx, {
+        resume: (run) => this.showRunMap(run),
+        start: (seed) => {
+          const run = newRun(seed, loadPrefs().color);
+          saveRun(run);
+          this.sfx.runStart();
+          this.showRunMap(run);
+        },
+        remove: (run) => {
+          deleteRun(run.id);
+          this.showRunHub();
+        },
+        back: () => this.showCampaign(),
+      }),
+    );
+  }
+
+  private showRunMap(run: RunState, intro: MapIntro | null = null): void {
+    if (this.game) this.showMenu();
+    this.setModal(
+      runMap(run, this.sfx, { go: (id) => this.runMove(run, id), leave: () => this.showRunHub() }, intro),
+    );
+  }
+
+  /** Move to a node: fight for it, or march through a node already taken. */
+  private runMove(run: RunState, id: number): void {
+    if (!needsBattle(run, id)) {
+      const from = run.bloom.front;
+      const fresh = resolveTurn(run, id, true);
+      this.saveRunState(run);
+      this.showRunMap(run, { from, fresh });
+      return;
+    }
+    const node = run.nodes[id];
+    this.startGame(nodeSetup(run, id, window.innerHeight > window.innerWidth * 1.15), { scenario: `campaign: ${node.kind}` });
+    this.run = { state: run, node: id };
+  }
+
+  /** The battle is over (or abandoned): update the run and show the debrief. */
+  private finishRunBattle(won: boolean): void {
+    const r = this.run;
+    if (!r) return;
+    this.run = null;
+    const from = r.state.bloom.front;
+    const fresh = resolveTurn(r.state, r.node, won);
+    this.saveRunState(r.state);
+    if (r.state.status === 'won') this.sfx.victory();
+    else if (r.state.status === 'lost') this.sfx.defeat();
+    this.setModal(
+      runDebrief(r.state, r.state.nodes[r.node], won, {
+        next: () => this.showRunMap(r.state, { from, fresh }),
+        hub: () => this.showRunHub(),
+      }),
+    );
+  }
+
+  private saveRunState(run: RunState): void {
+    if (run.status === 'active') saveRun(run);
+    else finishRun(run);
   }
 
   private showTutorial(): void {
@@ -328,6 +406,7 @@ class App {
     this.recSaved = false;
     this.graduation = false;
     this.quick = null;
+    this.run = null;
     const record = opts.record !== false && recordingEnabled();
     this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null);
     this.input.game = this.game;
@@ -390,8 +469,19 @@ class App {
       this.setModal(
         pauseMenu({
           resume: () => this.togglePause(),
-          restart: () => (g.mission ? this.playMission(g.mission.index, 'restart') : this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart')),
-          quit: () => this.showMenu(),
+          restart: () => {
+            const run = this.run;
+            if (g.mission) this.playMission(g.mission.index, 'restart');
+            else this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart');
+            this.run = run;
+          },
+          // Leaving a campaign battle is a retreat: it counts as a loss.
+          quit: () => {
+            if (!this.run) return this.showMenu();
+            this.showMenu();
+            this.finishRunBattle(false);
+          },
+          quitLabel: this.run ? 'Retreat (counts as a loss)' : undefined,
           audio: this.sfx,
         }),
       );
@@ -409,6 +499,11 @@ class App {
     this.input.enabled = false;
     this.input.reset();
     const won = g.result === 'victory';
+    if (this.run) {
+      this.showMenu();
+      this.finishRunBattle(won);
+      return;
+    }
     if (g.mission) {
       const i = g.mission.index;
       if (won) this.completeMission(i);
