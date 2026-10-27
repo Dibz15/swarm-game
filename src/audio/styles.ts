@@ -96,7 +96,7 @@ export const STYLES: Record<string, Style> = {
     bass: { calm: 'hold', fight: 'R-.R-.R-R-.R-.R-', type: 'sawtooth', cutoff: [900, 220] },
     arp: { rate: 2, fast: 1, pattern: [0, 1, 2, 3, 2, 1, 0, 2], type: 'triangle', octave: 12, decay: 0.22, peak: 0.085, echo: 3, feedback: 0.35 },
     pad: { voicing: 'triad', type: 'sawtooth', detune: 8, cutoff: 700, range: 1600, attack: 1.4 },
-    lead: { type: 'sine', cutoff: 8000, glide: 0, vibrato: 0.006, length: 1.5, rhythms: ['x...x...x...x...', 'x...x...x.......'], rest: 0.4, breath: 2 },
+    lead: { type: 'sine', cutoff: 8000, glide: 0, vibrato: 0.006, length: 1.5, rhythms: ['x---x---x---x---', 'x---x---x-------'], rest: 0.4, breath: 2 },
   },
 
   /** 6/8 and tribal: pitched toms, a drone under open fifths, a sliding chant. */
@@ -116,7 +116,7 @@ export const STYLES: Record<string, Style> = {
     bass: { calm: 'hold', fight: 'R-.R.5R-.R5.', pedal: true, type: 'sawtooth', cutoff: [600, 160] },
     arp: { rate: 2, fast: 1, pattern: [0, 2, 1, 2, 0, 3], type: 'square', octave: 0, decay: 0.16, peak: 0.045, echo: 6, feedback: 0.3 },
     pad: { voicing: 'open', type: 'sawtooth', detune: 14, cutoff: 450, range: 1100, attack: 2.0 },
-    lead: { type: 'triangle', cutoff: 8000, glide: 0.12, vibrato: 0.01, length: 1.1, rhythms: ['x-----x--x--', 'x--x--x-----', 'x-x-x-x-----'], rest: 0.2, breath: 4 },
+    lead: { type: 'triangle', cutoff: 8000, glide: 0.12, vibrato: 0.01, length: 1.1, rhythms: ['x---x---x---', 'x-------x---', 'x---x-------'], rest: 0.2, breath: 4 },
   },
 
   /** Half-time and floating: bell arpeggio in dotted 8ths, long echoes, lush sevenths. */
@@ -170,7 +170,7 @@ export const STYLES: Record<string, Style> = {
     bass: { calm: 'hold', fight: 'R-------5---', type: 'sawtooth', cutoff: [800, 240] },
     arp: { rate: 2, fast: 1, pattern: [0, 1, 2, 3, 2, 1], type: 'triangle', octave: 12, decay: 0.3, peak: 0.08, echo: 4, feedback: 0.3 },
     pad: { voicing: 'triad', type: 'sawtooth', detune: 6, cutoff: 650, range: 1500, attack: 1.0 },
-    lead: { type: 'triangle', cutoff: 8000, glide: 0.05, vibrato: 0.008, length: 1.2, rhythms: ['x-------x---', 'x-----x-x---', 'x---x---x---'], rest: 0.2, breath: 4 },
+    lead: { type: 'triangle', cutoff: 8000, glide: 0.05, vibrato: 0.008, length: 1.2, rhythms: ['x---x---x---', 'x-------x---', 'x---x-------'], rest: 0.2, breath: 4 },
   },
 };
 
@@ -200,6 +200,9 @@ export function notes(pattern: string): [number, string, number][] {
   }
   return out;
 }
+
+/** a half note, in 16ths */
+const HALF = 8;
 
 export interface MelodyNote {
   /** step within the phrase (bar * steps + step) */
@@ -247,8 +250,9 @@ export function phrase(style: Style, leadCount: number, rand: () => number): Mel
   const out: MelodyNote[] = [];
   const bars = [bar(cellA, a, keepA), bar(cellA, a2, keepA), bar(cellB, b, keepB), bar(cellA, a3, keepA)];
   bars.forEach((ns, k) => ns.forEach((n) => out.push({ ...n, at: n.at + k * style.steps })));
-  // Before a breath, the closing note rings to the end of the bar so the phrase lands.
+  // Before a breath, the closing note rings to the end of the bar, and for
+  // at least a half note, so the phrase lands instead of falling off.
   const last = out[out.length - 1];
-  if (style.lead.breath > 0 && last) last.len = 4 * style.steps - last.at;
+  if (style.lead.breath > 0 && last) last.len = Math.max(HALF, 4 * style.steps - last.at);
   return out;
 }
