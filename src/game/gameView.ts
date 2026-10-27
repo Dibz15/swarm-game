@@ -360,7 +360,7 @@ export class GameView {
           rings.add({ x: e.x, y: e.y, r0: 6, r1: e.r, dur: 0.55, c: WHITE, thick: 5 });
           rings.add({ x: e.x, y: e.y, r0: 4, r1: e.r * 1.15, dur: 0.8, c, thick: 3 });
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.2, r1: e.r, dur: 0.35, c, thick: 0, disc: true });
-          particles.burst(e.x, e.y, c, 60, e.r * 2.2, 2.8, 0.9);
+          particles.burst(e.x, e.y, c, 60, e.r * 2.2, 2.8, 1.2);
           const [sx, sy] = camera.toScreen(e.x, e.y);
           if (sx > -200 && sy > -200 && sx < camera.viewW + 200 && sy < camera.viewH + 200) {
             camera.shake = Math.min(1, camera.shake + (e.f === this.human ? 0.9 : 0.5));
@@ -383,9 +383,11 @@ export class GameView {
         case 'barrageHit': {
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.2, r1: e.r * 1.1, dur: 0.5, c: WHITE, thick: 4 });
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.5, r1: e.r, dur: 0.3, c, thick: 0, disc: true });
-          particles.burst(e.x, e.y, c, 40, e.r * 2, 2.6, 0.7);
+          particles.burst(e.x, e.y, c, 40, e.r * 2, 2.6, 1.5);
           const [sx, sy] = camera.toScreen(e.x, e.y);
-          if (sx > -100 && sy > -100 && sx < camera.viewW + 100 && sy < camera.viewH + 100) camera.shake = Math.min(1, camera.shake + 0.35);
+          if (sx > -200 && sy > -200 && sx < camera.viewW + 200 && sy < camera.viewH + 200) {
+            camera.shake = Math.min(1, camera.shake + (e.f === this.human ? 0.9 : 0.5));
+          }
           sfx.barrageHit(e.x, e.y, e.f === this.human);
           break;
         }
