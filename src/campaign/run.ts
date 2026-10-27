@@ -15,6 +15,7 @@ import { Kind, NestType } from '../sim/constants';
 import type { CaveLevel, MapSize, TerrainLevel } from '../sim/mapgen';
 import {
   COST,
+  MAX_FIELDED,
   MAX_ROSTER,
   PACKS,
   RESCUE_SIZE,
@@ -28,6 +29,7 @@ import {
   type PackId,
   type Unlock,
 } from './broods';
+import { HUNGER_BLOOM, REROLL, REWARD, STRAIN_SLOTS, rollOffer } from './rewards';
 
 export const MAP_W = 1000;
 export const MAP_H = 620;
@@ -105,6 +107,10 @@ export interface RunState {
   /** nest types usable in battle (bitmask; the Hive always) and Nova */
   unlocks: { nests: number; nova: boolean };
   biomass: number;
+  /** run-wide rewards: power variants, perks and pacts (ids in rewards.ts) */
+  perks: string[];
+  /** a reward offer waiting to be picked (saved, so reloading shows the same one) */
+  offer?: { ids: string[]; rerolls: number };
   status: RunStatus;
   /** why a lost run ended */
   lostTo?: 'broods' | 'bloom';
@@ -285,6 +291,7 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
     turn: 0,
     ...startBroods(seed, pack),
     biomass: 0,
+    perks: [],
     status: 'active',
     checkpointUsed: false,
     created: now,
@@ -365,10 +372,10 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
   run.updated = now;
   if (report) {
     run.log.push({ turn: run.turn, node: id, won });
-    const fought = fighters(run.broods, fielded).map((b) => b.id);
+    const fought = fighters(run.broods, fielded, maxFielded(run)).map((b) => b.id);
     run.fielded = fought.length ? fought : run.fielded;
     res.events = settleBroods(run.broods, fought, report);
-    res.biomass = biomassFor(node.reward, report);
+    res.biomass = biomassFor(node.reward, report) * (run.perks.includes('hunger') ? 2 : 1);
     run.biomass += res.biomass;
   }
   if (won) {
@@ -401,8 +408,13 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
     return res;
   }
   if (node.checkpoint && won && !run.checkpointSave && !run.checkpointUsed) {
-    run.checkpointSave = JSON.stringify({ ...run, checkpointSave: undefined, log: [] });
+    run.checkpointSave = JSON.stringify({ ...run, checkpointSave: undefined, log: [], offer: undefined });
     res.checkpoint = 'reached';
+  }
+  // After the checkpoint snapshot, so a restore doesn't hand the same pick out twice.
+  if (report?.won) {
+    const ids = rollOffer(run, 0);
+    run.offer = ids.length ? { ids, rerolls: 0 } : undefined;
   }
   return res;
 }
@@ -411,7 +423,7 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
 function restoreCheckpoint(run: RunState, now: number): void {
   const saved = JSON.parse(run.checkpointSave!) as RunState;
   const log = run.log;
-  Object.assign(run, saved, { log, checkpointSave: undefined, checkpointUsed: true, updated: now, status: 'active', lostTo: undefined });
+  Object.assign(run, saved, { log, checkpointSave: undefined, checkpointUsed: true, updated: now, status: 'active', lostTo: undefined, offer: undefined });
 }
 
 // ---- camp -----------------------------------------------------------------
@@ -442,6 +454,54 @@ export function unlock(run: RunState, u: Unlock): boolean {
   run.biomass -= unlockCost(u);
   if (u === 'nova') run.unlocks.nova = true;
   else run.unlocks.nests |= 1 << u;
+  return true;
+}
+
+// ---- rewards --------------------------------------------------------------
+
+/** How many broods may fight: one under Lone wolf. */
+export const maxFielded = (run: RunState): number => (run.perks.includes('lone-wolf') ? 1 : MAX_FIELDED);
+export const rerollCost = (run: RunState): number => REROLL.base + REROLL.step * (run.offer?.rerolls ?? 0);
+
+/** A new offer for biomass. Returns false (and changes nothing) if it can't be paid for. */
+export function rerollOffer(run: RunState): boolean {
+  const o = run.offer;
+  if (!o || run.biomass < rerollCost(run)) return false;
+  run.biomass -= rerollCost(run);
+  o.rerolls++;
+  o.ids = rollOffer(run, o.rerolls);
+  return true;
+}
+
+export function skipReward(run: RunState): void {
+  run.offer = undefined;
+}
+
+/**
+ * Take a reward from the offer. Strains go to `broodId` (one of its kind),
+ * replacing `replace` when its slots are full; a power variant replaces the
+ * one held for that power. Returns false if the pick isn't valid.
+ */
+export function takeReward(run: RunState, id: string, broodId?: number, replace?: string): boolean {
+  const r = REWARD[id];
+  if (!r || !run.offer?.ids.includes(id)) return false;
+  if (r.family === 'strain') {
+    const b = run.broods.find((o) => o.id === broodId);
+    if (!b || b.kind !== r.kind || b.strains.includes(id)) return false;
+    if (b.strains.length >= STRAIN_SLOTS) {
+      const k = replace === undefined ? -1 : b.strains.indexOf(replace);
+      if (k < 0) return false;
+      b.strains.splice(k, 1);
+    }
+    b.strains.push(id);
+  } else {
+    if (run.perks.includes(id)) return false;
+    if (r.power) run.perks = run.perks.filter((p) => REWARD[p]?.power !== r.power);
+    run.perks.push(id);
+    if (id === 'hunger') run.bloom.step *= HUNGER_BLOOM;
+    if (id === 'lone-wolf') run.fielded = run.fielded.slice(0, 1);
+  }
+  run.offer = undefined;
   return true;
 }
 

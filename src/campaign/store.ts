@@ -30,7 +30,11 @@ export function loadRun(id: string): RunState | null {
   try {
     const raw = localStorage.getItem(PREFIX + id);
     const run = raw ? (JSON.parse(raw) as RunState) : null;
-    return run && run.v === RUN_VERSION ? run : null;
+    if (!run || run.v !== RUN_VERSION) return null;
+    // Saves from before rewards (#64) have no perks or strains.
+    run.perks ??= [];
+    for (const b of run.broods) b.strains ??= [];
+    return run;
   } catch {
     return null;
   }

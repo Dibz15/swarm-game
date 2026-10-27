@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { armyFor, nodeSetup } from '../src/campaign/battle';
 import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { MAP_H, MAP_W, grow, heal, hops, moves, newRun, resolveTurn, unlock, unlocked, type RunState } from '../src/campaign/run';
+import { MAP_H, MAP_W, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
+import { REWARD, modsFor, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 
 const SEEDS = Array.from({ length: 60 }, (_, i) => `seed-${i}`);
@@ -20,7 +21,7 @@ function rush(run: RunState): RunState {
   return run;
 }
 
-const brood = (o: Partial<Brood>): Brood => ({ id: 0, name: 'Test', kind: Kind.Dot, size: 12, cap: 16, wins: 0, wounded: 0, grows: 0, ...o });
+const brood = (o: Partial<Brood>): Brood => ({ id: 0, name: 'Test', kind: Kind.Dot, size: 12, cap: 16, wins: 0, wounded: 0, grows: 0, strains: [], ...o });
 
 describe('campaign run generation', () => {
   it('is deterministic per seed text', () => {
@@ -167,5 +168,133 @@ describe('camp', () => {
     run.biomass = 5;
     expect(unlock(run, NestType.Forge)).toBe(false);
     expect(run.biomass).toBe(5);
+  });
+});
+
+describe('rewards', () => {
+  /** A fresh run that has just won its first battle, so an offer is waiting. */
+  const afterWin = (seed = 'reward', pack: 'swarm' | 'wall' | 'raid' = 'swarm') => {
+    const run = newRun(seed, 0, pack, 0);
+    resolveTurn(run, moves(run)[0], WIN, run.fielded, 0);
+    return run;
+  };
+  const offerOf = (run: RunState, ids: string[]) => (run.offer = { ids, rerolls: 0 });
+
+  it('a win brings a seeded offer of three different, usable rewards', () => {
+    const a = afterWin();
+    const b = afterWin();
+    expect(a.offer!.ids).toHaveLength(3);
+    expect(new Set(a.offer!.ids).size).toBe(3);
+    expect(b.offer).toEqual(a.offer);
+    // Only Swarmer broods and only Hive + Nova: no other kind's strains, no locked powers' variants.
+    for (let t = 0; t < 40; t++) {
+      for (const id of rollOffer({ ...a, turn: t }, 0)) {
+        const r = REWARD[id];
+        if (r.kind !== undefined) expect(r.kind).toBe(Kind.Dot);
+        if (r.power) expect(['surge', 'nova']).toContain(r.power);
+      }
+    }
+    // A loss or a march brings none.
+    const lost = newRun('reward', 0, 'swarm', 0);
+    resolveTurn(lost, moves(lost)[0], LOSS, lost.fielded, 0);
+    expect(lost.offer).toBeUndefined();
+  });
+
+  it('strains fill two slots per brood, then replace one', () => {
+    const run = afterWin();
+    const b = run.broods[0];
+    offerOf(run, ['frenzy', 'lean', 'plated']);
+    expect(takeReward(run, 'plated', b.id)).toBe(false); // a Shield strain on a Swarmer brood
+    expect(takeReward(run, 'frenzy')).toBe(false); // a strain needs a brood
+    expect(takeReward(run, 'frenzy', b.id)).toBe(true);
+    expect(run.offer).toBeUndefined();
+    offerOf(run, ['lean']);
+    takeReward(run, 'lean', b.id);
+    offerOf(run, ['thick-hide']);
+    expect(takeReward(run, 'thick-hide', b.id)).toBe(false); // full: must name one to replace
+    expect(takeReward(run, 'thick-hide', b.id, 'frenzy')).toBe(true);
+    expect(b.strains).toEqual(['lean', 'thick-hide']);
+  });
+
+  it('a power variant replaces the one held for that power', () => {
+    const run = afterWin();
+    offerOf(run, ['wide']);
+    takeReward(run, 'wide');
+    offerOf(run, ['overdrive', 'energy']);
+    takeReward(run, 'overdrive');
+    expect(run.perks).toEqual(['wide', 'overdrive']);
+    expect(modsFor(run.perks, []).novaRadius).toBeGreaterThan(1);
+    // Another Nova variant would take Wide's place (only Wide exists in v1, so fake the offer).
+    run.perks = ['wide'];
+    offerOf(run, ['wide']);
+    expect(takeReward(run, 'wide')).toBe(false); // already held
+  });
+
+  it('rerolls cost 10, then 5 more each time, and never overspend', () => {
+    const run = afterWin();
+    run.biomass = 24;
+    const first = run.offer!.ids;
+    expect(rerollCost(run)).toBe(10);
+    expect(rerollOffer(run)).toBe(true);
+    expect(run.offer!.ids).not.toEqual(first);
+    expect(rerollCost(run)).toBe(15);
+    expect(rerollOffer(run)).toBe(false);
+    expect(run.biomass).toBe(14);
+    skipReward(run);
+    expect(run.offer).toBeUndefined();
+  });
+
+  it('strains apply by the broods that fight; perks always', () => {
+    const run = newRun('mods', 0, 'wall', 0);
+    const [dots, tanks] = run.broods;
+    dots.strains = ['lean'];
+    tanks.strains = ['plated'];
+    run.perks = ['energy'];
+    const both = modsFor(run.perks, [dots, tanks]);
+    expect(both.kind[Kind.Dot].speed).toBeCloseTo(1.15);
+    expect(both.kind[Kind.Tank].hp).toBeCloseTo(1.3);
+    expect(both.energyRate).toBeCloseTo(1.15);
+    const onlyDots = modsFor(run.perks, [dots]);
+    expect(onlyDots.kind[Kind.Tank].hp).toBe(1);
+    // The same strain on two broods of one kind doesn't stack.
+    expect(modsFor([], [dots, { ...dots, id: 9 }]).kind[Kind.Dot].speed).toBeCloseTo(1.15);
+    const s = nodeSetup(run, run.nodes[run.start].links[0], false, [dots.id]);
+    expect(s.players[0].mods!.kind[Kind.Dot].speed).toBeCloseTo(1.15);
+  });
+
+  it('Lone wolf fields one brood at double size; Hunger doubles biomass and speeds the Bloom', () => {
+    const run = afterWin('pacts');
+    offerOf(run, ['lone-wolf']);
+    takeReward(run, 'lone-wolf');
+    expect(maxFielded(run)).toBe(1);
+    expect(run.fielded).toHaveLength(1);
+    expect(armyFor(run, run.broods.map((b) => b.id))).toEqual([{ kind: run.broods[0].kind, count: run.broods[0].size * 2, vet: false }]);
+
+    const h = afterWin('pacts');
+    const step = h.bloom.step;
+    offerOf(h, ['hunger']);
+    takeReward(h, 'hunger');
+    expect(h.bloom.step).toBeCloseTo(step * 1.25);
+    const before = h.biomass;
+    const res = resolveTurn(h, moves(h).find((n) => !h.visited.includes(n))!, WIN, h.fielded, 0);
+    expect(res.biomass % 2).toBe(0);
+    expect(h.biomass - before).toBe(res.biomass);
+  });
+});
+
+describe('saves', () => {
+  it('a run saved before rewards loads with empty perks and strains', async () => {
+    const mem = new Map<string, string>();
+    const ls = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v), removeItem: (k: string) => void mem.delete(k), key: (i: number) => [...mem.keys()][i] ?? null, get length() { return mem.size; } };
+    (globalThis as { localStorage?: unknown }).localStorage = ls;
+    const { loadRun, saveRun } = await import('../src/campaign/store');
+    const old = newRun('old', 0, 'swarm', 0) as Partial<RunState>;
+    delete old.perks;
+    for (const b of old.broods!) delete (b as Partial<Brood>).strains;
+    saveRun(old as RunState);
+    const back = loadRun(old.id!)!;
+    expect(back.perks).toEqual([]);
+    expect(back.broods.every((b) => Array.isArray(b.strains))).toBe(true);
+    delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 });

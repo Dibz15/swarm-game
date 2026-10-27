@@ -1,5 +1,6 @@
 import { ALL_NEST_TYPES, MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './constants';
 import { Rng } from './rng';
+import { defaultMods, type FactionMods } from './mods';
 import { Grid } from './spatial';
 import { Terrain, emptyTerrain, type TerrainSpec } from './terrain';
 import type { EventSpec } from './mapgen';
@@ -60,6 +61,8 @@ export interface Faction {
    * still captures, but spawns Swarmers and grants no power (campaign unlocks).
    */
   nestTypes: number;
+  /** campaign rewards and the like; identity by default (see mods.ts) */
+  mods: FactionMods;
   stats: FactionStats;
 }
 
@@ -284,6 +287,7 @@ export class World {
         prodMult: 1,
         unitCap: 0,
         nestTypes: ALL_NEST_TYPES,
+        mods: defaultMods(),
         stats: { spawned: 0, kills: 0, lost: 0, captured: 0, peak: 0 },
       });
       this.teamOf[f] = f === NEUTRAL ? NEUTRAL_TEAM : f;
@@ -319,7 +323,7 @@ export function spawnUnit(
   w.py[i] = y;
   w.vx[i] = 0;
   w.vy[i] = 0;
-  w.hp[i] = UNIT_STATS[kind].hp;
+  w.hp[i] = UNIT_STATS[kind].hp * w.factions[owner].mods.kind[kind].hp;
   w.dmg[i] = 0;
   w.armor[i] = 1;
   w.ox[i] = ox;

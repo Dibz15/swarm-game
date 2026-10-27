@@ -1,5 +1,5 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { BASTION, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
+import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
 import type { World } from '../sim/world';
 import type { Renderer } from './renderer';
 
@@ -125,7 +125,7 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
     }
 
     if (n.type === NestType.Bastion && n.owner >= 0) {
-      const range = BASTION.range + BASTION.rangePerLevel * (n.level - 1);
+      const range = bastionRange(w, n);
       const a = selected || hover ? 90 : n.owner === NEUTRAL ? 28 : 18;
       r.shape(false, n.x, n.y, range, 0, 1, 0, 1.2 / range, c, a);
     }

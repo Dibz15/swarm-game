@@ -23,8 +23,10 @@ export function updateMovement(w: World): void {
     if (!w.alive[i]) continue;
     const st = UNIT_STATS[w.kind[i]];
     const x = w.x[i], y = w.y[i];
+    const fm = w.factions[w.owner[i]].mods;
+    const fortified = w.fortify[i] > w.tick;
     let spd =
-      st.speed * (w.surge[i] > w.tick ? POWER.surgeSpeed : 1) * (w.fortify[i] > w.tick ? POWER.fortifySlow : 1);
+      st.speed * fm.kind[w.kind[i]].speed * (w.surge[i] > w.tick ? POWER.surgeSpeed : 1) * (fortified ? (fm.fortifyRoot ? 0 : POWER.fortifySlow) : 1);
     if (tr.hasFields) {
       const fl = tr.flagsAt(x, y);
       if (fl & T_NEBULA) spd *= TERRAIN.nebulaSlow;

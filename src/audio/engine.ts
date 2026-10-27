@@ -702,6 +702,38 @@ export class AudioEngine {
     [0, 7, 12].forEach((s, i) => this.tone(this.reverbIn, this.note(s), 1.2, 'sine', 0.05, { delay: 0.8 + i * 0.08 }));
   }
 
+  /** Rewards: three cards dealt, one soft flick each. */
+  cardsRevealed(): void {
+    if (!this.ctx) return;
+    [0, 1, 2].forEach((i) => {
+      this.noise(this.ui, 0.06, 0.03, 'highpass', 4000, 2000, i * 0.09);
+      this.tone(this.ui, this.note(12 + i * 4), 0.12, 'triangle', 0.03, { delay: i * 0.09 + 0.01 });
+    });
+  }
+
+  /** Rewards: a pick. Rarer picks ring higher and longer. */
+  rewardPick(tier: 'common' | 'uncommon' | 'rare'): void {
+    if (!this.ctx) return;
+    const notes = tier === 'rare' ? [0, 7, 12, 16, 19, 24] : tier === 'uncommon' ? [0, 7, 12, 16] : [0, 7, 12];
+    notes.forEach((s, i) => this.tone(this.ui, this.note(s + 12), 0.45, 'triangle', 0.045, { delay: i * 0.06 }));
+    if (tier === 'rare') this.tone(this.reverbIn, this.note(24), 1.6, 'sine', 0.06, { attack: 0.05, delay: 0.3 });
+  }
+
+  /** Rewards: a reroll, cards swept away and dealt again. */
+  rerollOffer(): void {
+    if (!this.ctx) return;
+    this.noise(this.ui, 0.25, 0.05, 'bandpass', 1200, 4000);
+    this.tone(this.ui, this.note(7), 0.2, 'sine', 0.035, { slide: 1.6, delay: 0.05 });
+  }
+
+  /** Rewards: a pact taken. Power with a shadow: a low minor stab under the chime. */
+  pactTaken(): void {
+    if (!this.ctx) return;
+    this.tone(this.reverbIn, this.note(-24), 1.8, 'sawtooth', 0.07, { attack: 0.02, slide: 0.97 });
+    [0, 3, 6].forEach((s) => this.tone(this.ui, this.note(s - 12), 1.0, 'triangle', 0.045, { attack: 0.01 }));
+    [12, 15, 18].forEach((s, i) => this.tone(this.ui, this.note(s), 0.6, 'sine', 0.03, { delay: 0.25 + i * 0.07 }));
+  }
+
   /** Hub: a new run begins. */
   runStart(): void {
     if (!this.ctx) return;

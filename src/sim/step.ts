@@ -39,7 +39,7 @@ export function step(w: World, commands: readonly Command[]): void {
     if (!fa.active || fa.eliminated) continue;
     const behind = 1 - w.unitCount[f] / leader;
     const rate = ENERGY.passive * (1 + BALANCE.underdogEnergy * behind * (1 - escalation(w.tick)));
-    fa.energy = Math.min(ENERGY.max, fa.energy + rate * DT);
+    fa.energy = Math.min(ENERGY.max, fa.energy + rate * fa.mods.energyRate * DT);
   }
 
   if (w.tick % TICK_HZ === 0) {
@@ -84,7 +84,7 @@ function updateCrystals(w: World): void {
   for (const c of w.crystals) {
     if (c.holder < 0) continue;
     const f = w.factions[c.holder];
-    if (!f.eliminated) f.energy = Math.min(ENERGY.max, f.energy + TERRAIN.crystalEnergy * DT);
+    if (!f.eliminated) f.energy = Math.min(ENERGY.max, f.energy + TERRAIN.crystalEnergy * f.mods.crystalRate * DT);
   }
 }
 
@@ -106,7 +106,7 @@ function resolveBarrages(w: World): void {
       hits.push({ j, d: Math.sqrt((w.x[j] - b.x) ** 2 + (w.y[j] - b.y) ** 2) });
     }
     hits.sort((p, q) => p.d - q.d || p.j - q.j);
-    let budget = POWER.barrageBudget * (b.r / POWER.barrageRadius);
+    let budget = POWER.barrageBudget * (b.r / POWER.barrageRadius) * w.factions[b.owner].mods.barrageBudget;
     for (const { j, d } of hits) {
       if (budget <= 0) break;
       const dmg = Math.min(budget, POWER.barrageDamage * (1 - 0.4 * (d / b.r)));

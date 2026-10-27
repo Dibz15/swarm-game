@@ -20,6 +20,8 @@ export interface Brood {
   wounded: number;
   /** cap grows bought at the camp (each costs more) */
   grows: number;
+  /** strain rewards (ids in rewards.ts), at most STRAIN_SLOTS */
+  strains: string[];
 }
 
 export const MAX_FIELDED = 3;
@@ -94,15 +96,15 @@ export function broodName(seed: number, taken: string[]): string {
 }
 
 export function newBrood(id: number, kind: number, seed: number, taken: string[], size = START.size): Brood {
-  return { id, name: broodName(seed + id * 977, taken), kind, size, cap: START.cap, wins: 0, wounded: 0, grows: 0 };
+  return { id, name: broodName(seed + id * 977, taken), kind, size, cap: START.cap, wins: 0, wounded: 0, grows: 0, strains: [] };
 }
 
 export const fit = (b: Brood) => b.wounded === 0;
 export const veteran = (b: Brood) => b.wins >= VETERAN_WINS;
 
-/** The broods that actually fight from a pick: fit ones only, at most MAX_FIELDED. */
-export const fighters = (broods: Brood[], fielded: number[]): Brood[] =>
-  broods.filter((b) => fielded.includes(b.id) && fit(b)).slice(0, MAX_FIELDED);
+/** The broods that actually fight from a pick: fit ones only, at most `max` (MAX_FIELDED, or 1 under Lone wolf). */
+export const fighters = (broods: Brood[], fielded: number[], max = MAX_FIELDED): Brood[] =>
+  broods.filter((b) => fielded.includes(b.id) && fit(b)).slice(0, max);
 
 /** What happened to a brood after a battle, for the debrief. */
 export interface BroodEvent {

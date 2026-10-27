@@ -1,7 +1,7 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
 import { isMobile } from './mobile';
-import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
+import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, surgeCost } from '../sim/index';
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
@@ -361,10 +361,12 @@ export class Hud {
     for (const c of w.crystals) if (c.holder === g.human) crystals++;
     this.energyText.textContent = `Energy ${Math.floor(e)}${crystals ? `  ◆ crystal${crystals > 1 ? ` ×${crystals}` : ''}` : ''}`;
     const nUnits = g.selection.units.size;
-    this.btn.surge.disabled = e < POWER.surgeCost || nUnits === 0;
+    const surge = me ? surgeCost(w, g.human) : POWER.surgeCost;
+    this.btn.surge.disabled = e < surge || nUnits === 0;
+    this.btn.surge.querySelector('small')!.textContent = `${Math.round(surge)}`;
     this.btn.nearest.disabled = nUnits === 0;
     this.btn.nova.disabled = e < POWER.novaCost || nUnits < 4;
-    this.btn.surge.classList.toggle('ready', e >= POWER.surgeCost);
+    this.btn.surge.classList.toggle('ready', e >= surge);
     // Nest powers only show while you hold the matching nest type.
     const nestPowers: [NestPower, number, boolean][] = [
       ['fortify', POWER.fortifyCost, nUnits > 0],
