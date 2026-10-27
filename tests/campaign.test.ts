@@ -109,6 +109,16 @@ describe('broods', () => {
     expect(s.players[0]).toMatchObject({ human: true, nestTypes: run.unlocks.nests, army: [MILITIA] });
   });
 
+  it('only broods that actually fought are settled: wounded ones in the pick sit out', () => {
+    const run = newRun('settle', 0, 'swarm', 0);
+    const [a, b] = run.broods;
+    b.wounded = 2;
+    resolveTurn(run, moves(run)[0], LOSS, [a.id, b.id], 0);
+    expect(b).toMatchObject({ size: 12, wounded: 1 });
+    expect(a.wounded).toBe(1);
+    expect(run.fielded).toEqual([a.id]);
+  });
+
   it('winning a rescue node adds a brood, and biomass rewards nests, survivors and speed', () => {
     const run = newRun('rescue', 0, 'swarm', 0);
     const target = moves(run)[0];

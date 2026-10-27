@@ -2,7 +2,7 @@ import { PERSONALITIES } from '../sim/ai/bot';
 import type { EventLevel } from '../sim/mapgen';
 import { Rng } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
-import { MILITIA, fit, veteran } from './broods';
+import { MILITIA, fighters, veteran } from './broods';
 import { pressure, type RunState } from './run';
 
 /** Conquest only ends by elimination: a share no team can reach turns domination off. */
@@ -12,7 +12,7 @@ const DOMINATION_SHARE = 0.5;
 
 /** The fielded broods (fit ones only, at most three) as a starting army; the militia if none. */
 export function armyFor(run: RunState, fielded: number[]): { kind: number; count: number; vet?: boolean }[] {
-  const out = run.broods.filter((b) => fielded.includes(b.id) && fit(b)).slice(0, 3);
+  const out = fighters(run.broods, fielded);
   return out.length ? out.map((b) => ({ kind: b.kind, count: b.size, vet: veteran(b) })) : [MILITIA];
 }
 

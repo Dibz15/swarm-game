@@ -6,7 +6,7 @@
 import type { AudioEngine } from '../audio/engine';
 import { bloomLabel, nodeSetup } from '../campaign/battle';
 import { MAP_H, MAP_W, frontShape, grow, heal, moves, needsBattle, revealed, unlock, unlockCost, unlocked, type RunNode, type RunState, type TurnResult } from '../campaign/run';
-import { COST, KIND_NAME, MAX_FIELDED, PACKS, UNLOCKS, UNLOCK_TEXT, fit, veteran, type Brood, type BroodEvent, type PackId } from '../campaign/broods';
+import { COST, KIND_NAME, MAX_FIELDED, MAX_ROSTER, PACKS, UNLOCKS, UNLOCK_TEXT, fit, veteran, type Brood, type BroodEvent, type PackId } from '../campaign/broods';
 import { Kind } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
@@ -520,7 +520,11 @@ export function runMap(
       rows.push(`<dt>Enemies</dt><dd>${dots} ${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}</dd>`);
       rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}</dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
-      if (n.reward) rows.push(`<dt>Reward</dt><dd>+${n.reward}+ biomass${n.rescue !== undefined ? ` · rescue a ${KIND_NAME[n.rescue]} brood` : ''}</dd>`);
+      if (n.reward) {
+        const rescue =
+          n.rescue === undefined ? '' : run.broods.length < MAX_ROSTER ? ` · rescue a ${KIND_NAME[n.rescue]} brood` : ` · a ${KIND_NAME[n.rescue]} brood waits, but your roster is full (${MAX_ROSTER})`;
+        rows.push(`<dt>Reward</dt><dd>+${n.reward}+ biomass${rescue}</dd>`);
+      }
       if (n.checkpoint) rows.push(`<dt>Checkpoint</dt><dd>${run.checkpointUsed ? 'Already used' : 'Reach it to save the run here, once'}</dd>`);
     }
     const status = n.id === run.at ? 'Your swarm is here.' : dead ? 'Lost to the Bloom.' : taken ? 'Taken: march through without a battle.' : canGo ? '' : 'Not next to your swarm.';
@@ -588,22 +592,22 @@ export function runMap(
   /** The camp: spend biomass on broods and unlocks. */
   const camp = () => {
     veil.hidden = false;
-    const price = (cost: number, label: string, act: string, ok: boolean) =>
-      `<button class="small" data-act="${act}" ${ok && run.biomass >= cost ? '' : 'disabled'}>${label} · ${cost}</button>`;
+    const price = (cost: number, label: string, act: string) =>
+      `<button class="small" data-act="${act}" ${run.biomass >= cost ? '' : 'disabled'}>${label} · ${cost}</button>`;
     const rows = run.broods
       .map(
         (b) => `<div class="camp-row">
           <span class="glyph">${KIND_GLYPH[b.kind]}</span>
           <span class="who"><b>${esc(b.name)}</b><small>${KIND_NAME[b.kind]} · ${b.size}/${b.cap}${veteran(b) ? ' · ★' : ''}${b.wounded ? ' · wounded' : ''}</small></span>
-          ${b.wounded ? price(COST.heal, 'Heal', `heal:${b.id}`, true) : ''}
-          ${price(COST.grow(b), `Cap +${COST.growBy}`, `grow:${b.id}`, true)}
+          ${b.wounded ? price(COST.heal, 'Heal', `heal:${b.id}`) : ''}
+          ${price(COST.grow(b), `Cap +${COST.growBy}`, `grow:${b.id}`)}
         </div>`,
       )
       .join('');
     const unlocks = UNLOCKS.map(
       (u) => `<div class="camp-row">
         <span class="who"><b>${UNLOCK_TEXT[u]}</b></span>
-        ${unlocked(run, u) ? '<span class="hint">Unlocked</span>' : price(unlockCost(u), 'Unlock', `unlock:${u}`, true)}
+        ${unlocked(run, u) ? '<span class="hint">Unlocked</span>' : price(unlockCost(u), 'Unlock', `unlock:${u}`)}
       </div>`,
     ).join('');
     panel.innerHTML = `

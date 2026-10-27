@@ -6,6 +6,8 @@
 import { RUN_VERSION, type RunState, type RunStatus } from './run';
 
 const PREFIX = `swarm.run.v${RUN_VERSION}.`;
+/** every run version's saves start with this (the history key doesn't) */
+const OLD_PREFIX = 'swarm.run.v';
 const HISTORY = 'swarm.runHistory';
 
 export interface PastRun {
@@ -34,16 +36,19 @@ export function loadRun(id: string): RunState | null {
   }
 }
 
-/** Active runs, most recently played first. Unreadable saves are skipped. */
+/** Active runs, most recently played first. Unreadable saves are skipped; older versions' are deleted. */
 export function listRuns(): RunState[] {
   const out: RunState[] = [];
   try {
+    const stale: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
+      if (key?.startsWith(OLD_PREFIX) && !key.startsWith(PREFIX)) stale.push(key);
       if (!key?.startsWith(PREFIX)) continue;
       const run = loadRun(key.slice(PREFIX.length));
       if (run && run.status === 'active') out.push(run);
     }
+    for (const key of stale) localStorage.removeItem(key);
   } catch {
     /* ignore */
   }

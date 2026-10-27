@@ -261,7 +261,7 @@ class App {
       const res = resolveTurn(run, id, null);
       this.saveRunState(run);
       this.runSounds(res);
-      this.showRunMap(run, { from, fresh: res.fresh });
+      this.showRunMap(run, this.runIntro(from, res));
       return;
     }
     const node = run.nodes[id];
@@ -278,10 +278,15 @@ class App {
     if (g) {
       const w = g.world;
       for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === g.human && w.kind[i] < survivors.length) survivors[w.kind[i]]++;
-      nests = w.nests.filter((n) => n.owner === g.human).length;
+      nests = w.nests.filter((n) => n.owner === g.human && n.control >= 1).length;
       seconds = w.tick / TICK_HZ;
     }
     return { won, survivors, nests, seconds };
+  }
+
+  /** The map's Bloom animation for a turn; none after a checkpoint restore, which rewinds the Bloom. */
+  private runIntro(from: number, res: TurnResult): MapIntro | null {
+    return res.checkpoint === 'restored' ? null : { from, fresh: res.fresh };
   }
 
   private runSounds(res: TurnResult): void {
@@ -308,7 +313,7 @@ class App {
     else if (r.state.status === 'lost') this.sfx.defeat();
     this.setModal(
       runDebrief(r.state, r.state.nodes[r.node], report.won, res, {
-        next: () => this.showRunMap(r.state, { from, fresh: res.fresh }),
+        next: () => this.showRunMap(r.state, this.runIntro(from, res)),
         hub: () => this.showRunHub(),
       }),
     );

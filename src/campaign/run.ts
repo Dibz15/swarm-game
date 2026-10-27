@@ -19,6 +19,7 @@ import {
   PACKS,
   RESCUE_SIZE,
   biomassFor,
+  fighters,
   newBrood,
   settleBroods,
   type BattleReport,
@@ -364,8 +365,9 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
   run.updated = now;
   if (report) {
     run.log.push({ turn: run.turn, node: id, won });
-    run.fielded = fielded.length ? fielded : run.fielded;
-    res.events = settleBroods(run.broods, fielded, report);
+    const fought = fighters(run.broods, fielded).map((b) => b.id);
+    run.fielded = fought.length ? fought : run.fielded;
+    res.events = settleBroods(run.broods, fought, report);
     res.biomass = biomassFor(node.reward, report);
     run.biomass += res.biomass;
   }
@@ -399,7 +401,7 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
     return res;
   }
   if (node.checkpoint && won && !run.checkpointSave && !run.checkpointUsed) {
-    run.checkpointSave = JSON.stringify({ ...run, checkpointSave: undefined });
+    run.checkpointSave = JSON.stringify({ ...run, checkpointSave: undefined, log: [] });
     res.checkpoint = 'reached';
   }
   return res;

@@ -100,6 +100,10 @@ export function newBrood(id: number, kind: number, seed: number, taken: string[]
 export const fit = (b: Brood) => b.wounded === 0;
 export const veteran = (b: Brood) => b.wins >= VETERAN_WINS;
 
+/** The broods that actually fight from a pick: fit ones only, at most MAX_FIELDED. */
+export const fighters = (broods: Brood[], fielded: number[]): Brood[] =>
+  broods.filter((b) => fielded.includes(b.id) && fit(b)).slice(0, MAX_FIELDED);
+
 /** What happened to a brood after a battle, for the debrief. */
 export interface BroodEvent {
   name: string;
