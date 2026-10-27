@@ -1,6 +1,7 @@
 /**
- * Generative, adaptive score. Everything is in A minor, the same scale the
- * battle blips use, so music and effects never clash.
+ * Generative, adaptive score. Each match plays one theme (key, mode, tempo,
+ * progressions: see themes.ts); battle blips use the same theme's notes, so
+ * music and effects never clash.
  *
  * Layers fade in and out with an intensity value:
  *   pad (always) -> arpeggio (activity) -> bass (fighting) -> drums (heavy
@@ -8,6 +9,8 @@
  * The chord progression switches mood at chord boundaries: calm, tense
  * (your nests under attack) and drive (escalation).
  */
+
+import { CLASSIC, DEFAULT_ARP, chord, leadNotes, type Mood, type Theme } from './themes';
 
 export type MusicMode = 'menu' | 'play' | 'paused' | 'ended';
 
@@ -20,30 +23,9 @@ export interface MusicState {
   domination: number;
 }
 
-type Mood = 'calm' | 'tense' | 'drive';
-
-const BPM = 88;
 /** Paused mid-match: music (and the ambience drone) go dull and quiet. */
 export const PAUSE = { cutoff: 260, level: 0.45 };
-const STEP = 60 / BPM / 4; // one 16th note
 const LOOKAHEAD = 0.15;
-
-/** Chords as semitones from A. */
-const CHORDS: Record<string, number[]> = {
-  Am: [0, 3, 7],
-  F: [-4, 0, 3],
-  C: [3, 7, 10],
-  G: [-2, 2, 5],
-  Dm: [5, 8, 12],
-  E: [7, 11, 14],
-  Em: [7, 10, 14],
-};
-const PROGRESSION: Record<Mood, { chords: string[]; bars: number }> = {
-  calm: { chords: ['Am', 'F', 'C', 'G'], bars: 2 },
-  tense: { chords: ['Am', 'F', 'Dm', 'E'], bars: 2 },
-  drive: { chords: ['Am', 'G', 'F', 'E'], bars: 1 },
-};
-const PENTA = [0, 3, 5, 7, 10];
 
 const hz = (semi: number, base = 220) => base * Math.pow(2, semi / 12);
 const smooth = (a: number, b: number, x: number) => {
@@ -68,6 +50,13 @@ export class Music {
   private intensity = 0;
   private state: MusicState = { mode: 'menu', tension: 0, danger: 0, escalation: 0, domination: 0 };
   private phrase: number[] = [];
+  private theme: Theme = CLASSIC;
+  /** applied at the next bar so held pads don't clash */
+  private pending: Theme | null = null;
+  /** one 16th note at the theme's tempo */
+  private stepDur = 60 / CLASSIC.bpm / 4;
+  private chord: number[] = chord(CLASSIC, CLASSIC.prog.calm.chords[0]);
+  private echo: DelayNode;
 
   constructor(private readonly ctx: AudioContext, bus: AudioNode, reverb: AudioNode) {
     this.filter = ctx.createBiquadFilter();
@@ -95,8 +84,8 @@ export class Music {
     this.padFilter.connect(this.layers.pad);
 
     // Arp gets a dotted-8th echo.
-    const echo = ctx.createDelay(1);
-    echo.delayTime.value = STEP * 3;
+    const echo = (this.echo = ctx.createDelay(1));
+    echo.delayTime.value = this.stepDur * 3;
     const fb = ctx.createGain();
     fb.gain.value = 0.35;
     const echoTone = ctx.createBiquadFilter();
@@ -128,6 +117,16 @@ export class Music {
     this.nextTime = this.ctx.currentTime + 0.1;
     this.step = 0;
     this.timer = window.setInterval(() => this.schedule(), 25);
+  }
+
+  /** Switch theme at the next bar. */
+  setTheme(theme: Theme): void {
+    this.pending = theme === this.theme ? null : theme;
+  }
+
+  /** The theme that's sounding and its chord (semitones from the root). */
+  get key(): { theme: Theme; chord: number[] } {
+    return { theme: this.theme, chord: this.chord };
   }
 
   /** Called every frame with the game's state; adjusts layer levels. */
@@ -167,7 +166,7 @@ export class Music {
     while (this.nextTime < now + LOOKAHEAD) {
       this.playStep(this.step, this.nextTime);
       this.step++;
-      this.nextTime += STEP;
+      this.nextTime += this.stepDur;
     }
   }
 
@@ -179,40 +178,55 @@ export class Music {
   }
 
   private playStep(step: number, t: number): void {
-    const inBar = step % 16;
+    let inBar = step % 16;
+    if (inBar === 0 && this.pending) {
+      // New theme: restart the bar count so its progression starts fresh.
+      this.theme = this.pending;
+      this.pending = null;
+      this.stepDur = 60 / this.theme.bpm / 4;
+      this.echo.delayTime.setTargetAtTime(this.stepDur * 3, t, 0.05);
+      this.step = step = 0;
+      inBar = 0;
+      this.chordIdx = -1;
+      this.phrase = [];
+    }
     const bar = Math.floor(step / 16);
-    const prog = PROGRESSION[this.mood];
+    const prog = this.theme.prog[this.mood];
 
     // Chord changes (and mood switches) only on chord boundaries.
     if (inBar === 0 && bar % prog.bars === 0) {
       const next = this.pickMood();
-      if (next !== this.mood) {
+      if (next !== this.mood || this.chordIdx < 0) {
         this.mood = next;
         this.chordIdx = 0;
       } else {
         this.chordIdx = (this.chordIdx + 1) % prog.chords.length;
       }
-      const p = PROGRESSION[this.mood];
-      this.pad(CHORDS[p.chords[this.chordIdx]], t, STEP * 16 * p.bars);
-      if (this.chordIdx === 0 && Math.floor(bar / p.bars) % 8 === 0) this.newPhrase();
+      const p = this.theme.prog[this.mood];
+      this.chord = chord(this.theme, p.chords[this.chordIdx]);
+      this.pad(this.chord, t, this.stepDur * 16 * p.bars);
+      if (!this.phrase.length || (this.chordIdx === 0 && Math.floor(bar / p.bars) % 8 === 0)) this.newPhrase();
     }
-    const chord = CHORDS[PROGRESSION[this.mood].chords[this.chordIdx]];
+    const ch = this.chord;
+    const root = this.theme.root;
+    const STEP = this.stepDur;
+    const bars = this.theme.prog[this.mood].bars;
     const m = this.intensity;
 
     // Arpeggio: 8ths, 16ths when intense.
     const sixteenths = m > 0.55 || this.mood === 'drive';
     if (inBar % (sixteenths ? 1 : 2) === 0) {
-      const pattern = [0, 1, 2, 3, 2, 1, 0, 2];
+      const pattern = this.theme.arp ?? DEFAULT_ARP;
       const k = pattern[(step / (sixteenths ? 1 : 2)) % pattern.length | 0];
-      const semi = k === 3 ? chord[0] + 12 : chord[k];
-      this.pluck(hz(semi + 12), t, sixteenths ? 0.12 : 0.22);
+      const semi = k === 3 ? ch[0] + 12 : ch[k];
+      this.pluck(hz(root + semi + 12), t, sixteenths ? 0.12 : 0.22);
     }
 
     // Bass: held root when calm, driving 8ths when fighting.
     if (m > 0.45 || this.mood === 'drive') {
-      if ([0, 3, 6, 8, 11, 14].includes(inBar)) this.bass(hz(chord[0], 55), t, STEP * 2.5);
-    } else if (inBar === 0 && bar % PROGRESSION[this.mood].bars === 0) {
-      this.bass(hz(chord[0], 55), t, STEP * 16 * PROGRESSION[this.mood].bars * 0.9);
+      if ([0, 3, 6, 8, 11, 14].includes(inBar)) this.bass(hz(root + ch[0], 55), t, STEP * 2.5);
+    } else if (inBar === 0 && bar % bars === 0) {
+      this.bass(hz(root + ch[0], 55), t, STEP * 16 * bars * 0.9);
     }
 
     // Drums (always scheduled; the layer gain decides if you hear them).
@@ -225,12 +239,13 @@ export class Music {
     if (inBar % 4 === 0 && this.phrase.length) {
       const idx = (bar % 4) * 4 + inBar / 4;
       const n = this.phrase[idx];
-      if (n !== undefined && !Number.isNaN(n)) this.lead(hz(n + 12), t, STEP * 6);
+      if (n !== undefined && !Number.isNaN(n)) this.lead(hz(root + n + 12), t, STEP * 6);
     }
   }
 
-  /** A fresh 16-slot melody from the pentatonic scale (NaN = rest). */
+  /** A fresh 16-slot melody from the theme's lead notes (NaN = rest). */
   private newPhrase(): void {
+    const notes = leadNotes(this.theme);
     const out: number[] = [];
     let i = 2;
     for (let k = 0; k < 16; k++) {
@@ -238,8 +253,8 @@ export class Music {
         out.push(NaN);
         continue;
       }
-      i = Math.max(0, Math.min(PENTA.length * 2 - 1, i + Math.floor(Math.random() * 5) - 2));
-      out.push(PENTA[i % PENTA.length] + 12 * Math.floor(i / PENTA.length));
+      i = Math.max(0, Math.min(notes.length * 2 - 1, i + Math.floor(Math.random() * 5) - 2));
+      out.push(notes[i % notes.length] + 12 * Math.floor(i / notes.length));
     }
     this.phrase = out;
   }
@@ -258,7 +273,7 @@ export class Music {
       for (const det of [-8, 8]) {
         const o = this.ctx.createOscillator();
         o.type = 'sawtooth';
-        o.frequency.value = hz(semi, 110);
+        o.frequency.value = hz(this.theme.root + semi, 110);
         o.detune.value = det;
         const g = this.ctx.createGain();
         this.env(g, t, 0.022, 1.4, dur, 1.6);

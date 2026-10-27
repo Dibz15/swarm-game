@@ -29,6 +29,8 @@ export class Ambience {
   private nextBeat = 0;
   private time = 0;
   private level = 0;
+  private voices: { o: OscillatorNode; freq: number }[] = [];
+  private root = 0;
 
   constructor(private readonly ctx: AudioContext, private readonly out: AudioNode, private readonly reverb: AudioNode) {
     const t = ctx.currentTime;
@@ -43,7 +45,7 @@ export class Ambience {
     send.gain.value = 0.5;
     this.droneGain.connect(send).connect(reverb);
 
-    // Root (A1), detuned pair + fifth + octave.
+    // Root (A1, moved by setRoot), detuned pair + fifth + octave.
     const voice = (freq: number, type: OscillatorType, vol: number, detune = 0) => {
       const o = ctx.createOscillator();
       o.type = type;
@@ -53,6 +55,7 @@ export class Ambience {
       g.gain.value = vol;
       o.connect(g).connect(this.filter);
       o.start(t);
+      this.voices.push({ o, freq });
       return o;
     };
     voice(55, 'sawtooth', 0.32, -6);
@@ -74,8 +77,17 @@ export class Ambience {
     const d = ctx.createOscillator();
     d.type = 'triangle';
     d.frequency.value = 58.27;
+    this.voices.push({ o: d, freq: 58.27 });
     d.connect(this.dissonance).connect(this.filter);
     d.start(t);
+  }
+
+  /** Follow the score's key: glide the drone to a new root (semitones from A). */
+  setRoot(root: number): void {
+    if (root === this.root) return;
+    this.root = root;
+    const t = this.ctx.currentTime;
+    for (const v of this.voices) v.o.frequency.setTargetAtTime(v.freq * Math.pow(2, root / 12), t, 1.5);
   }
 
   update(dt: number, s: AmbienceState): void {

@@ -366,6 +366,7 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .vol { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #c6cceb; }
 .vol span { width: 72px; }
 .vol input { flex: 1; accent-color: var(--accent); padding: 0; }
+.vol select { flex: 1; min-width: 0; }
 @media (max-width: 720px) { .vols { grid-template-columns: 1fr; } }
 
 .actions button.aiming { background: rgba(255, 60, 172, 0.35); border-color: #ff3cac; }
