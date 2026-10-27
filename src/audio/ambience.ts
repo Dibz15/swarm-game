@@ -1,3 +1,5 @@
+import { PAUSE } from './music';
+
 export interface AmbienceState {
   /** 0..1 how much fighting is near the camera */
   tension: number;
@@ -8,6 +10,8 @@ export interface AmbienceState {
   inGame: boolean;
   /** 0..1 how much music is playing; the drone steps back under it */
   music: number;
+  /** paused mid-match: muffled along with the music */
+  paused: boolean;
 }
 
 /** Lowpass ceiling: the LFO adds up to ±60 Hz on top. */
@@ -83,12 +87,14 @@ export class Ambience {
 
     const base = s.inGame ? 0.05 : 0.035;
     const duck = 1 - 0.45 * s.music;
-    this.droneGain.gain.setTargetAtTime(base * this.level * duck * (1 + s.tension * 0.8), t, 0.8);
-    this.filter.frequency.setTargetAtTime(Math.min(MAX_CUTOFF, 320 + s.tension * 300 + s.escalation * 80), t, 0.9);
+    const hush = s.paused ? PAUSE.level : 1;
+    this.droneGain.gain.setTargetAtTime(base * this.level * duck * hush * (1 + s.tension * 0.8), t, s.paused ? 0.25 : 0.8);
+    const cutoff = Math.min(MAX_CUTOFF, 320 + s.tension * 300 + s.escalation * 80);
+    this.filter.frequency.setTargetAtTime(s.paused ? Math.min(cutoff, PAUSE.cutoff * 0.6) : cutoff, t, s.paused ? 0.12 : 0.9);
     this.dissonance.gain.setTargetAtTime(s.danger * 0.34, t, 0.6);
 
     // Heartbeat once escalation starts; faster with tension.
-    if (s.inGame && s.escalation > 0) {
+    if (s.inGame && s.escalation > 0 && !s.paused) {
       const bpm = 64 + 34 * s.escalation + 20 * s.tension;
       if (this.time >= this.nextBeat) {
         const vol = 0.14 + 0.18 * s.escalation;

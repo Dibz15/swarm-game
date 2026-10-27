@@ -605,7 +605,7 @@ export class AudioEngine {
 
     this.tension += (Math.min(1, this.nearLevel * 0.8 + this.farLevel * 0.35 + danger * 0.35) - this.tension) * (1 - Math.exp(-dt * 0.8));
     const musicOn = mode === 'ended' || this.muted ? 0 : Math.min(1, this.volumes.music * 1.5);
-    this.ambience?.update(dt, { tension: this.tension, danger, escalation: escal, inGame: human >= 0, music: musicOn });
+    this.ambience?.update(dt, { tension: this.tension, danger, escalation: escal, inGame: human >= 0, music: musicOn, paused: mode === 'paused' });
     this.music?.update(dt, { mode, tension: this.tension, danger, escalation: escal, domination: dom });
   }
 }

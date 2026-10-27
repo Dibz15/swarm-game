@@ -23,6 +23,8 @@ export interface MusicState {
 type Mood = 'calm' | 'tense' | 'drive';
 
 const BPM = 88;
+/** Paused mid-match: music (and the ambience drone) go dull and quiet. */
+export const PAUSE = { cutoff: 260, level: 0.45 };
 const STEP = 60 / BPM / 4; // one 16th note
 const LOOKAHEAD = 0.15;
 
@@ -147,10 +149,13 @@ export class Music {
     set(this.layers.lead, (1 - smooth(0.25, 0.55, m)) * 0.9);
     this.padFilter.frequency.setTargetAtTime(700 + m * 1600, t, 1.5);
 
-    const outLevel = s.mode === 'ended' ? 0 : s.mode === 'paused' ? 0.55 : 1;
-    const muffle = s.mode === 'paused' ? 650 : 20000;
-    for (const g of [this.out, this.leadOut]) g.gain.setTargetAtTime(outLevel, t, s.mode === 'ended' ? 0.6 : 1.5);
-    for (const f of [this.filter, this.leadFilter]) f.frequency.setTargetAtTime(muffle, t, 0.3);
+    // Paused: muffled as if heard through a wall. The score sits mostly below
+    // 1 kHz, so the cutoff has to reach well into it to be heard.
+    const paused = s.mode === 'paused';
+    const outLevel = s.mode === 'ended' ? 0 : paused ? PAUSE.level : 1;
+    const muffle = paused ? PAUSE.cutoff : 20000;
+    for (const g of [this.out, this.leadOut]) g.gain.setTargetAtTime(outLevel, t, s.mode === 'ended' ? 0.6 : 0.25);
+    for (const f of [this.filter, this.leadFilter]) f.frequency.setTargetAtTime(muffle, t, paused ? 0.12 : 0.3);
   }
 
   // ---- sequencing ----------------------------------------------------------
