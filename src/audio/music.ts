@@ -23,6 +23,8 @@ export interface MusicState {
 type Mood = 'calm' | 'tense' | 'drive';
 
 const BPM = 88;
+/** Paused mid-match: music (and the ambience drone) go dull and quiet. */
+export const PAUSE = { cutoff: 260, level: 0.45 };
 const STEP = 60 / BPM / 4; // one 16th note
 const LOOKAHEAD = 0.15;
 
@@ -52,6 +54,9 @@ const smooth = (a: number, b: number, x: number) => {
 export class Music {
   private out: GainNode;
   private filter: BiquadFilterNode;
+  /** the lead's reverb send, muffled and dimmed with the dry signal */
+  private leadFilter: BiquadFilterNode;
+  private leadOut: GainNode;
   private layers: Record<'pad' | 'arp' | 'bass' | 'drums' | 'lead', GainNode>;
   private padFilter: BiquadFilterNode;
   private noise: AudioBuffer;
@@ -101,10 +106,16 @@ export class Music {
     echo.connect(echoTone).connect(fb).connect(echo);
     echoTone.connect(this.filter);
 
-    // Lead sits mostly in the reverb.
+    // Lead sits mostly in the reverb. Its send is taken before the main
+    // filter, so it gets its own copy of the pause muffle and level.
     const leadSend = ctx.createGain();
     leadSend.gain.value = 0.55;
-    this.layers.lead.connect(leadSend).connect(reverb);
+    this.leadFilter = ctx.createBiquadFilter();
+    this.leadFilter.type = 'lowpass';
+    this.leadFilter.frequency.value = 20000;
+    this.leadOut = ctx.createGain();
+    this.leadOut.gain.value = 0;
+    this.layers.lead.connect(leadSend).connect(this.leadFilter).connect(this.leadOut).connect(reverb);
 
     const len = ctx.sampleRate;
     this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -138,9 +149,13 @@ export class Music {
     set(this.layers.lead, (1 - smooth(0.25, 0.55, m)) * 0.9);
     this.padFilter.frequency.setTargetAtTime(700 + m * 1600, t, 1.5);
 
-    const outLevel = s.mode === 'ended' ? 0 : s.mode === 'paused' ? 0.55 : 1;
-    this.out.gain.setTargetAtTime(outLevel, t, s.mode === 'ended' ? 0.6 : 1.5);
-    this.filter.frequency.setTargetAtTime(s.mode === 'paused' ? 650 : 20000, t, 0.3);
+    // Paused: muffled as if heard through a wall. The score sits mostly below
+    // 1 kHz, so the cutoff has to reach well into it to be heard.
+    const paused = s.mode === 'paused';
+    const outLevel = s.mode === 'ended' ? 0 : paused ? PAUSE.level : 1;
+    const muffle = paused ? PAUSE.cutoff : 20000;
+    for (const g of [this.out, this.leadOut]) g.gain.setTargetAtTime(outLevel, t, s.mode === 'ended' ? 0.6 : 0.25);
+    for (const f of [this.filter, this.leadFilter]) f.frequency.setTargetAtTime(muffle, t, paused ? 0.12 : 0.3);
   }
 
   // ---- sequencing ----------------------------------------------------------
