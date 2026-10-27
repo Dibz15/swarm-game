@@ -53,7 +53,7 @@ for (const pers of PERSONALITIES as readonly Personality[]) {
         events: EVENTS,
         players: [0, 1].map((i) => (i === proxySeat ? { faction: i, team: i, human: true } : { faction: i, team: i, human: false, bot: { difficulty, personality: pers } })),
       });
-      const proxy = new Proxy(proxySeat);
+      const proxy = new Proxy(proxySeat, { knobs: process.env.PROXY ? JSON.parse(process.env.PROXY) : {} });
       const botF = 1 - proxySeat;
       const firsts = [[-1, -1], [-1, -1]];
       const peaks = [0, 0];
