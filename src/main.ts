@@ -123,6 +123,7 @@ class App {
   private showMenu(): void {
     this.endGame();
     this.startDemo();
+    this.sfx.useTheme(null);
     this.setModal(null);
     const menu = mainMenu({
       skirmish: () => this.showSkirmish(),
@@ -330,6 +331,7 @@ class App {
     this.quick = null;
     const record = opts.record !== false && recordingEnabled();
     this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null);
+    this.sfx.useTheme(setup.seed);
     this.input.game = this.game;
     this.input.enabled = true;
     this.input.reset();

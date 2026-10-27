@@ -33,6 +33,7 @@ Dev URL flags:
 - `?debug` shows the fps / sim-ms overlay (press `` ` `` to toggle it) and exposes the app as `window.swarm` for console poking.
 - `?bench=5000` runs a stress battle with about 5,000 units.
 - `?eventdemo` starts a small match where the wild swarm, a supply drop and the Colossus all arrive in the first seconds.
+- `?theme=<id>` forces one music theme everywhere, to audition it (ids in `src/audio/themes.ts`, e.g. `f-lydian`). Settings > Sound > Theme does the same without the URL, and with `?debug` you can call `swarm.sfx.setTheme(id)`.
 
 ### Working offline
 Everything for day-to-day work runs without a network:
