@@ -2,7 +2,9 @@ import { PERSONALITIES } from '../sim/ai/bot';
 import type { EventLevel } from '../sim/mapgen';
 import { Rng } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
-import { MILITIA, fighters, veteran } from './broods';
+import { TICK_HZ } from '../sim/constants';
+import type { World } from '../sim/world';
+import { MILITIA, fighters, veteran, type BattleReport } from './broods';
 import { modsFor } from './rewards';
 import { maxFielded, pressure, type RunState } from './run';
 
@@ -63,4 +65,12 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
 export function bloomLabel(run: RunState, id: number): string {
   const p = run.nodes[id].kind === 'finale' ? 1 : pressure(run, id);
   return p > 0.66 ? 'Bloom close: wild swarms' : p > 0.2 ? 'Bloom nearing' : 'Bloom far';
+}
+
+/** How a battle ended for the run: the human's survivors by kind, nests fully held, time. */
+export function battleReport(w: World, human: number, won: boolean): BattleReport {
+  const survivors = [0, 0, 0, 0];
+  for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === human && w.kind[i] < survivors.length) survivors[w.kind[i]]++;
+  const nests = w.nests.filter((n) => n.owner === human && n.control >= 1).length;
+  return { won, survivors, nests, seconds: w.tick / TICK_HZ };
 }
