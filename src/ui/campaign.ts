@@ -357,11 +357,23 @@ export function runHub(
       </div>`);
     row.querySelector('.thumb-slot')!.appendChild(thumbnail(run));
     row.querySelector('[data-a=resume]')!.addEventListener('click', () => h.resume(run));
-    row.querySelector('[data-a=delete]')!.addEventListener('click', () => {
-      if (confirm(`Delete the run "${run.seedText}"? This can't be undone.`)) {
+    // Confirm in place: browser dialogs are silently blocked in some webviews.
+    const del = row.querySelector('[data-a=delete]') as HTMLButtonElement;
+    let armed = 0;
+    del.addEventListener('click', () => {
+      if (armed) {
+        clearTimeout(armed);
         sfx.runDelete();
         h.remove(run);
+        return;
       }
+      del.textContent = 'Confirm delete';
+      del.classList.add('danger');
+      armed = window.setTimeout(() => {
+        armed = 0;
+        del.textContent = 'Delete';
+        del.classList.remove('danger');
+      }, 3000);
     });
     list.appendChild(row);
   }
@@ -411,18 +423,30 @@ export function runMap(
         <header>
           <div class="run-title"><b>${esc(run.seedText)}</b><span>Turn ${run.turn}</span></div>
           <div class="run-stats">${lives(run)}<span class="biomass">${run.biomass} biomass</span></div>
-          <button class="small" data-a="leave">Campaign</button>
+          <button class="small" data-a="leave">← All runs</button>
         </header>
-        <div class="map-wrap"><canvas></canvas></div>
-        <aside class="preview"></aside>
+        <div class="map-wrap">
+          <canvas></canvas>
+          <p class="map-hint">Tap a highlighted territory next to your swarm. Each move is a battle, then the Bloom advances. Drag to look around.</p>
+          <div class="node-veil" hidden><div class="card node-card" role="dialog"></div></div>
+        </div>
       </div>
     </div>`);
   const c = m.querySelector('canvas') as HTMLCanvasElement;
-  const panel = m.querySelector('.preview') as HTMLElement;
+  const veil = m.querySelector('.node-veil') as HTMLElement;
+  const panel = m.querySelector('.node-card') as HTMLElement;
+  // Tapping off the card closes it.
+  veil.addEventListener('pointerdown', (e) => {
+    if (e.target === veil) close();
+  });
+  const close = () => {
+    selected = null;
+    veil.hidden = true;
+  };
   m.querySelector('[data-a=leave]')!.addEventListener('click', h.leave);
 
   const open = moves(run);
-  let selected: number | null = open.length === 1 ? open[0] : null;
+  let selected: number | null = null;
   let hover: number | null = null;
   let view: View = { s: 1, ox: 0, oy: 0 };
   const fresh = new Set(intro?.fresh ?? []);
@@ -430,14 +454,8 @@ export function runMap(
   let swallowSounded = false;
 
   const preview = () => {
-    if (run.status !== 'active') {
-      panel.innerHTML = '';
-      return;
-    }
-    if (selected === null) {
-      panel.innerHTML = `<p class="hint">Pick a highlighted territory next to your swarm. Each move is a battle, and then the Bloom advances.</p>`;
-      return;
-    }
+    veil.hidden = selected === null || run.status !== 'active';
+    if (veil.hidden || selected === null) return;
     const n = run.nodes[selected];
     const canGo = open.includes(n.id);
     const taken = run.visited.includes(n.id);
@@ -454,11 +472,13 @@ export function runMap(
     const status = n.id === run.at ? 'Your swarm is here.' : dead ? 'Lost to the Bloom.' : taken ? 'Taken: march through without a battle.' : canGo ? '' : 'Not next to your swarm.';
     const verb = !canGo ? null : needsBattle(run, n.id) ? 'Fight' : 'March';
     panel.innerHTML = `
+      <button class="icon close" data-a="close" aria-label="Close">✕</button>
       <h3>${KIND_LABEL[n.kind]}</h3>
       <p>${KIND_TEXT[n.kind]}</p>
       ${rows.length ? `<dl>${rows.join('')}</dl>` : ''}
       ${status ? `<p class="hint">${status}</p>` : ''}
       ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}`;
+    panel.querySelector('[data-a=close]')!.addEventListener('click', close);
     panel.querySelector('[data-a=go]')?.addEventListener('click', () => {
       sfx.march();
       h.go(n.id);
