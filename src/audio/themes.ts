@@ -9,6 +9,8 @@
  * the player something.
  */
 
+import type { Voicing } from './styles';
+
 export type Mood = 'calm' | 'tense' | 'drive';
 
 export interface Theme {
@@ -26,8 +28,10 @@ export interface Theme {
    * s sus4. Without one, the triad is stacked in thirds inside the mode.
    */
   prog: Record<Mood, { chords: string[]; bars: number }>;
-  /** arpeggio walk over chord tones (3 = root an octave up) */
+  /** arpeggio walk over chord tones (3 = root an octave up); overrides the style's */
   arp?: number[];
+  /** how it's played (styles.ts); default 'pulse' */
+  style?: string;
 }
 
 const MODES = {
@@ -39,8 +43,6 @@ const MODES = {
   aeolian: [0, 2, 3, 5, 7, 8, 10],
   harmonic: [0, 2, 3, 5, 7, 8, 11],
 };
-
-export const DEFAULT_ARP = [0, 1, 2, 3, 2, 1, 0, 2];
 
 export const THEMES: Theme[] = [
   {
@@ -77,6 +79,7 @@ export const THEMES: Theme[] = [
     scale: MODES.phrygian,
     lead: [0, 1, 2, 4, 5],
     bpm: 84,
+    style: 'ritual',
     prog: {
       calm: { chords: ['1', '2', '1', '7'], bars: 2 },
       tense: { chords: ['1', '4', '2', '5M'], bars: 2 },
@@ -89,13 +92,13 @@ export const THEMES: Theme[] = [
     root: 2,
     scale: MODES.harmonic,
     lead: [0, 2, 3, 4, 5],
-    bpm: 82,
+    bpm: 88,
+    style: 'waltz',
     prog: {
       calm: { chords: ['1', '6', '4', '5m'], bars: 2 },
       tense: { chords: ['1', '4', '6', '5'], bars: 2 },
       drive: { chords: ['1', '4', '6', '5'], bars: 1 },
     },
-    arp: [0, 1, 2, 1, 3, 2, 1, 2],
   },
   {
     id: 'd-major',
@@ -117,12 +120,12 @@ export const THEMES: Theme[] = [
     scale: MODES.lydian,
     lead: [0, 1, 2, 3, 4, 5],
     bpm: 86,
+    style: 'glide',
     prog: {
       calm: { chords: ['1', '2', '3', '2'], bars: 2 },
       tense: { chords: ['6', '2', '4', '3M'], bars: 2 },
       drive: { chords: ['1', '2', '6', '3M'], bars: 1 },
     },
-    arp: [0, 2, 3, 2, 1, 2, 3, 1],
   },
   {
     id: 'd-mixolydian',
@@ -131,6 +134,7 @@ export const THEMES: Theme[] = [
     scale: MODES.mixolydian,
     lead: [0, 1, 2, 4, 6],
     bpm: 100,
+    style: 'motorik',
     prog: {
       calm: { chords: ['1', '7', '4', '1'], bars: 2 },
       tense: { chords: ['1', '5', '7', '5M'], bars: 2 },
@@ -217,6 +221,24 @@ export function chord(theme: Theme, sym: string): number[] {
   else if (m[2] === 's') tones = [r, r + 5, r + 7];
   else tones = [r, step(theme, d + 2), step(theme, d + 4)];
   return r > 7 ? tones.map((s) => s - 12) : tones;
+}
+
+/**
+ * A chord voiced for the pad (and walked by the arpeggio): open drops the
+ * third for a bare fifth and octave; seventh and add9 stack one more note.
+ */
+export function voiced(theme: Theme, sym: string, voicing: Voicing): number[] {
+  const tones = chord(theme, sym);
+  const r = tones[0];
+  if (voicing === 'open') return [r, r + 7, r + 12];
+  if (voicing === 'add9') return [...tones, r + 14];
+  if (voicing === 'seventh') {
+    // Plain degrees take the mode's own seventh; forced chords a minor seventh.
+    const d = Number(sym[0]) - 1;
+    const seventh = sym.length === 1 ? step(theme, d + 6) - step(theme, d) : 10;
+    return [...tones, r + seventh];
+  }
+  return tones;
 }
 
 /** Lead notes as semitones from the root, one octave. */
