@@ -7,6 +7,7 @@ import type { World } from '../sim/world';
 import { NEUTRAL } from '../sim/constants';
 import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
+import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
 import { MISSIONS, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
@@ -316,6 +317,10 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
       <div class="vols">
         ${vol('master', 'Master')}${vol('sfx', 'Effects')}${vol('ambience', 'Ambience')}${vol('music', 'Music')}
       </div>
+      <label class="vol"><span>Theme</span><select data-a="theme">
+        <option value="auto">Varied (one per match)</option>
+        ${THEMES.map((t) => `<option value="${t.id}">${t.name}</option>`).join('')}
+      </select></label>
       <h3>Recording</h3>
       <label class="check"><input type="checkbox" data-a="rec"> Record my games (stays on this device)</label>
       <div class="row rec-actions">
@@ -338,6 +343,9 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
   m.querySelectorAll<HTMLInputElement>('[data-vol]').forEach((inp) =>
     inp.addEventListener('input', () => audio.setVolume(inp.dataset.vol as VolumeKind, Number(inp.value) / 100)),
   );
+  const theme = m.querySelector('[data-a=theme]') as HTMLSelectElement;
+  theme.value = audio.themePin;
+  theme.addEventListener('change', () => audio.setTheme(theme.value));
   const rec = m.querySelector('[data-a=rec]') as HTMLInputElement;
   const count = m.querySelector('.rec-count') as HTMLSpanElement;
   const dl = m.querySelector('[data-a=rec-dl]') as HTMLButtonElement;
