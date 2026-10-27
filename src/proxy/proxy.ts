@@ -55,6 +55,10 @@ export interface ProxyKnobs {
   defend: number;
   /** energy at which any fight gets a Surge (recordings bank about 55 after 30 s) */
   dumpAt: number;
+  /** a rival this many nests short of the domination share becomes the main target */
+  domWatch: number;
+  /** in an FFA, how strongly to leave weaker rivals alone (0: no preference) */
+  buffer: number;
 }
 
 /** Tuned to the recordings (see the module comment). */
@@ -74,6 +78,8 @@ export const EXPERT: ProxyKnobs = {
   border: 420,
   defend: 1.2,
   dumpAt: 80,
+  domWatch: 3,
+  buffer: 0,
 };
 
 /** Knobs for a player of `skill` (1: like the recordings, 0: a struggling beginner). */
@@ -259,28 +265,47 @@ export class Proxy {
       const need = Math.ceil(w.nests.length * w.domShare);
       const held = new Map<number, number>();
       for (const n of w.nests) if (n.owner >= 0) held.set(w.teamOf[n.owner], (held.get(w.teamOf[n.owner]) ?? 0) + 1);
+      // A rival nearing the domination share is everyone's problem: like the
+      // recorded human, raid its nests to keep it under the line.
+      const leaders = new Set<number>();
+      let racing = false;
+      for (const [team, k] of held) {
+        if (team === w.teamOf[me] || k < need - this.k.domWatch) continue;
+        leaders.add(team);
+        if (k >= need) racing = true;
+      }
+      // In an FFA, weak rivals are buffers that soak up the strong one: lean on the strongest.
+      let most = 0, rivals = 0;
+      for (const [team, k] of held) {
+        if (team === w.teamOf[me] || team === w.teamOf[NEUTRAL]) continue;
+        rivals++;
+        most = Math.max(most, k);
+      }
       let best = -Infinity;
       for (const n of w.nests) {
         if (n.owner === me || (n.owner >= 0 && w.teamOf[n.owner] === w.teamOf[me])) continue;
         const enemy = this.hostile(w, n.owner);
+        const leader = enemy && leaders.has(w.teamOf[n.owner]);
         // Without the upper hand overall, a push must beat the enemy army nearby too.
         let scout = this.k.scout;
         if (enemy) {
-          if (bled) continue;
+          if (bled && !leader) continue;
           const ahead = mySize >= weight[n.owner] * this.k.counter;
           if (!ahead) {
-            const urgent = (held.get(w.teamOf[n.owner]) ?? 0) >= need - 1;
             const border = mine.some((m) => (m.x - n.x) ** 2 + (m.y - n.y) ** 2 < this.k.border ** 2);
-            if (!urgent && !border) continue;
+            if (!leader && !border) continue;
             scout = this.k.scoutBehind;
           }
-          // In an FFA, leave nests a third party is already fighting over.
-          if (n.contested && !this.closeTo(w, n, blob)) continue;
+          // In an FFA, leave nests a third party is already fighting over (not the leader's).
+          if (n.contested && !leader && !this.closeTo(w, n, blob)) continue;
         }
         const def = this.defense(w, n, scout);
         if (def * this.k.margin + 3 > blob.length) continue;
         const dist = Math.sqrt((n.x - bx) ** 2 + (n.y - by) ** 2);
         let score = (enemy ? 1.15 : 1) / (1 + dist / 350) / (def + 4);
+        if (leader) score *= racing ? 8 : 3;
+        else if (racing) score *= 0.3;
+        if (enemy && rivals > 1) score *= ((held.get(w.teamOf[n.owner]) ?? 0) / Math.max(1, most)) ** this.k.buffer;
         if (n.id === this.goal) score *= 1.4;
         if (score > best) {
           best = score;
