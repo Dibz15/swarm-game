@@ -5,7 +5,7 @@
 
 import type { AudioEngine } from '../audio/engine';
 import { bloomLabel, nodeSetup } from '../campaign/battle';
-import { MAP_H, MAP_W, frontShape, moves, needsBattle, type RunNode, type RunState } from '../campaign/run';
+import { MAP_H, MAP_W, frontShape, moves, needsBattle, revealed, type RunNode, type RunState } from '../campaign/run';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
 import { DIFFICULTY_NAMES } from '../sim/ai/bot';
@@ -56,10 +56,80 @@ interface View {
   oy: number;
 }
 
-function fit(cw: number, ch: number): View {
+/** Where the map is looked at from: a point in map space and a zoom over "whole map fits". */
+export interface Cam {
+  cx: number;
+  cy: number;
+  zoom: number;
+}
+
+const ZOOM_MAX = 4;
+/** the default zoom shows about this much of the map's width */
+const VIEW_SPAN = 520;
+
+function fitScale(cw: number, ch: number): number {
   const pad = 40;
-  const s = Math.min(cw / (MAP_W + pad * 2), ch / (MAP_H + pad * 2));
-  return { s, ox: (cw - MAP_W * s) / 2, oy: (ch - MAP_H * s) / 2 };
+  return Math.min(cw / (MAP_W + pad * 2), ch / (MAP_H + pad * 2));
+}
+
+/** The view for a camera, clamping it so the map can't be dragged away. */
+function camView(cw: number, ch: number, cam: Cam): View {
+  cam.zoom = Math.max(1, Math.min(ZOOM_MAX, cam.zoom));
+  const s = fitScale(cw, ch) * cam.zoom;
+  const clamp = (c: number, size: number, span: number) => {
+    const half = span / s / 2;
+    return half * 2 >= size + 80 ? size / 2 : Math.max(half - 40, Math.min(size + 40 - half, c));
+  };
+  cam.cx = clamp(cam.cx, MAP_W, cw);
+  cam.cy = clamp(cam.cy, MAP_H, ch);
+  return { s, ox: cw / 2 - cam.cx * s, oy: ch / 2 - cam.cy * s };
+}
+
+/** Start zoomed in on the swarm, looking a little ahead toward the heart. */
+function homeCam(run: RunState, cw: number, ch: number): Cam {
+  const n = run.nodes[run.at];
+  return { cx: n.x + 90, cy: n.y, zoom: cw / VIEW_SPAN / fitScale(cw, ch) };
+}
+
+/** Nebula over the parts of the map you haven't reached, cut away around what you know. */
+let fogCanvas: HTMLCanvasElement | null = null;
+function drawFog(g: CanvasRenderingContext2D, run: RunState, known: Set<number>, v: View, cw: number, ch: number, time: number, u: number): void {
+  const f = (fogCanvas ??= document.createElement('canvas'));
+  if (f.width !== cw || f.height !== ch) {
+    f.width = cw;
+    f.height = ch;
+  }
+  const fg = f.getContext('2d')!;
+  fg.globalCompositeOperation = 'source-over';
+  fg.clearRect(0, 0, cw, ch);
+  fg.fillStyle = 'rgba(9, 10, 24, 0.94)';
+  fg.fillRect(0, 0, cw, ch);
+  // Slow-drifting clouds of colour in the nebula.
+  for (let k = 0; k < 18; k++) {
+    const x = ((k * 7907 + run.seed) % 1100) - 50 + Math.sin(time * 0.05 + k) * 30;
+    const y = ((k * 3571 + run.seed * 7) % 720) - 50 + Math.cos(time * 0.04 + k * 2) * 20;
+    const r = (140 + (k % 5) * 40) * v.s;
+    const px = v.ox + x * v.s, py = v.oy + y * v.s;
+    const grad = fg.createRadialGradient(px, py, 0, px, py, r);
+    const hue = k % 3 === 0 ? '90, 60, 170' : k % 3 === 1 ? '40, 90, 150' : '120, 40, 120';
+    grad.addColorStop(0, `rgba(${hue}, 0.22)`);
+    grad.addColorStop(1, `rgba(${hue}, 0)`);
+    fg.fillStyle = grad;
+    fg.fillRect(px - r, py - r, r * 2, r * 2);
+  }
+  // Clear windows around every known node.
+  fg.globalCompositeOperation = 'destination-out';
+  for (const id of known) {
+    const n = run.nodes[id];
+    const px = v.ox + n.x * v.s, py = v.oy + n.y * v.s;
+    const r = Math.max(110 * v.s, 40 * u);
+    const grad = fg.createRadialGradient(px, py, r * 0.35, px, py, r);
+    grad.addColorStop(0, 'rgba(0, 0, 0, 1)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    fg.fillStyle = grad;
+    fg.fillRect(px - r, py - r, r * 2, r * 2);
+  }
+  g.drawImage(f, 0, 0);
 }
 
 function star(g: CanvasRenderingContext2D, x: number, y: number, r: number): void {
@@ -76,7 +146,7 @@ function star(g: CanvasRenderingContext2D, x: number, y: number, r: number): voi
 function drawMap(
   c: HTMLCanvasElement,
   run: RunState,
-  opts: { front: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean },
+  opts: { front: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam },
 ): View {
   const dpr = window.devicePixelRatio || 1;
   const cw = c.clientWidth * dpr, ch = c.clientHeight * dpr;
@@ -85,10 +155,12 @@ function drawMap(
     c.height = ch;
   }
   const g = c.getContext('2d')!;
-  const v = fit(cw, ch);
+  const v = camView(cw, ch, opts.cam ?? { cx: MAP_W / 2, cy: MAP_H / 2, zoom: 1 });
   const X = (x: number) => v.ox + x * v.s, Y = (y: number) => v.oy + y * v.s;
   const u = opts.thumb ? dpr * 0.35 : dpr; // pixel unit
+  const known = revealed(run);
   g.clearRect(0, 0, cw, ch);
+  if (!opts.thumb) drawFog(g, run, known, v, cw, ch, opts.time, u);
 
   // The Bloom: everything left of the front.
   const b = run.bloom;
@@ -133,8 +205,9 @@ function drawMap(
 
   // Links.
   for (const n of run.nodes) {
+    if (!known.has(n.id)) continue;
     for (const l of n.links) {
-      if (l < n.id) continue;
+      if (l < n.id || !known.has(l)) continue;
       const fromHere = (n.id === run.at && open.has(l)) || (l === run.at && open.has(n.id));
       const dead = isSwallowed(n.id) || isSwallowed(l);
       g.strokeStyle = fromHere ? me : dead ? 'rgba(160, 70, 140, 0.25)' : 'rgba(150, 170, 255, 0.28)';
@@ -149,8 +222,9 @@ function drawMap(
   }
   g.setLineDash([]);
 
-  // Nodes.
+  // Nodes you know about. The heart shows through the fog as a beacon.
   for (const n of run.nodes) {
+    if (!known.has(n.id) && n.id !== run.heart) continue;
     const x = X(n.x), y = Y(n.y);
     const r = (n.kind === 'finale' ? 17 : 12) * u;
     const taken = run.visited.includes(n.id);
@@ -166,6 +240,14 @@ function drawMap(
       g.beginPath();
       g.arc(x, y, r * (2.6 - 1.6 * opts.freshT), 0, Math.PI * 2);
       g.stroke();
+    }
+    if (n.kind === 'finale' && !opts.thumb) {
+      // The heart pulses through the fog: the goal is always in sight.
+      const glow = g.createRadialGradient(x, y, 0, x, y, r * 3.2);
+      glow.addColorStop(0, `rgba(192, 74, 154, ${0.35 + 0.2 * pulse})`);
+      glow.addColorStop(1, 'rgba(192, 74, 154, 0)');
+      g.fillStyle = glow;
+      g.fillRect(x - r * 3.2, y - r * 3.2, r * 6.4, r * 6.4);
     }
     if (here || canGo || n.id === opts.selected) {
       g.fillStyle = here ? me : '#ffffff';
@@ -384,13 +466,18 @@ export function runMap(
   };
   preview();
 
-  const pick = (e: PointerEvent): number | null => {
+  const dpr = () => window.devicePixelRatio || 1;
+  const local = (e: { clientX: number; clientY: number }) => {
     const r = c.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const px = (e.clientX - r.left) * dpr, py = (e.clientY - r.top) * dpr;
-    let best: number | null = null, bestD = (30 * dpr) ** 2;
+    return { x: (e.clientX - r.left) * dpr(), y: (e.clientY - r.top) * dpr() };
+  };
+  const known = revealed(run);
+  const pick = (e: PointerEvent): number | null => {
+    const p = local(e);
+    let best: number | null = null, bestD = (30 * dpr()) ** 2;
     for (const n of run.nodes) {
-      const d = (view.ox + n.x * view.s - px) ** 2 + (view.oy + n.y * view.s - py) ** 2;
+      if (!known.has(n.id)) continue;
+      const d = (view.ox + n.x * view.s - p.x) ** 2 + (view.oy + n.y * view.s - p.y) ** 2;
       if (d < bestD) {
         bestD = d;
         best = n.id;
@@ -398,20 +485,88 @@ export function runMap(
     }
     return best;
   };
-  c.addEventListener('pointermove', (e) => {
-    if (e.pointerType !== 'mouse') return;
-    const n = pick(e);
-    if (n !== hover && n !== null) sfx.mapHover();
-    hover = n;
-    c.style.cursor = n !== null ? 'pointer' : '';
-  });
+
+  // Camera: one finger or the mouse drags the map, a tap selects, the wheel
+  // or a pinch zooms. Starts zoomed in on the swarm.
+  let cam: Cam | null = null;
+  const zoomAt = (px: number, py: number, factor: number) => {
+    if (!cam) return;
+    // Keep the map point under (px, py) where it is.
+    const mx = (px - view.ox) / view.s, my = (py - view.oy) / view.s;
+    cam.zoom *= factor;
+    const v = camView(c.width, c.height, cam);
+    cam.cx += mx - (px - v.ox) / v.s;
+    cam.cy += my - (py - v.oy) / v.s;
+  };
+  const pointers = new Map<number, { x: number; y: number }>();
+  let dragged = false;
+  let downAt = { x: 0, y: 0 };
+  let pinch = 0;
   c.addEventListener('pointerdown', (e) => {
+    c.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, local(e));
+    if (pointers.size === 1) {
+      dragged = false;
+      downAt = local(e);
+    } else {
+      dragged = true;
+      const [a, b] = [...pointers.values()];
+      pinch = Math.hypot(a.x - b.x, a.y - b.y);
+    }
+  });
+  c.addEventListener('pointermove', (e) => {
+    const p = local(e);
+    const prev = pointers.get(e.pointerId);
+    if (!prev) {
+      if (e.pointerType !== 'mouse') return;
+      const n = pick(e);
+      if (n !== hover && n !== null) sfx.mapHover();
+      hover = n;
+      c.style.cursor = n !== null ? 'pointer' : 'grab';
+      return;
+    }
+    pointers.set(e.pointerId, p);
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinch);
+      pinch = d;
+      return;
+    }
+    if (!dragged && Math.hypot(p.x - downAt.x, p.y - downAt.y) < 8 * dpr()) return;
+    dragged = true;
+    c.style.cursor = 'grabbing';
+    if (cam) {
+      cam.cx -= (p.x - prev.x) / view.s;
+      cam.cy -= (p.y - prev.y) / view.s;
+    }
+  });
+  const up = (e: PointerEvent) => {
+    if (!pointers.delete(e.pointerId)) return;
+    if (pointers.size > 0) return;
+    c.style.cursor = '';
+    pinch = 0;
+    if (dragged) return;
     const n = pick(e);
     if (n === null || n === selected) return;
     selected = n;
     sfx.mapSelect();
     preview();
+  };
+  c.addEventListener('pointerup', up);
+  c.addEventListener('pointercancel', (e) => {
+    pointers.delete(e.pointerId);
+    pinch = 0;
   });
+  c.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const p = local(e);
+      zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0015));
+    },
+    { passive: false },
+  );
 
   // The Bloom's advance plays when the map opens after a turn.
   const ANIM = 1.4;
@@ -431,7 +586,8 @@ export function runMap(
       swallowSounded = true;
       [...fresh].forEach((_, i) => sfx.swallow(i));
     }
-    view = drawMap(c, run, { front, selected, hover, time, fresh, freshT });
+    if (!cam && c.clientWidth > 0) cam = homeCam(run, c.clientWidth * dpr(), c.clientHeight * dpr());
+    view = drawMap(c, run, { front, selected, hover, time, fresh, freshT, cam: cam ?? undefined });
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

@@ -337,6 +337,19 @@ export function resolveTurn(run: RunState, id: number, won: boolean, now = Date.
   return fresh;
 }
 
+/**
+ * Nodes you know about: the ones you've taken and their neighbours. The rest
+ * of the map is fogged until you get there (the heart is always marked).
+ */
+export function revealed(run: RunState): Set<number> {
+  const out = new Set<number>();
+  for (const v of run.visited) {
+    out.add(v);
+    for (const l of run.nodes[v].links) out.add(l);
+  }
+  return out;
+}
+
 /** 0..1: how close the front is to a node (1 = it falls next turn). Drives battle events. */
 export function pressure(run: RunState, id: number): number {
   const n = run.nodes[id];
