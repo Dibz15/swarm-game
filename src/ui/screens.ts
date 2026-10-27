@@ -558,6 +558,8 @@ interface Scenario {
   size: MapSize;
   caves: CaveLevel;
   bots: (Personality | 'random')[];
+  /** nest share that wins by domination, if not the size's usual one (campaign domination nodes use 0.5) */
+  domShare?: number;
 }
 
 const SCENARIOS: Scenario[] = [
@@ -566,6 +568,7 @@ const SCENARIOS: Scenario[] = [
   { name: '1v1 on Caves', seed: 'rec-caves', size: 'small', caves: 'full', bots: ['random'] },
   { name: '1v1 on Cave belt', seed: 'rec-belt', size: 'small', caves: 'belt', bots: ['random'] },
   { name: '6 players, large', seed: 'rec-ffa-6', size: 'large', caves: 'off', bots: ['random', 'random', 'random', 'random', 'random'] },
+  { name: '3-player FFA, domination', seed: 'rec-dom-3', size: 'medium', caves: 'off', bots: ['random', 'random'], domShare: 0.5 },
 ];
 
 export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) => void, onBack: () => void): HTMLDivElement {
@@ -808,7 +811,9 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
       prefs.bots[prefs.bots.length - 1].team = 1;
     }
     savePrefs(prefs);
-    onStart(buildSetup(prefs, seedInput.value), scenario?.name);
+    const setup = buildSetup(prefs, seedInput.value);
+    if (scenario?.domShare) setup.domShare = scenario.domShare;
+    onStart(setup, scenario?.name);
   });
 
   render();

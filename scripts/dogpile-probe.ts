@@ -53,7 +53,7 @@ for (let g = 0; g < games; g++) {
       i === proxySeat ? { faction: i, team: i, human: true } : { faction: i, team: i, human: false, bot: { difficulty, personality: PERSONALITIES[(i + g) % 4] } },
     ),
   });
-  const proxy = new Proxy(proxySeat);
+  const proxy = new Proxy(proxySeat, { knobs: process.env.PROXY ? JSON.parse(process.env.PROXY) : {} });
   while (!w.over && w.tick < WINDOWS * WINDOW) {
     step(w, proxy.think(w));
     w.fx = [];
