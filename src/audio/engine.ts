@@ -567,6 +567,57 @@ export class AudioEngine {
     this.tone(this.reverbIn, 41.2, 3.5, 'sawtooth', 0.08, { attack: 0.4 });
   }
 
+  // ---- campaign run map --------------------------------------------------------
+
+  /** Pointer over a node. */
+  mapHover(): void {
+    if (!this.ctx || !this.throttle('mapHover', 90)) return;
+    this.tone(this.ui, note(24), 0.05, 'sine', 0.018);
+  }
+
+  /** A node picked for its preview. */
+  mapSelect(): void {
+    if (!this.ctx || !this.throttle('mapSelect', 80)) return;
+    this.tone(this.ui, note(12), 0.12, 'triangle', 0.045);
+    this.tone(this.ui, note(19), 0.14, 'triangle', 0.035, { delay: 0.05 });
+  }
+
+  /** The swarm sets off along a link: a few soft, quick steps rising. */
+  march(): void {
+    if (!this.ctx) return;
+    [0, 3, 7].forEach((s, i) => this.tone(this.ui, note(s - 12), 0.12, 'triangle', 0.06, { delay: i * 0.09 }));
+    this.noise(this.ui, 0.3, 0.03, 'bandpass', 900, 400);
+  }
+
+  /** The Bloom advances at the end of a turn: a low, slow swell. */
+  bloomAdvance(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, note(-24), 1.6, 'sawtooth', 0.05, { attack: 0.6, slide: 1.06 });
+    this.tone(this.ui, note(-23), 1.6, 'sawtooth', 0.035, { attack: 0.7 });
+    this.noise(this.reverbIn, 1.6, 0.06, 'lowpass', 200, 700);
+  }
+
+  /** A node falls to the Bloom: a wet, low crunch. `i` staggers several. */
+  swallow(i = 0): void {
+    if (!this.ctx) return;
+    const d = 0.25 + i * 0.16;
+    this.noise(this.ui, 0.35, 0.09, 'lowpass', 1400, 120, d);
+    this.tone(this.ui, note(-17), 0.4, 'sine', 0.12, { slide: 0.6, delay: d });
+  }
+
+  /** Hub: a new run begins. */
+  runStart(): void {
+    if (!this.ctx) return;
+    [0, 7, 12].forEach((s, i) => this.tone(this.ui, note(s), 0.3, 'triangle', 0.05, { delay: i * 0.07 }));
+  }
+
+  /** Hub: a run deleted. */
+  runDelete(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, note(-5), 0.4, 'sine', 0.06, { slide: 0.5 });
+    this.noise(this.ui, 0.3, 0.04, 'lowpass', 800, 100);
+  }
+
   // ---- per frame -------------------------------------------------------------
 
   /**
