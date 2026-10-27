@@ -84,6 +84,8 @@ export const RETARGET = 6;
 
 export const NestType = { Hive: 0, Forge: 1, Spire: 2, Swift: 3, Bastion: 4 } as const;
 export const NEST_NAMES = ['Hive', 'Forge', 'Spire', 'Den', 'Bastion'] as const;
+/** every nest type unlocked (Faction.nestTypes default) */
+export const ALL_NEST_TYPES = 0b11111;
 /** unit kind spawned by each nest type; -1 = spawns nothing */
 export const NEST_KIND: readonly number[] = [Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift, Kind.Dot];
 /** per-type spawn speed multiplier (Bastion trades production for defense) */

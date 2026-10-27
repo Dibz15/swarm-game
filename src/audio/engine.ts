@@ -605,6 +605,63 @@ export class AudioEngine {
     this.tone(this.ui, note(-17), 0.4, 'sine', 0.12, { slide: 0.6, delay: d });
   }
 
+  /** A brood wounded: a dull falling pair. */
+  broodWounded(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, note(3), 0.3, 'triangle', 0.05, { slide: 0.85 });
+    this.tone(this.ui, note(-2), 0.4, 'triangle', 0.045, { slide: 0.85, delay: 0.14 });
+  }
+
+  /** A brood lost: a low toll with a long tail. */
+  broodLost(): void {
+    if (!this.ctx) return;
+    this.tone(this.reverbIn, note(-12), 2.4, 'sine', 0.16, { attack: 0.01 });
+    this.tone(this.reverbIn, note(-5), 2.0, 'sine', 0.06, { attack: 0.01 });
+    this.tone(this.ui, note(-24), 1.6, 'sine', 0.12, { slide: 0.9 });
+  }
+
+  /** A brood rescued: a short rising fanfare. */
+  broodRescued(): void {
+    if (!this.ctx) return;
+    [0, 3, 7, 12, 15].forEach((s, i) => this.tone(this.ui, note(s), 0.35, 'triangle', 0.05, { delay: 0.25 + i * 0.07 }));
+  }
+
+  /** Camp: biomass spent on an unlock. */
+  biomassSpent(): void {
+    if (!this.ctx) return;
+    this.noise(this.ui, 0.2, 0.05, 'bandpass', 1800, 600);
+    this.tone(this.ui, note(7), 0.18, 'sine', 0.05, { slide: 0.7 });
+    this.tone(this.ui, note(19), 0.3, 'triangle', 0.04, { delay: 0.1 });
+  }
+
+  /** Camp: a brood healed. */
+  broodHealed(): void {
+    if (!this.ctx) return;
+    [7, 12, 19].forEach((s, i) => this.tone(this.ui, note(s), 0.4, 'sine', 0.04, { delay: i * 0.06, attack: 0.03 }));
+  }
+
+  /** Camp: a brood's cap grown. */
+  broodGrown(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, note(0), 0.35, 'triangle', 0.05, { slide: 1.5 });
+    this.tone(this.ui, note(12), 0.3, 'triangle', 0.035, { delay: 0.12 });
+  }
+
+  /** The checkpoint reached: a bright two-chord chime. */
+  checkpointReached(): void {
+    if (!this.ctx) return;
+    [0, 7, 12].forEach((s) => this.tone(this.reverbIn, note(s), 1.2, 'sine', 0.05, { attack: 0.02 }));
+    [3, 10, 15].forEach((s) => this.tone(this.reverbIn, note(s), 1.4, 'sine', 0.04, { attack: 0.02, delay: 0.35 }));
+  }
+
+  /** The checkpoint saves the run: time rewinding, then the chime. */
+  checkpointRestart(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, note(24), 0.8, 'sine', 0.05, { slide: 0.25 });
+    this.noise(this.reverbIn, 0.8, 0.06, 'bandpass', 3000, 300);
+    [0, 7, 12].forEach((s, i) => this.tone(this.reverbIn, note(s), 1.2, 'sine', 0.05, { delay: 0.8 + i * 0.08 }));
+  }
+
   /** Hub: a new run begins. */
   runStart(): void {
     if (!this.ctx) return;
