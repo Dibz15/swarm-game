@@ -51,8 +51,10 @@ export class Music {
   private state: MusicState = { mode: 'menu', tension: 0, danger: 0, escalation: 0, domination: 0 };
   private phrase: number[] = [];
   private theme: Theme = CLASSIC;
-  /** applied at the next bar so held pads don't clash */
+  /** applied on the next 16th; held notes of the old theme fade out */
   private pending: Theme | null = null;
+  /** pad and bass notes still sounding, so a theme switch can cut them */
+  private held: { g: GainNode; end: number }[] = [];
   /** one 16th note at the theme's tempo */
   private stepDur = 60 / CLASSIC.bpm / 4;
   private chord: number[] = chord(CLASSIC, CLASSIC.prog.calm.chords[0]);
@@ -119,7 +121,7 @@ export class Music {
     this.timer = window.setInterval(() => this.schedule(), 25);
   }
 
-  /** Switch theme at the next bar. */
+  /** Switch theme on the next 16th note. */
   setTheme(theme: Theme): void {
     this.pending = theme === this.theme ? null : theme;
   }
@@ -179,8 +181,10 @@ export class Music {
 
   private playStep(step: number, t: number): void {
     let inBar = step % 16;
-    if (inBar === 0 && this.pending) {
-      // New theme: restart the bar count so its progression starts fresh.
+    if (this.pending) {
+      // New theme: fade out what the old one is holding and restart the bar
+      // count so the new progression starts on its first chord.
+      this.release(t);
       this.theme = this.pending;
       this.pending = null;
       this.stepDur = 60 / this.theme.bpm / 4;
@@ -261,6 +265,23 @@ export class Music {
 
   // ---- instruments ---------------------------------------------------------
 
+  private hold(g: GainNode, end: number): void {
+    this.held = this.held.filter((h) => h.end > this.ctx.currentTime);
+    this.held.push({ g, end });
+  }
+
+  /** Fade every held note out quickly (pads hold for whole chords). */
+  private release(t: number): void {
+    for (const { g, end } of this.held) {
+      if (end <= t) continue;
+      const p = g.gain;
+      if (p.cancelAndHoldAtTime) p.cancelAndHoldAtTime(t);
+      else p.cancelScheduledValues(t);
+      p.setTargetAtTime(0, t, 0.12);
+    }
+    this.held = [];
+  }
+
   private env(g: GainNode, t: number, peak: number, attack: number, dur: number, release: number): void {
     g.gain.setValueAtTime(0, t);
     g.gain.linearRampToValueAtTime(peak, t + attack);
@@ -277,6 +298,7 @@ export class Music {
         o.detune.value = det;
         const g = this.ctx.createGain();
         this.env(g, t, 0.022, 1.4, dur, 1.6);
+        this.hold(g, t + dur + 1.6);
         o.connect(g).connect(this.padFilter);
         o.start(t);
         o.stop(t + dur + 1.8);
@@ -310,6 +332,7 @@ export class Music {
     f.frequency.exponentialRampToValueAtTime(220, t + Math.min(dur, 0.4));
     const g = this.ctx.createGain();
     this.env(g, t, 0.06, 0.01, dur, Math.min(0.15, dur * 0.3));
+    this.hold(g, t + dur + 0.3);
     o.connect(f).connect(g).connect(this.layers.bass);
     sub.connect(g);
     o.start(t);
