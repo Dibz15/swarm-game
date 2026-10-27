@@ -59,6 +59,8 @@ describe('music styles', () => {
       // Bars 1 and 4 share the motif's rhythm, and the motif opens bar 1.
       expect(inBar(0).map((n) => n.at)).toEqual(inBar(3).map((n) => n.at - 3 * s.steps));
       expect(inBar(0)[0].at).toBe(0);
+      // A style that breathes lets its last note ring to the end of the phrase.
+      if (s.lead.breath > 0) expect(p[p.length - 1].at + p[p.length - 1].len).toBe(4 * s.steps);
       for (const n of p) {
         expect(n.idx).toBeGreaterThanOrEqual(0);
         expect(n.idx).toBeLessThan(lead * 2);

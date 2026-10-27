@@ -267,8 +267,8 @@ export class Music {
     hit(d.tom, d.busy.tom, (v) => this.tom(t, hz(root - 24, 220), v));
     hit(d.tom2, d.busy.tom2, (v) => this.tom(t, hz(root - 17, 220), v));
 
-    // Lead: a 4-bar motif phrase.
-    const at = (bar % 4) * st.steps + inBar;
+    // Lead: a 4-bar motif phrase, then the style's breath of rest.
+    const at = (bar % (4 + st.lead.breath)) * st.steps + inBar;
     const lead = leadNotes(this.theme);
     for (const n of this.phrase) {
       if (n.at !== at) continue;

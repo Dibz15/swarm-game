@@ -72,6 +72,11 @@ export interface Style {
     rhythms: string[];
     /** chance an onset after the first becomes a rest */
     rest: number;
+    /**
+     * Bars of silence after each 4-bar phrase, so it can land before it
+     * starts again. A quick hook can loop straight back (0); slower ones need air.
+     */
+    breath: number;
   };
 }
 
@@ -91,7 +96,7 @@ export const STYLES: Record<string, Style> = {
     bass: { calm: 'hold', fight: 'R-.R-.R-R-.R-.R-', type: 'sawtooth', cutoff: [900, 220] },
     arp: { rate: 2, fast: 1, pattern: [0, 1, 2, 3, 2, 1, 0, 2], type: 'triangle', octave: 12, decay: 0.22, peak: 0.085, echo: 3, feedback: 0.35 },
     pad: { voicing: 'triad', type: 'sawtooth', detune: 8, cutoff: 700, range: 1600, attack: 1.4 },
-    lead: { type: 'sine', cutoff: 8000, glide: 0, vibrato: 0.006, length: 1.5, rhythms: ['x...x...x...x...', 'x...x...x.......'], rest: 0.4 },
+    lead: { type: 'sine', cutoff: 8000, glide: 0, vibrato: 0.006, length: 1.5, rhythms: ['x...x...x...x...', 'x...x...x.......'], rest: 0.4, breath: 2 },
   },
 
   /** 6/8 and tribal: pitched toms, a drone under open fifths, a sliding chant. */
@@ -111,7 +116,7 @@ export const STYLES: Record<string, Style> = {
     bass: { calm: 'hold', fight: 'R-.R.5R-.R5.', pedal: true, type: 'sawtooth', cutoff: [600, 160] },
     arp: { rate: 2, fast: 1, pattern: [0, 2, 1, 2, 0, 3], type: 'square', octave: 0, decay: 0.16, peak: 0.045, echo: 6, feedback: 0.3 },
     pad: { voicing: 'open', type: 'sawtooth', detune: 14, cutoff: 450, range: 1100, attack: 2.0 },
-    lead: { type: 'triangle', cutoff: 8000, glide: 0.12, vibrato: 0.01, length: 1.1, rhythms: ['x-----x--x--', 'x--x--x-----', 'x-x-x-x-----'], rest: 0.2 },
+    lead: { type: 'triangle', cutoff: 8000, glide: 0.12, vibrato: 0.01, length: 1.1, rhythms: ['x-----x--x--', 'x--x--x-----', 'x-x-x-x-----'], rest: 0.2, breath: 4 },
   },
 
   /** Half-time and floating: bell arpeggio in dotted 8ths, long echoes, lush sevenths. */
@@ -129,7 +134,7 @@ export const STYLES: Record<string, Style> = {
     bass: { calm: 'hold', fight: 'R-------..5-O---', type: 'triangle', cutoff: [500, 300] },
     arp: { rate: 3, fast: 2, pattern: [0, 1, 2, 3, 4, 3, 2, 1], type: 'sine', octave: 24, decay: 0.5, peak: 0.055, echo: 4, feedback: 0.5 },
     pad: { voicing: 'seventh', type: 'sawtooth', detune: 5, cutoff: 900, range: 1400, attack: 2.2 },
-    lead: { type: 'sine', cutoff: 8000, glide: 0.18, vibrato: 0.004, length: 1.1, rhythms: ['x-------x-------', 'x-----x-x-------', 'x---------x-----'], rest: 0.25 },
+    lead: { type: 'sine', cutoff: 8000, glide: 0.18, vibrato: 0.004, length: 1.1, rhythms: ['x-------x-------', 'x-----x-x-------', 'x---------x-----'], rest: 0.25, breath: 2 },
   },
 
   /** Motorik: four on the floor, octave-pumping bass, gated square arpeggio, staccato saw hook. */
@@ -147,7 +152,7 @@ export const STYLES: Record<string, Style> = {
     bass: { calm: 'R---R---R---R---', fight: 'R.O.R.O.R.O.R.5.', type: 'sawtooth', cutoff: [1300, 300] },
     arp: { rate: 2, fast: 1, pattern: [0, 1, 2, 1, 0, 2, 1, 2], type: 'square', octave: 12, decay: 0.09, peak: 0.05, echo: 3, feedback: 0.25 },
     pad: { voicing: 'open', type: 'sawtooth', detune: 10, cutoff: 800, range: 1800, attack: 0.6 },
-    lead: { type: 'sawtooth', cutoff: 1800, glide: 0.03, vibrato: 0, length: 0.7, rhythms: ['x.x...x.x.x.....', 'x..x..x...x.x...', 'x.x.x...x..x....'], rest: 0.15 },
+    lead: { type: 'sawtooth', cutoff: 1800, glide: 0.03, vibrato: 0, length: 0.7, rhythms: ['x.x...x.x.x.....', 'x..x..x...x.x...', 'x.x.x...x..x....'], rest: 0.15, breath: 0 },
   },
 
   /** 3/4 waltz: oom on the downbeat, swaying arpeggio, brushed backbeats. */
@@ -165,7 +170,7 @@ export const STYLES: Record<string, Style> = {
     bass: { calm: 'hold', fight: 'R-------5---', type: 'sawtooth', cutoff: [800, 240] },
     arp: { rate: 2, fast: 1, pattern: [0, 1, 2, 3, 2, 1], type: 'triangle', octave: 12, decay: 0.3, peak: 0.08, echo: 4, feedback: 0.3 },
     pad: { voicing: 'triad', type: 'sawtooth', detune: 6, cutoff: 650, range: 1500, attack: 1.0 },
-    lead: { type: 'triangle', cutoff: 8000, glide: 0.05, vibrato: 0.008, length: 1.2, rhythms: ['x-------x---', 'x-----x-x---', 'x---x---x---'], rest: 0.2 },
+    lead: { type: 'triangle', cutoff: 8000, glide: 0.05, vibrato: 0.008, length: 1.2, rhythms: ['x-------x---', 'x-----x-x---', 'x---x---x---'], rest: 0.2, breath: 4 },
   },
 };
 
@@ -207,7 +212,7 @@ export interface MelodyNote {
 /**
  * A 4-bar phrase built from a motif: A, A answered (its ending moved), B (a
  * contrasting bar), then A again landing on the tonic. Repetition is what
- * makes a melody recognisable.
+ * makes a melody recognisable. The player leaves `breath` bars of rest after it.
  */
 export function phrase(style: Style, leadCount: number, rand: () => number): MelodyNote[] {
   const span = leadCount * 2 - 1;
@@ -242,5 +247,8 @@ export function phrase(style: Style, leadCount: number, rand: () => number): Mel
   const out: MelodyNote[] = [];
   const bars = [bar(cellA, a, keepA), bar(cellA, a2, keepA), bar(cellB, b, keepB), bar(cellA, a3, keepA)];
   bars.forEach((ns, k) => ns.forEach((n) => out.push({ ...n, at: n.at + k * style.steps })));
+  // Before a breath, the closing note rings to the end of the bar so the phrase lands.
+  const last = out[out.length - 1];
+  if (style.lead.breath > 0 && last) last.len = 4 * style.steps - last.at;
   return out;
 }
