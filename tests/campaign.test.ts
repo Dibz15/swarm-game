@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { armyFor, nodeSetup } from '../src/campaign/battle';
+import { CONQUEST_SHARE, armyFor, nodeSetup } from '../src/campaign/battle';
 import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
 import { MAP_H, MAP_W, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, rollOffer } from '../src/campaign/rewards';
@@ -60,6 +60,23 @@ describe('campaign run generation', () => {
     expect(runs.filter((r) => r.nodes.some((n) => n.checkpoint)).length).toBeGreaterThan(SEEDS.length * 0.8);
     const rescues = runs.flatMap((r) => r.nodes.filter((n) => n.rescue !== undefined));
     expect(rescues.length / runs.length).toBeGreaterThan(2);
+  });
+});
+
+describe('battle settings', () => {
+  it('conquest can also be won by holding most nests, so two rivals cannot stall it', () => {
+    const run = newRun('settings', 0, 'swarm', 0);
+    const conquest = run.nodes.find((n) => n.kind === 'conquest')!;
+    expect(nodeSetup(run, conquest.id, false).domShare).toBe(CONQUEST_SHARE);
+  });
+
+  it('difficulty and rival count never step up at the same depth', () => {
+    for (const seed of SEEDS) {
+      const run = newRun(seed, 0, 'swarm', 0);
+      for (const n of run.nodes) if (n.depth === 1 && n.kind !== 'start') expect(n.difficulty).toBe(0);
+      // A Normal or Hard node always has company the player has already met at Easy.
+      for (const n of run.nodes) if (n.kind === 'conquest' && n.difficulty >= 1) expect(n.rivals).toBeGreaterThanOrEqual(2);
+    }
   });
 });
 

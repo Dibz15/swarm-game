@@ -8,8 +8,12 @@ import { MILITIA, fighters, veteran, type BattleReport } from './broods';
 import { modsFor } from './rewards';
 import { maxFielded, pressure, type RunState } from './run';
 
-/** Conquest only ends by elimination: a share no team can reach turns domination off. */
-const NO_DOMINATION = 2;
+/**
+ * Conquest is won by wiping out every rival, or by holding this share of the
+ * nests for the usual 30 s: without it, two rivals can turtle and stall the
+ * battle (the run probe saw 11-15% of Normal × 2 battles hit its 15-minute cap).
+ */
+export const CONQUEST_SHARE = 0.8;
 /** Domination nodes: hold half the nests (the usual share is 0.6-0.7). */
 const DOMINATION_SHARE = 0.5;
 
@@ -41,7 +45,7 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     layout: 'random',
     events,
     portrait,
-    domShare: n.kind === 'domination' ? DOMINATION_SHARE : n.kind === 'finale' ? undefined : NO_DOMINATION,
+    domShare: n.kind === 'domination' ? DOMINATION_SHARE : n.kind === 'finale' ? undefined : CONQUEST_SHARE,
     players: [
       {
         faction: run.color,
