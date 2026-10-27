@@ -14,6 +14,7 @@ describe('music styles', () => {
     for (const p of [d.kick, d.snare, d.hat, d.tom, d.tom2, ...Object.values(d.busy)]) if (p) expect(p).toHaveLength(s.steps);
     if (s.bass.calm !== 'hold') expect(s.bass.calm).toHaveLength(s.steps);
     expect(s.bass.fight).toHaveLength(s.steps);
+    if (s.lead.form === 'motif') expect(s.lead.rhythms.length).toBeGreaterThan(0);
     for (const r of s.lead.rhythms) {
       expect(r).toHaveLength(s.steps);
       expect(r[0]).toBe('x');
@@ -51,7 +52,24 @@ describe('music styles', () => {
     expect(voiced(lyd, '1', 'triad')).toEqual([0, 4, 7]);
   });
 
-  it.each(Object.values(STYLES).map((s) => [s.id, s] as const))('%s phrases repeat a motif and resolve home', (_id, s) => {
+  it('pulse keeps the original random-walk lead: quarter notes, rests, no breath', () => {
+    const s = STYLES.pulse;
+    expect(s.lead.form).toBe('walk');
+    expect(s.lead.breath).toBe(0);
+    for (let seed = 1; seed < 40; seed++) {
+      const p = phrase(s, 5, seeded(seed));
+      for (const n of p) {
+        expect(n.at % 4).toBe(0);
+        expect(n.len).toBe(4);
+        expect(Math.floor(n.at / 4) % 8).not.toBe(7); // the last beat of every second bar rests
+        expect(n.idx).toBeGreaterThanOrEqual(0);
+        expect(n.idx).toBeLessThan(10);
+      }
+      for (let k = 1; k < p.length; k++) expect(Math.abs(p[k].idx - p[k - 1].idx)).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it.each(Object.values(STYLES).filter((s) => s.lead.form === 'motif').map((s) => [s.id, s] as const))('%s phrases repeat a motif and resolve home', (_id, s) => {
     for (let seed = 1; seed < 40; seed++) {
       const lead = 5;
       const p = phrase(s, lead, seeded(seed));
