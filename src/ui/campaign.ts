@@ -5,7 +5,9 @@
 
 import type { AudioEngine } from '../audio/engine';
 import { bloomLabel, nodeSetup } from '../campaign/battle';
-import { MAP_H, MAP_W, frontShape, moves, needsBattle, revealed, type RunNode, type RunState } from '../campaign/run';
+import { MAP_H, MAP_W, frontShape, grow, heal, moves, needsBattle, revealed, unlock, unlockCost, unlocked, type RunNode, type RunState, type TurnResult } from '../campaign/run';
+import { COST, KIND_NAME, MAX_FIELDED, MAX_ROSTER, PACKS, UNLOCKS, UNLOCK_TEXT, fit, veteran, type Brood, type BroodEvent, type PackId } from '../campaign/broods';
+import { Kind } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
 import { DIFFICULTY_NAMES } from '../sim/ai/bot';
@@ -36,8 +38,16 @@ const KIND_TEXT: Record<RunNode['kind'], string> = {
   finale: 'The final battle: a large map against three Hard rivals. Win it to end the run.',
 };
 
-function lives(run: RunState): string {
-  return `<span class="lives" title="Swarm strength: a lost battle costs one">${'●'.repeat(run.lives)}${'○'.repeat(Math.max(0, 3 - run.lives))}</span>`;
+/** A shape per unit kind, matching the in-battle silhouettes as closely as text allows. */
+const KIND_GLYPH: Record<number, string> = { [Kind.Dot]: '●', [Kind.Tank]: '■', [Kind.Lancer]: '▲', [Kind.Swift]: '◆' };
+
+function broodChip(b: Brood): string {
+  const tags = `${veteran(b) ? '★' : ''}${b.wounded ? ' ✚' : ''}`;
+  return `<span class="brood-chip${b.wounded ? ' hurt' : ''}" title="${esc(b.name)}: ${KIND_NAME[b.kind]} ${b.size}/${b.cap}${b.wounded ? ', wounded' : ''}">${KIND_GLYPH[b.kind]} ${b.size}${tags}</span>`;
+}
+
+function broods(run: RunState): string {
+  return `<span class="broods">${run.broods.map(broodChip).join('')}</span>`;
 }
 
 function ago(t: number): string {
@@ -301,6 +311,39 @@ function drawMap(
         g.fill();
       }
     }
+    // A flag on the checkpoint, while it can still save you.
+    if (n.checkpoint && !dead && !run.checkpointUsed) {
+      const fx = x + r * 0.7, fy = y - r * 0.7;
+      g.strokeStyle = '#e6eaff';
+      g.lineWidth = 1.5 * u;
+      g.beginPath();
+      g.moveTo(fx, fy);
+      g.lineTo(fx, fy - 14 * u);
+      g.stroke();
+      g.fillStyle = run.checkpointSave ? me : '#2de2e6';
+      g.beginPath();
+      g.moveTo(fx, fy - 14 * u);
+      g.lineTo(fx + 10 * u, fy - 10.5 * u);
+      g.lineTo(fx, fy - 7 * u);
+      g.closePath();
+      g.fill();
+    }
+    // A small brood badge where one waits to be rescued.
+    if (n.rescue !== undefined && !taken && !dead) {
+      const bx = x - r * 0.85, by = y - r * 0.85;
+      g.fillStyle = '#06070f';
+      g.beginPath();
+      g.arc(bx, by, 6.5 * u, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = '#b4ff39';
+      g.lineWidth = 1.5 * u;
+      g.stroke();
+      g.fillStyle = '#b4ff39';
+      g.font = `${9 * u}px sans-serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(KIND_GLYPH[n.rescue], bx, by + 0.5 * u);
+    }
   }
   return v;
 }
@@ -347,7 +390,8 @@ export function runHub(
         <div class="thumb-slot"></div>
         <div class="run-info">
           <b>${esc(run.seedText)}</b>
-          <span>Turn ${run.turn} · ${lives(run)} · ${run.biomass} biomass</span>
+          <span>Turn ${run.turn} · ${run.biomass} biomass</span>
+          <span>${broods(run)}</span>
           <span class="hint">${ago(run.updated)}</span>
         </div>
         <div class="run-actions">
@@ -414,7 +458,7 @@ export interface MapIntro {
 export function runMap(
   run: RunState,
   sfx: AudioEngine,
-  h: { go: (id: number) => void; leave: () => void },
+  h: { go: (id: number, fielded: number[]) => void; leave: () => void; save: () => void },
   intro: MapIntro | null = null,
 ): HTMLDivElement {
   const m = el(`
@@ -422,7 +466,8 @@ export function runMap(
       <div class="runmap-frame">
         <header>
           <div class="run-title"><b>${esc(run.seedText)}</b><span>Turn ${run.turn}</span></div>
-          <div class="run-stats">${lives(run)}<span class="biomass">${run.biomass} biomass</span></div>
+          <div class="run-stats"></div>
+          <button class="small" data-a="camp">Camp</button>
           <button class="small" data-a="leave">← All runs</button>
         </header>
         <div class="map-wrap">
@@ -443,7 +488,15 @@ export function runMap(
     selected = null;
     veil.hidden = true;
   };
+  const stats = m.querySelector('.run-stats') as HTMLElement;
+  const showStats = () => (stats.innerHTML = `${broods(run)}<span class="biomass">${run.biomass} biomass</span>`);
+  showStats();
   m.querySelector('[data-a=leave]')!.addEventListener('click', h.leave);
+  m.querySelector('[data-a=camp]')!.addEventListener('click', () => {
+    selected = null;
+    sfx.mapSelect();
+    camp();
+  });
 
   const open = moves(run);
   let selected: number | null = null;
@@ -467,7 +520,12 @@ export function runMap(
       rows.push(`<dt>Enemies</dt><dd>${dots} ${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}</dd>`);
       rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}</dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
-      if (n.reward) rows.push(`<dt>Reward</dt><dd>+${n.reward} biomass</dd>`);
+      if (n.reward) {
+        const rescue =
+          n.rescue === undefined ? '' : run.broods.length < MAX_ROSTER ? ` · rescue a ${KIND_NAME[n.rescue]} brood` : ` · a ${KIND_NAME[n.rescue]} brood waits, but your roster is full (${MAX_ROSTER})`;
+        rows.push(`<dt>Reward</dt><dd>+${n.reward}+ biomass${rescue}</dd>`);
+      }
+      if (n.checkpoint) rows.push(`<dt>Checkpoint</dt><dd>${run.checkpointUsed ? 'Already used' : 'Reach it to save the run here, once'}</dd>`);
     }
     const status = n.id === run.at ? 'Your swarm is here.' : dead ? 'Lost to the Bloom.' : taken ? 'Taken: march through without a battle.' : canGo ? '' : 'Not next to your swarm.';
     const verb = !canGo ? null : needsBattle(run, n.id) ? 'Fight' : 'March';
@@ -480,11 +538,101 @@ export function runMap(
       ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}`;
     panel.querySelector('[data-a=close]')!.addEventListener('click', close);
     panel.querySelector('[data-a=go]')?.addEventListener('click', () => {
+      if (verb === 'Fight') return choose(n);
       sfx.march();
-      h.go(n.id);
+      h.go(n.id, []);
     });
   };
   preview();
+
+  /** Before a battle: pick up to three fit broods (last time's pick by default). */
+  const choose = (n: RunNode) => {
+    const fitOnes = run.broods.filter(fit);
+    const picked = new Set(run.fielded.filter((id) => fitOnes.some((b) => b.id === id)).slice(0, MAX_FIELDED));
+    for (const b of fitOnes) if (picked.size < MAX_FIELDED) picked.add(b.id);
+    const draw = () => {
+      const rows = run.broods
+        .map(
+          (b) => `<button class="brood-pick${picked.has(b.id) ? ' on' : ''}" data-b="${b.id}" ${fit(b) ? '' : 'disabled'}>
+            <span class="glyph">${KIND_GLYPH[b.kind]}</span>
+            <span class="who"><b>${esc(b.name)}</b><small>${KIND_NAME[b.kind]} · ${b.size}/${b.cap}${veteran(b) ? ' · ★ veteran' : ''}${b.wounded ? ' · wounded' : ''}</small></span>
+          </button>`,
+        )
+        .join('');
+      const count = picked.size;
+      panel.innerHTML = `
+        <button class="icon close" data-a="close" aria-label="Close">✕</button>
+        <h3>Field your broods</h3>
+        <p class="hint">Up to ${MAX_FIELDED}. They are your starting army: win and they take the survivors of their kind; lose and they're wounded and halved.</p>
+        <div class="brood-list">${rows}</div>
+        ${fitOnes.length ? '' : '<p class="hint">Every brood is wounded. A militia of 10 Swarmers fights this one, and no brood is at risk.</p>'}
+        <div class="row">
+          <button data-a="back">Back</button>
+          <button class="primary grow1" data-a="fight" ${fitOnes.length && !count ? 'disabled' : ''}>${count ? `Fight with ${count} brood${count > 1 ? 's' : ''}` : 'Fight with the militia'}</button>
+        </div>`;
+      panel.querySelector('[data-a=close]')!.addEventListener('click', close);
+      panel.querySelector('[data-a=back]')!.addEventListener('click', preview);
+      panel.querySelectorAll<HTMLButtonElement>('[data-b]').forEach((btn) =>
+        btn.addEventListener('click', () => {
+          const id = Number(btn.dataset.b);
+          if (picked.has(id)) picked.delete(id);
+          else if (picked.size < MAX_FIELDED) picked.add(id);
+          sfx.mapHover();
+          draw();
+        }),
+      );
+      panel.querySelector('[data-a=fight]')!.addEventListener('click', () => {
+        sfx.march();
+        h.go(n.id, [...picked]);
+      });
+    };
+    draw();
+  };
+
+  /** The camp: spend biomass on broods and unlocks. */
+  const camp = () => {
+    veil.hidden = false;
+    const price = (cost: number, label: string, act: string) =>
+      `<button class="small" data-act="${act}" ${run.biomass >= cost ? '' : 'disabled'}>${label} · ${cost}</button>`;
+    const rows = run.broods
+      .map(
+        (b) => `<div class="camp-row">
+          <span class="glyph">${KIND_GLYPH[b.kind]}</span>
+          <span class="who"><b>${esc(b.name)}</b><small>${KIND_NAME[b.kind]} · ${b.size}/${b.cap}${veteran(b) ? ' · ★' : ''}${b.wounded ? ' · wounded' : ''}</small></span>
+          ${b.wounded ? price(COST.heal, 'Heal', `heal:${b.id}`) : ''}
+          ${price(COST.grow(b), `Cap +${COST.growBy}`, `grow:${b.id}`)}
+        </div>`,
+      )
+      .join('');
+    const unlocks = UNLOCKS.map(
+      (u) => `<div class="camp-row">
+        <span class="who"><b>${UNLOCK_TEXT[u]}</b></span>
+        ${unlocked(run, u) ? '<span class="hint">Unlocked</span>' : price(unlockCost(u), 'Unlock', `unlock:${u}`)}
+      </div>`,
+    ).join('');
+    panel.innerHTML = `
+      <button class="icon close" data-a="close" aria-label="Close">✕</button>
+      <h3>Camp · ${run.biomass} biomass</h3>
+      <div class="camp-list">${rows}</div>
+      <h3 class="sub">Unlocks</h3>
+      <p class="hint">Until a nest type is unlocked, it spawns Swarmers for you and gives no power.</p>
+      <div class="camp-list">${unlocks}</div>`;
+    panel.querySelector('[data-a=close]')!.addEventListener('click', close);
+    panel.querySelectorAll<HTMLButtonElement>('[data-act]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const [act, arg] = btn.dataset.act!.split(':');
+        const done =
+          act === 'heal' ? heal(run, Number(arg)) : act === 'grow' ? grow(run, Number(arg)) : unlock(run, arg === 'nova' ? 'nova' : Number(arg));
+        if (!done) return;
+        if (act === 'heal') sfx.broodHealed();
+        else if (act === 'grow') sfx.broodGrown();
+        else sfx.biomassSpent();
+        h.save();
+        showStats();
+        camp();
+      }),
+    );
+  };
 
   const dpr = () => window.devicePixelRatio || 1;
   const local = (e: { clientX: number; clientY: number }) => {
@@ -616,27 +764,50 @@ export function runMap(
 
 // ---- after a battle ---------------------------------------------------------
 
-export function runDebrief(run: RunState, node: RunNode, won: boolean, h: { next: () => void; hub: () => void }): HTMLDivElement {
+const EVENT_TEXT: Record<BroodEvent['what'], (e: BroodEvent) => string> = {
+  grew: (e) => `grew to ${e.size}`,
+  shrank: (e) => `came back with ${e.size}`,
+  held: (e) => `held at ${e.size}`,
+  wounded: (e) => `is wounded and down to ${e.size}: it sits out the next battle`,
+  died: () => 'was wiped out',
+  rescued: (e) => `joins you: a ${KIND_NAME[e.kind]} brood of ${e.size}`,
+  veteran: () => 'is now veteran ★: its dots start tougher',
+  recovered: () => 'has recovered',
+};
+
+export function runDebrief(run: RunState, node: RunNode, won: boolean, res: TurnResult, h: { next: () => void; hub: () => void }): HTMLDivElement {
   const over = run.status !== 'active';
-  const title =
-    run.status === 'won' ? 'Run complete' : run.status === 'lost' ? 'Run lost' : won ? 'Territory taken' : 'Driven back';
-  const text =
-    run.status === 'won'
+  const restored = res.checkpoint === 'restored';
+  const title = restored
+    ? 'Back to the checkpoint'
+    : run.status === 'won'
+      ? 'Run complete'
+      : run.status === 'lost'
+        ? 'Run lost'
+        : won
+          ? 'Territory taken'
+          : 'Driven back';
+  const text = restored
+    ? 'Your swarm was finished, but the checkpoint holds: the run resumes from there. It only saves you once.'
+    : run.status === 'won'
       ? `The Bloom's heart is destroyed. ${run.turn} turns, ${run.biomass} biomass gathered.`
       : run.status === 'lost'
         ? run.lostTo === 'bloom'
           ? 'The Bloom closed every route. Your swarm is consumed.'
-          : 'Your swarm has no strength left to fight on.'
+          : 'Your last brood is gone.'
         : won
-          ? `${KIND_LABEL[node.kind]} won. +${node.reward} biomass.`
-          : `Your swarm falls back and loses strength. ${run.lives} of 3 left. The Bloom advances anyway.`;
+          ? `${KIND_LABEL[node.kind]} won. +${res.biomass} biomass.`
+          : 'Your swarm falls back. The Bloom advances anyway.';
+  const events = restored ? [] : res.events;
   const m = el(`
     <div class="screen modal dim">
       <div class="card brief run-debrief ${run.status === 'won' || (won && !over) ? 'win' : 'lose'}">
         <div class="eyebrow">${esc(run.seedText)} · turn ${run.turn}</div>
         <h2>${title}</h2>
         <p>${text}</p>
-        <p>${lives(run)} <span class="hint">${run.biomass} biomass</span></p>
+        ${events.length ? `<ul class="brood-events">${events.map((e) => `<li><span class="glyph">${KIND_GLYPH[e.kind]}</span> <b>${esc(e.name)}</b> ${EVENT_TEXT[e.what](e)}</li>`).join('')}</ul>` : ''}
+        ${res.checkpoint === 'reached' ? '<p class="hint">⚑ Checkpoint reached: if your swarm falls after this, the run restarts here once.</p>' : ''}
+        <p>${broods(run)} <span class="hint">${run.biomass} biomass</span></p>
         <div class="row end">
           ${over ? '<button class="primary" data-a="hub">Campaign</button>' : '<button class="primary" data-a="next">Continue</button>'}
         </div>
@@ -644,5 +815,34 @@ export function runDebrief(run: RunState, node: RunNode, won: boolean, h: { next
     </div>`);
   m.querySelector('[data-a=next]')?.addEventListener('click', h.next);
   m.querySelector('[data-a=hub]')?.addEventListener('click', h.hub);
+  return m;
+}
+
+// ---- starter pick -----------------------------------------------------------
+
+export function starterPick(seed: string, h: { pick: (p: PackId) => void; back: () => void }): HTMLDivElement {
+  const ids = Object.keys(PACKS) as PackId[];
+  const m = el(`
+    <div class="screen modal">
+      <div class="card hub">
+        <div class="eyebrow">${esc(seed)}</div>
+        <h2>Choose your swarm</h2>
+        <p class="hint">Your first broods, and what you can already use. Everything else is unlocked at the camp with biomass.</p>
+        <div class="packs">
+          ${ids
+            .map(
+              (id) => `<button class="pack" data-p="${id}">
+                <b>${PACKS[id].name}</b>
+                <span class="glyphs">${PACKS[id].kinds.map((k) => `${KIND_GLYPH[k]} ${KIND_NAME[k]}`).join(' + ')}</span>
+                <small>${PACKS[id].blurb}</small>
+              </button>`,
+            )
+            .join('')}
+        </div>
+        <div class="row end"><button data-a="back">Back</button></div>
+      </div>
+    </div>`);
+  m.querySelectorAll<HTMLButtonElement>('[data-p]').forEach((b) => b.addEventListener('click', () => h.pick(b.dataset.p as PackId)));
+  m.querySelector('[data-a=back]')!.addEventListener('click', h.back);
   return m;
 }

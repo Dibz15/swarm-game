@@ -15,10 +15,11 @@ import { PERSONALITIES } from './sim/ai/bot';
 import { Kind, MAX_UNITS, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
-import { needsBattle, newRun, resolveTurn, type RunState } from './campaign/run';
+import { needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
+import type { BattleReport } from './campaign/broods';
 import { nodeSetup } from './campaign/battle';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
-import { runDebrief, runHub, runMap, type MapIntro } from './ui/campaign';
+import { runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
@@ -50,7 +51,7 @@ class App {
   /** difficulty of the current quick match, so "New map" rolls another one */
   private quick: number | null = null;
   /** the campaign run and node the current battle belongs to */
-  private run: { state: RunState; node: number } | null = null;
+  private run: { state: RunState; node: number; fielded: number[] } | null = null;
   /** ghost cursor acting out the current tutorial step */
   private demoOverlay: DemoOverlay | null = null;
   private demoKey = '';
@@ -225,12 +226,18 @@ class App {
     this.setModal(
       runHub(listRuns(), loadHistory(), randomSeed(), this.sfx, {
         resume: (run) => this.showRunMap(run),
-        start: (seed) => {
-          const run = newRun(seed, loadPrefs().color);
-          saveRun(run);
-          this.sfx.runStart();
-          this.showRunMap(run);
-        },
+        start: (seed) =>
+          this.setModal(
+            starterPick(seed, {
+              pick: (pack) => {
+                const run = newRun(seed, loadPrefs().color, pack);
+                saveRun(run);
+                this.sfx.runStart();
+                this.showRunMap(run);
+              },
+              back: () => this.showRunHub(),
+            }),
+          ),
         remove: (run) => {
           deleteRun(run.id);
           this.showRunHub();
@@ -243,37 +250,70 @@ class App {
   private showRunMap(run: RunState, intro: MapIntro | null = null): void {
     if (this.game) this.showMenu();
     this.setModal(
-      runMap(run, this.sfx, { go: (id) => this.runMove(run, id), leave: () => this.showRunHub() }, intro),
+      runMap(run, this.sfx, { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.showRunHub(), save: () => saveRun(run) }, intro),
     );
   }
 
   /** Move to a node: fight for it, or march through a node already taken. */
-  private runMove(run: RunState, id: number): void {
+  private runMove(run: RunState, id: number, fielded: number[]): void {
     if (!needsBattle(run, id)) {
       const from = run.bloom.front;
-      const fresh = resolveTurn(run, id, true);
+      const res = resolveTurn(run, id, null);
       this.saveRunState(run);
-      this.showRunMap(run, { from, fresh });
+      this.runSounds(res);
+      this.showRunMap(run, this.runIntro(from, res));
       return;
     }
     const node = run.nodes[id];
-    this.startGame(nodeSetup(run, id, window.innerHeight > window.innerWidth * 1.15), { scenario: `campaign: ${node.kind}` });
-    this.run = { state: run, node: id };
+    this.startGame(nodeSetup(run, id, window.innerHeight > window.innerWidth * 1.15, fielded), { scenario: `campaign: ${node.kind}` });
+    this.run = { state: run, node: id, fielded };
+    if (!run.unlocks.nova) this.game!.lock('nova', 'Unlock Nova at the camp');
+  }
+
+  /** How the battle ended for the run: survivors by kind, nests held, time. */
+  private battleReport(won: boolean): BattleReport {
+    const g = this.game;
+    const survivors = [0, 0, 0, 0];
+    let nests = 0, seconds = 0;
+    if (g) {
+      const w = g.world;
+      for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === g.human && w.kind[i] < survivors.length) survivors[w.kind[i]]++;
+      nests = w.nests.filter((n) => n.owner === g.human && n.control >= 1).length;
+      seconds = w.tick / TICK_HZ;
+    }
+    return { won, survivors, nests, seconds };
+  }
+
+  /** The map's Bloom animation for a turn; none after a checkpoint restore, which rewinds the Bloom. */
+  private runIntro(from: number, res: TurnResult): MapIntro | null {
+    return res.checkpoint === 'restored' ? null : { from, fresh: res.fresh };
+  }
+
+  private runSounds(res: TurnResult): void {
+    const s = this.sfx;
+    for (const e of res.events) {
+      if (e.what === 'died') s.broodLost();
+      else if (e.what === 'wounded') s.broodWounded();
+      else if (e.what === 'rescued') s.broodRescued();
+    }
+    if (res.checkpoint === 'reached') s.checkpointReached();
+    if (res.checkpoint === 'restored') s.checkpointRestart();
   }
 
   /** The battle is over (or abandoned): update the run and show the debrief. */
-  private finishRunBattle(won: boolean): void {
+  private finishRunBattle(report: BattleReport): void {
     const r = this.run;
     if (!r) return;
     this.run = null;
     const from = r.state.bloom.front;
-    const fresh = resolveTurn(r.state, r.node, won);
+    const res = resolveTurn(r.state, r.node, report, r.fielded);
     this.saveRunState(r.state);
+    this.runSounds(res);
     if (r.state.status === 'won') this.sfx.victory();
     else if (r.state.status === 'lost') this.sfx.defeat();
     this.setModal(
-      runDebrief(r.state, r.state.nodes[r.node], won, {
-        next: () => this.showRunMap(r.state, { from, fresh }),
+      runDebrief(r.state, r.state.nodes[r.node], report.won, res, {
+        next: () => this.showRunMap(r.state, this.runIntro(from, res)),
         hub: () => this.showRunHub(),
       }),
     );
@@ -478,8 +518,9 @@ class App {
           // Leaving a campaign battle is a retreat: it counts as a loss.
           quit: () => {
             if (!this.run) return this.showMenu();
+            const report = this.battleReport(false);
             this.showMenu();
-            this.finishRunBattle(false);
+            this.finishRunBattle(report);
           },
           quitLabel: this.run ? 'Retreat (counts as a loss)' : undefined,
           audio: this.sfx,
@@ -500,8 +541,9 @@ class App {
     this.input.reset();
     const won = g.result === 'victory';
     if (this.run) {
+      const report = this.battleReport(won);
       this.showMenu();
-      this.finishRunBattle(won);
+      this.finishRunBattle(report);
       return;
     }
     if (g.mission) {

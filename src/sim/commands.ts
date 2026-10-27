@@ -24,6 +24,7 @@ export type Command =
 /** True if p holds (fully controls) a nest that grants this power. */
 export function hasPower(w: World, p: number, power: NestPower): boolean {
   const type = POWER_NEST[power];
+  if (!(w.factions[p].nestTypes & (1 << type))) return false;
   for (const n of w.nests) if (n.owner === p && n.type === type && n.control >= 1) return true;
   return false;
 }

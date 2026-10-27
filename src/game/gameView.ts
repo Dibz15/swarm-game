@@ -53,6 +53,8 @@ export class GameView {
   mission: MissionRun | null = null;
   /** actions this mission hides */
   locked = new Set<Lock>();
+  /** why a locked action is locked, when it isn't the tutorial's "not in this lesson" */
+  private lockReason = new Map<Lock, string>();
   private highlightAt = 0;
   /** reading pause: the step it is for, and when it ends (seconds); see READ_PAUSE */
   private readStep = -1;
@@ -162,8 +164,14 @@ export class GameView {
   /** A mission hides this action: say so instead of doing it. */
   private blocked(a: Lock): boolean {
     if (!this.locked.has(a)) return false;
-    this.s.toast('Not in this lesson: it comes later', '#9aa4c7');
+    this.s.toast(this.lockReason.get(a) ?? 'Not in this lesson: it comes later', '#9aa4c7');
     return true;
+  }
+
+  /** Lock an action for this match (campaign unlocks), with the toast that explains it. */
+  lock(a: Lock, reason: string): void {
+    this.locked.add(a);
+    this.lockReason.set(a, reason);
   }
 
   private finish(r: MatchResult, time: number): void {

@@ -192,7 +192,8 @@ function updateControl(w: World, n: Nest): void {
 
 function spawn(w: World, n: Nest): void {
   if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1 || n.contested || n.lockedUntil > w.tick) return;
-  const kind = NEST_KIND[n.type];
+  // A nest type the owner hasn't unlocked (campaign) spawns plain Swarmers.
+  const kind = w.factions[n.owner].nestTypes & (1 << n.type) ? NEST_KIND[n.type] : Kind.Dot;
   if (kind < 0) return;
   // Supply blocked: no production until the army shrinks or the cap grows.
   const cap = capOf[n.owner];

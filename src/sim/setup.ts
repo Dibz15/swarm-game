@@ -1,4 +1,4 @@
-import { DOMINATION, Kind, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
+import { DOMINATION, Kind, LEVEL, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
 import { generateMap, type MapSpec, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapLayout, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
 import { initEvents } from './events';
@@ -17,6 +17,10 @@ export interface PlayerSetup {
   unitCap?: number;
   /** production multiplier, instead of the difficulty's (tutorial opponents) */
   prod?: number;
+  /** starting army at the capital, instead of START_UNITS Swarmers (campaign broods) */
+  army?: { kind: number; count: number; vet?: boolean }[];
+  /** bitmask of usable nest types (default: all); locked ones spawn Swarmers and grant no power */
+  nestTypes?: number;
 }
 
 export interface MatchSetup {
@@ -66,6 +70,7 @@ export function createWorld(setup: MatchSetup): World {
     f.human = p.human;
     f.energy = p.energy ?? 0;
     f.unitCap = p.unitCap ?? 0;
+    if (p.nestTypes !== undefined) f.nestTypes = p.nestTypes;
     w.setTeam(p.faction, p.team);
     if (!p.human) {
       const cfg = p.bot ?? { difficulty: 1, personality: 'expander' };
@@ -103,14 +108,21 @@ export function createWorld(setup: MatchSetup): World {
     // Garrisons are made of the nest's own unit kind (tanks guard forges...).
     const gk = s.player >= 0 || NEST_KIND[s.type] < 0 ? Kind.Dot : NEST_KIND[s.type];
     // A player's garrison overrides the starting army (hand-authored maps).
-    const count = s.player >= 0 ? s.garrison || START_UNITS : gk === Kind.Tank ? Math.ceil(s.garrison / 2.2) : s.garrison;
+    // A campaign army (broods) replaces it at the player's capital.
+    const army = s.player >= 0 && w.nests[id].capital && !s.garrison ? setup.players[s.player].army : undefined;
+    const kinds: { kind: number; vet: boolean }[] = army ? army.flatMap((a) => Array.from({ length: a.count }, () => ({ kind: a.kind, vet: !!a.vet }))) : [];
+    const count = army ? kinds.length : s.player >= 0 ? s.garrison || START_UNITS : gk === Kind.Tank ? Math.ceil(s.garrison / 2.2) : s.garrison;
     if (s.player < 0) w.nests[id].garrison = count;
     for (let k = 0; k < count; k++) {
       const a = (k / count) * TAU + w.rng.next() * 0.4;
       const rr = r * (0.5 + w.rng.next() * 0.6);
       const x = s.x + dcos(a) * rr, y = s.y + dsin(a) * rr;
       const ar = s.player >= 0 ? r + 14 : 6;
-      spawnUnit(w, owner, gk, x, y, s.player >= 0 ? s.x : x, s.player >= 0 ? s.y : y, ar);
+      const u = spawnUnit(w, owner, army ? kinds[k].kind : gk, x, y, s.player >= 0 ? s.x : x, s.player >= 0 ? s.y : y, ar);
+      if (u >= 0 && army && kinds[k].vet) {
+        w.vet[u] = 1;
+        w.hp[u] *= LEVEL.veteranHp;
+      }
     }
   });
 

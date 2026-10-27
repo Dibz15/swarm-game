@@ -1,7 +1,7 @@
 /**
- * A procedural campaign run (#18, phase 1 #62): an organic map of territory
- * nodes, a Bloom front that rolls across it a little further every turn, and
- * the rules for moving and fighting. Pure and seeded: the same seed text
+ * A procedural campaign run (#18; #62, #63): an organic map of territory
+ * nodes, a Bloom front that rolls across it a little further every turn, your
+ * broods, and the rules for moving, fighting and spending biomass. Pure and seeded: the same seed text
  * always gives the same map, and nothing here touches the DOM.
  *
  * Map space is MAP_W x MAP_H. You start at the left; the Bloom's heart (the
@@ -11,13 +11,29 @@
  */
 
 import { Rng, hashString } from '../sim/rng';
+import { Kind, NestType } from '../sim/constants';
 import type { CaveLevel, MapSize, TerrainLevel } from '../sim/mapgen';
+import {
+  COST,
+  MAX_ROSTER,
+  PACKS,
+  RESCUE_SIZE,
+  biomassFor,
+  fighters,
+  newBrood,
+  settleBroods,
+  type BattleReport,
+  type Brood,
+  type BroodEvent,
+  type PackId,
+  type Unlock,
+} from './broods';
 
 export const MAP_W = 1000;
 export const MAP_H = 620;
-export const RUN_VERSION = 1;
-/** stand-in for broods until phase 2: losing a battle costs one */
-export const START_LIVES = 3;
+export const RUN_VERSION = 2;
+/** share of battle nodes that offer a brood to rescue */
+const RESCUE_ODDS = 0.25;
 /**
  * The Bloom's speed as a share of the fastest the shortest route survives.
  * At 0.6 one lost battle is almost always survivable and two spread-out ones
@@ -43,8 +59,12 @@ export interface RunNode {
   rivals: number;
   /** bot difficulty 0..3 */
   difficulty: number;
-  /** biomass for winning here */
+  /** biomass for winning here (before nests, survivors and speed) */
   reward: number;
+  /** winning here rescues a brood of this kind */
+  rescue?: number;
+  /** reaching this node saves a checkpoint the run can restart from once */
+  checkpoint?: boolean;
 }
 
 /** The Bloom's front: x of the boundary at height y is `front + shape(y)`. */
@@ -78,11 +98,19 @@ export interface RunState {
   swallowed: number[];
   bloom: Bloom;
   turn: number;
-  lives: number;
+  broods: Brood[];
+  nextBrood: number;
+  /** the broods fielded last time, as the default pick */
+  fielded: number[];
+  /** nest types usable in battle (bitmask; the Hive always) and Nova */
+  unlocks: { nests: number; nova: boolean };
   biomass: number;
   status: RunStatus;
   /** why a lost run ended */
-  lostTo?: 'battles' | 'bloom';
+  lostTo?: 'broods' | 'bloom';
+  /** the run as it stood at the checkpoint (JSON), until it's used */
+  checkpointSave?: string;
+  checkpointUsed: boolean;
   created: number;
   updated: number;
   log: { turn: number; node: number; won: boolean }[];
@@ -185,7 +213,7 @@ function battle(node: RunNode, t: number, rng: Rng): void {
   node.reward = Math.round(10 + 20 * t + node.rivals * 4 + (node.kind === 'domination' ? 4 : 0));
 }
 
-export function newRun(seedText: string, color: number, now = Date.now()): RunState {
+export function newRun(seedText: string, color: number, pack: PackId = 'swarm', now = Date.now()): RunState {
   const seed = hashString(`run:${seedText.trim() || 'swarm'}`);
   const rng = new Rng(seed);
   const lobes: [number, number, number][] = [1, 2, 3].map((k) => [rng.range(0.03, 0.09), k + 1, rng.range(0, Math.PI * 2)]);
@@ -218,6 +246,13 @@ export function newRun(seedText: string, color: number, now = Date.now()): RunSt
     n.depth = depth[n.id];
     battle(n, Math.min(1, n.depth / far), rng);
   }
+  // One checkpoint about halfway to the heart; rescues scattered over the rest.
+  const mid = nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale' && n.depth === Math.max(1, Math.round(far / 2)));
+  if (mid.length) rng.pick(mid).checkpoint = true;
+  for (const n of nodes) {
+    if (n.kind === 'start' || n.kind === 'finale' || n.checkpoint) continue;
+    if (rng.next() < RESCUE_ODDS) n.rescue = rng.pick([Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift]);
+  }
 
   // The Bloom: starts just behind everything, and moves at a pace the
   // shortest route to the heart keeps ahead of with room for a lost battle or
@@ -248,9 +283,10 @@ export function newRun(seedText: string, color: number, now = Date.now()): RunSt
     swallowed: [],
     bloom,
     turn: 0,
-    lives: START_LIVES,
+    ...startBroods(seed, pack),
     biomass: 0,
     status: 'active',
+    checkpointUsed: false,
     created: now,
     updated: now,
     log: [],
@@ -298,43 +334,115 @@ function swallowedAt(run: RunState, front: number): number[] {
   return run.nodes.filter((n) => n.id !== run.heart && inBloom(run.bloom, n.x, n.y, front)).map((n) => n.id);
 }
 
+function startBroods(seed: number, pack: PackId): Pick<RunState, 'broods' | 'nextBrood' | 'fielded' | 'unlocks'> {
+  const p = PACKS[pack];
+  const broods: Brood[] = [];
+  p.kinds.forEach((kind, i) => broods.push(newBrood(i, kind, seed, broods.map((b) => b.name))));
+  const nests = (1 << NestType.Hive) | (typeof p.unlock === 'number' ? 1 << p.unlock : 0);
+  return { broods, nextBrood: broods.length, fielded: broods.map((b) => b.id), unlocks: { nests, nova: p.unlock === 'nova' } };
+}
+
+/** What a turn did, for the debrief and the map. */
+export interface TurnResult {
+  /** nodes the Bloom newly swallowed */
+  fresh: number[];
+  events: BroodEvent[];
+  biomass: number;
+  checkpoint?: 'reached' | 'restored';
+}
+
 /**
- * Resolve a turn: move to `id` (winning, or marching through a taken node), or
- * stay put after a loss. Then the Bloom advances. Returns the nodes it newly
- * swallowed, for the map to animate.
+ * Resolve a turn: a battle for `id` (with `report`, fought by `fielded`), or a
+ * march through a node you already took (`report` null). A win moves you
+ * there; a loss leaves you in place. Then the Bloom advances. If that leaves
+ * no broods or no route, the run ends, unless the checkpoint can save it.
  */
-export function resolveTurn(run: RunState, id: number, won: boolean, now = Date.now()): number[] {
+export function resolveTurn(run: RunState, id: number, report: BattleReport | null, fielded: number[] = [], now = Date.now()): TurnResult {
   const node = run.nodes[id];
+  const won = report ? report.won : true;
+  const res: TurnResult = { fresh: [], events: [], biomass: 0 };
   run.turn++;
   run.updated = now;
-  if (needsBattle(run, id)) run.log.push({ turn: run.turn, node: id, won });
+  if (report) {
+    run.log.push({ turn: run.turn, node: id, won });
+    const fought = fighters(run.broods, fielded).map((b) => b.id);
+    run.fielded = fought.length ? fought : run.fielded;
+    res.events = settleBroods(run.broods, fought, report);
+    res.biomass = biomassFor(node.reward, report);
+    run.biomass += res.biomass;
+  }
   if (won) {
-    if (!run.visited.includes(id)) {
-      run.visited.push(id);
-      run.biomass += node.reward;
+    if (report && node.rescue !== undefined && run.broods.length < MAX_ROSTER) {
+      const b = newBrood(run.nextBrood++, node.rescue, run.seed, run.broods.map((o) => o.name), RESCUE_SIZE);
+      run.broods.push(b);
+      res.events.push({ name: b.name, kind: b.kind, what: 'rescued', size: b.size });
     }
+    if (!run.visited.includes(id)) run.visited.push(id);
     run.at = id;
     if (id === run.heart) {
       run.status = 'won';
-      return [];
-    }
-  } else {
-    run.lives--;
-    if (run.lives <= 0) {
-      run.status = 'lost';
-      run.lostTo = 'battles';
-      return [];
+      return res;
     }
   }
 
   run.bloom.front += run.bloom.step;
-  const fresh = swallowedAt(run, run.bloom.front).filter((n) => !run.swallowed.includes(n));
-  run.swallowed.push(...fresh);
-  if (moves(run).length === 0) {
+  res.fresh = swallowedAt(run, run.bloom.front).filter((n) => !run.swallowed.includes(n));
+  run.swallowed.push(...res.fresh);
+
+  const lost: RunState['lostTo'] = run.broods.length === 0 ? 'broods' : moves(run).length === 0 ? 'bloom' : undefined;
+  if (lost) {
+    if (run.checkpointSave && !run.checkpointUsed) {
+      restoreCheckpoint(run, now);
+      res.checkpoint = 'restored';
+      return res;
+    }
     run.status = 'lost';
-    run.lostTo = 'bloom';
+    run.lostTo = lost;
+    return res;
   }
-  return fresh;
+  if (node.checkpoint && won && !run.checkpointSave && !run.checkpointUsed) {
+    run.checkpointSave = JSON.stringify({ ...run, checkpointSave: undefined, log: [] });
+    res.checkpoint = 'reached';
+  }
+  return res;
+}
+
+/** Back to the checkpoint, once. The run keeps its id and history. */
+function restoreCheckpoint(run: RunState, now: number): void {
+  const saved = JSON.parse(run.checkpointSave!) as RunState;
+  const log = run.log;
+  Object.assign(run, saved, { log, checkpointSave: undefined, checkpointUsed: true, updated: now, status: 'active', lostTo: undefined });
+}
+
+// ---- camp -----------------------------------------------------------------
+
+export const unlocked = (run: RunState, u: Unlock): boolean => (u === 'nova' ? run.unlocks.nova : !!(run.unlocks.nests & (1 << u)));
+export const unlockCost = (u: Unlock): number => (u === 'nova' ? COST.nova : COST.nest);
+
+/** Spend biomass at the camp. Returns false (and changes nothing) if it can't be done. */
+export function heal(run: RunState, broodId: number): boolean {
+  const b = run.broods.find((o) => o.id === broodId);
+  if (!b || b.wounded === 0 || run.biomass < COST.heal) return false;
+  run.biomass -= COST.heal;
+  b.wounded = 0;
+  return true;
+}
+
+export function grow(run: RunState, broodId: number): boolean {
+  const b = run.broods.find((o) => o.id === broodId);
+  if (!b || run.biomass < COST.grow(b)) return false;
+  run.biomass -= COST.grow(b);
+  b.cap += COST.growBy;
+  b.grows++;
+  return true;
+}
+
+export function unlock(run: RunState, u: Unlock): boolean {
+  if (unlocked(run, u) || run.biomass < unlockCost(u)) return false;
+  run.biomass -= unlockCost(u);
+  if (u === 'nova') run.unlocks.nova = true;
+  else run.unlocks.nests |= 1 << u;
+  return true;
 }
 
 /**

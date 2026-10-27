@@ -1,4 +1,4 @@
-import { MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './constants';
+import { ALL_NEST_TYPES, MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './constants';
 import { Rng } from './rng';
 import { Grid } from './spatial';
 import { Terrain, emptyTerrain, type TerrainSpec } from './terrain';
@@ -55,6 +55,11 @@ export interface Faction {
   prodMult: number;
   /** hard army limit on top of supply (tutorial opponents); 0 = none */
   unitCap: number;
+  /**
+   * Bitmask of nest types this faction may use (bit = NestType). A locked type
+   * still captures, but spawns Swarmers and grants no power (campaign unlocks).
+   */
+  nestTypes: number;
   stats: FactionStats;
 }
 
@@ -278,6 +283,7 @@ export class World {
         eliminatedTick: 0,
         prodMult: 1,
         unitCap: 0,
+        nestTypes: ALL_NEST_TYPES,
         stats: { spawned: 0, kills: 0, lost: 0, captured: 0, peak: 0 },
       });
       this.teamOf[f] = f === NEUTRAL ? NEUTRAL_TEAM : f;
