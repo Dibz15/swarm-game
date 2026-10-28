@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, armyFor, nodeSetup } from '../src/campaign/battle';
 import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { DIFFICULTIES, MAP_H, MAP_W, difficultyOf, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
+import { DIFFICULTIES, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 
@@ -22,6 +22,68 @@ function rush(run: RunState): RunState {
 }
 
 const brood = (o: Partial<Brood>): Brood => ({ id: 0, name: 'Test', kind: Kind.Dot, size: 12, cap: 16, wins: 0, wounded: 0, grows: 0, strains: [], ...o });
+
+describe('the following Bloom (#88)', () => {
+  it('fuses into one body: the band swells near your trail and fades with distance', () => {
+    const run = newRun('swell', 0, 'swarm', 0);
+    run.bloom.seeds = [{ x: run.bloom.front + 150, y: 300, born: 0 }];
+    run.bloom.time = 3;
+    // How far right the Bloom reaches at height y.
+    const reach = (y: number) => {
+      let x = -200;
+      while (bloomGap(run.bloom, x, y) < 0) x += 2;
+      return x;
+    };
+    expect(reach(300)).toBeGreaterThan(reach(300 + 500) + 50);
+    // Far from the trail, the band barely moves.
+    run.bloom.time = 6;
+    const far = reach(300 + 900);
+    run.bloom.time = 3;
+    expect(Math.abs(far - reach(300 + 900))).toBeLessThan(20);
+  });
+
+  it('starts with nothing swallowed, and grows from each node you leave after a turn', () => {
+    for (const seed of SEEDS.slice(0, 10)) {
+      const run = newRun(seed, 0, 'swarm', 0);
+      expect(run.nodes.every((n) => !inBloom(run.bloom, n.x, n.y))).toBe(true);
+      const from = run.nodes[run.at];
+      resolveTurn(run, moves(run)[0], WIN, run.fielded, 0);
+      expect(run.bloom.seeds).toEqual([{ x: from.x, y: from.y, born: 0 }]);
+      expect(seedRadius(run.bloom, run.bloom.seeds[0])).toBe(0); // the lag
+      run.bloom.time++;
+      expect(seedRadius(run.bloom, run.bloom.seeds[0])).toBeCloseTo(run.bloom.step);
+      expect(inBloom(run.bloom, from.x, from.y)).toBe(true);
+    }
+  });
+
+  it('treats every direction alike: the gap depends on distance from where you came, not on x', () => {
+    const run = newRun('direction', 0, 'swarm', 0);
+    run.bloom.front = -1e6; // no band
+    run.bloom.seeds = [{ x: 500, y: 310, born: 0 }];
+    run.bloom.time = 3;
+    const r = seedRadius(run.bloom, run.bloom.seeds[0]);
+    const gaps = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => bloomGap(run.bloom, 500 + dx * (r + 80), 310 + dy * (r + 80)));
+    for (const g of gaps) expect(g).toBeCloseTo(gaps[0]);
+    // The edge swells past the circle itself, less the further out.
+    expect(gaps[0]).toBeLessThan(80);
+    expect(gaps[0]).toBeGreaterThan(0);
+  });
+
+  it('a lost battle lets it close in; Hunger speeds it up without jumping', () => {
+    const run = newRun('chase', 0, 'swarm', 0);
+    resolveTurn(run, moves(run)[0], WIN, run.fielded, 0);
+    const here = run.nodes[run.at];
+    const gaps = [bloomGap(run.bloom, here.x, here.y)];
+    for (let k = 0; k < 2 && run.status === 'active'; k++) {
+      resolveTurn(run, moves(run).find((n) => n !== run.start) ?? moves(run)[0], LOSS, run.fielded, 0);
+      gaps.push(bloomGap(run.bloom, here.x, here.y));
+    }
+    expect(gaps[1]).toBeLessThan(gaps[0]);
+    const before = run.bloom.seeds.map((s) => seedRadius(run.bloom, s));
+    speedBloom(run.bloom, 1.25);
+    run.bloom.seeds.forEach((s, i) => expect(seedRadius(run.bloom, s)).toBeCloseTo(before[i]));
+  });
+});
 
 describe('campaign run generation', () => {
   it('is deterministic per seed text', () => {
@@ -93,13 +155,13 @@ describe('run difficulty', () => {
     const steps = DIFFICULTIES.map((d) => newRun('pace', 0, 'swarm', 0, d).bloom.step);
     for (let k = 1; k < steps.length; k++) expect(steps[k]).toBeGreaterThan(steps[k - 1]);
     const gentle = newRun('pace', 0, 'swarm', 0, 'gentle');
-    const front = gentle.bloom.front;
     resolveTurn(gentle, moves(gentle)[0], LOSS, gentle.fielded, 0);
-    expect(gentle.bloom.front).toBe(front);
+    expect(gentle.bloom.time).toBe(0);
     const standard = newRun('pace', 0, 'swarm', 0, 'standard');
     resolveTurn(standard, moves(standard)[0], LOSS, standard.fielded, 0);
-    expect(standard.bloom.front).toBeGreaterThan(front);
+    expect(standard.bloom.time).toBe(1);
   });
+
 
   it('Gentle has no Normal nodes; Brutal puts Brutal bots on the late nodes and the finale', () => {
     for (const seed of SEEDS.slice(0, 20)) {
@@ -345,10 +407,20 @@ describe('saves', () => {
     const old = newRun('old', 0, 'swarm', 0) as Partial<RunState>;
     delete old.perks;
     for (const b of old.broods!) delete (b as Partial<Brood>).strains;
+    // ...and before the following Bloom (#88): a front with no time or seeds.
+    old.bloom!.front = 300;
+    delete (old.bloom as Partial<RunState['bloom']>).time;
+    delete (old.bloom as Partial<RunState['bloom']>).seeds;
     saveRun(old as RunState);
     const back = loadRun(old.id!)!;
     expect(back.perks).toEqual([]);
     expect(back.broods.every((b) => Array.isArray(b.strains))).toBe(true);
+    expect(back.bloom.time).toBe(0);
+    expect(back.bloom.seeds).toEqual([]);
+    // The old front stays where it stopped, and the Bloom follows from there.
+    expect(inBloom(back.bloom, 250, MAP_H / 2)).toBe(true);
+    resolveTurn(back, moves(back)[0], WIN, back.fielded, 0);
+    expect(back.bloom.seeds.length).toBe(1);
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 });

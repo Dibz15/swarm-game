@@ -7,7 +7,7 @@
  */
 
 import { nodeSetup } from '../campaign/battle';
-import { MAP_H, type Bloom, type RunNode, type RunState } from '../campaign/run';
+import { MAP_H, bloomGapWith, type Bloom, type RunNode, type RunState } from '../campaign/run';
 import { FACTION_HEX } from '../content/factions';
 import { generateMap, type MapSpec } from '../sim/mapgen';
 
@@ -22,8 +22,6 @@ export function bloomShape(b: Bloom, y: number): number {
   return s;
 }
 
-/** A small ripple crawling along the front, in map units. */
-export const ripple = (y: number, time: number): number => 2.5 * Math.sin(y * 0.045 - time * 1.6) + 1.5 * Math.sin(y * 0.11 + time * 0.9);
 
 // ---- node icons ------------------------------------------------------------------
 
@@ -433,13 +431,17 @@ export class Spores {
     this.size[i] = size;
   }
 
-  /** Shed from the front between y0 and y1 at `rate` per second. */
-  shed(dt: number, rate: number, y0: number, y1: number, edge: (y: number) => number): void {
+  /** Shed off the edge (segments with outward normals, see `BloomField`) at `rate` per second. */
+  shed(dt: number, rate: number, f: BloomField): void {
     this.carry += dt * rate;
     while (this.carry >= 1) {
       this.carry--;
-      const y = y0 + Math.random() * (y1 - y0);
-      this.spawn(edge(y) - 4, y, 6 + Math.random() * 12, (Math.random() - 0.5) * 6, 2.5 + Math.random() * 3, 1 + Math.random() * 1.6);
+      if (!f.nseg) continue;
+      const i = Math.floor(Math.random() * f.nseg) * SEG;
+      const x = (f.seg[i] + f.seg[i + 2]) / 2, y = (f.seg[i + 1] + f.seg[i + 3]) / 2;
+      const nx = f.seg[i + 4], ny = f.seg[i + 5];
+      const sp = 6 + Math.random() * 12;
+      this.spawn(x - nx * 3, y - ny * 3, nx * sp + (Math.random() - 0.5) * 4, ny * sp + (Math.random() - 0.5) * 4, 2.5 + Math.random() * 3, 1 + Math.random() * 1.6);
     }
   }
 
@@ -479,29 +481,145 @@ export class Spores {
   }
 }
 
-/** Tendrils feeling ahead of the front, one per band of map height, swaying. */
-export function tendrils(g: CanvasRenderingContext2D, y0: number, y1: number, time: number, edge: (y: number) => number, X: (x: number) => number, Y: (y: number) => number, u: number): void {
-  const BAND = 38;
+/** Tendrils feeling out from the edge at stable spots (hashed by grid cell), swaying. */
+export function tendrils(g: CanvasRenderingContext2D, f: BloomField, time: number, X: (x: number) => number, Y: (y: number) => number, u: number): void {
   g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
   g.fillStyle = 'rgba(240, 140, 215, 0.8)';
   g.lineWidth = 1.4 * u;
-  for (let b = Math.floor(y0 / BAND); b <= Math.ceil(y1 / BAND); b++) {
-    const h = Math.abs(Math.sin(b * 12.9898) * 43758.5453) % 1; // hash of the band
-    if (h < 0.35) continue;
-    const y = b * BAND + h * 20;
-    const bx = edge(y);
-    const len = 10 + h * 22;
-    const sway = Math.sin(time * (0.6 + h * 0.7) + h * 9) * 0.7;
-    const ex = bx + len * Math.cos(sway), ey = y + len * Math.sin(sway);
+  let drawn = 0;
+  for (let i = 0; i < f.nseg * SEG && drawn < 70; i += SEG) {
+    const x = (f.seg[i] + f.seg[i + 2]) / 2, y = (f.seg[i + 1] + f.seg[i + 3]) / 2;
+    const h = Math.abs(Math.sin(Math.round(x / 9) * 12.9898 + Math.round(y / 9) * 78.233) * 43758.5453) % 1;
+    if (h > 0.09) continue;
+    drawn++;
+    const k = h / 0.09;
+    const len = 10 + k * 22;
+    const a = Math.atan2(f.seg[i + 5], f.seg[i + 4]) + Math.sin(time * (0.6 + k * 0.7) + k * 9) * 0.7;
+    const ex = x + len * Math.cos(a), ey = y + len * Math.sin(a);
     g.beginPath();
-    g.moveTo(X(bx - 2), Y(y));
-    g.quadraticCurveTo(X(bx + len * 0.5), Y(y - sway * len * 0.5), X(ex), Y(ey));
+    g.moveTo(X(x), Y(y));
+    g.quadraticCurveTo(X(x + f.seg[i + 4] * len * 0.5), Y(y + f.seg[i + 5] * len * 0.5), X(ex), Y(ey));
     g.stroke();
     g.beginPath();
     g.arc(X(ex), Y(ey), 1.6 * u, 0, Math.PI * 2);
     g.fill();
   }
 }
+
+// ---- the Bloom's shape ------------------------------------------------------------
+
+/** floats per edge segment: x1, y1, x2, y2 and the outward normal */
+const SEG = 6;
+
+/**
+ * The Bloom sampled on a grid over the view (in map units, cells snapped to
+ * powers of two so they hold still while you pan), with its edge traced by
+ * marching squares. The shape can be anything: a band, circles, their union.
+ */
+export class BloomField {
+  cell = 8;
+  gx0 = 0;
+  gy0 = 0;
+  nx = 0;
+  ny = 0;
+  vals = new Float32Array(0);
+  seg = new Float32Array(SEG * 512);
+  nseg = 0;
+  private img: HTMLCanvasElement | null = null;
+  private data: ImageData | null = null;
+
+  /** Sample `gap` (negative inside) over the map rectangle, at about `px` pixels a cell. */
+  sample(x0: number, y0: number, x1: number, y1: number, cellMap: number, gap: (x: number, y: number) => number): void {
+    this.cell = Math.max(4, 2 ** Math.round(Math.log2(cellMap)));
+    const c = this.cell;
+    this.gx0 = Math.floor(x0 / c) - 1;
+    this.gy0 = Math.floor(y0 / c) - 1;
+    this.nx = Math.ceil(x1 / c) + 1 - this.gx0;
+    this.ny = Math.ceil(y1 / c) + 1 - this.gy0;
+    const n = (this.nx + 1) * (this.ny + 1);
+    if (this.vals.length < n) this.vals = new Float32Array(n * 1.5);
+    for (let j = 0; j <= this.ny; j++) for (let i = 0; i <= this.nx; i++) this.vals[j * (this.nx + 1) + i] = gap((this.gx0 + i) * c, (this.gy0 + j) * c);
+  }
+
+  /** Trace the zero contour into `seg`. */
+  trace(): void {
+    this.nseg = 0;
+    const W = this.nx + 1, c = this.cell, v = this.vals;
+    const push = (ax: number, ay: number, bx: number, by: number, gx: number, gy: number) => {
+      if ((this.nseg + 1) * SEG > this.seg.length) {
+        const grown = new Float32Array(this.seg.length * 2);
+        grown.set(this.seg);
+        this.seg = grown;
+      }
+      const l = Math.hypot(gx, gy) || 1;
+      this.seg.set([ax, ay, bx, by, gx / l, gy / l], this.nseg * SEG);
+      this.nseg++;
+    };
+    for (let j = 0; j < this.ny; j++) {
+      for (let i = 0; i < this.nx; i++) {
+        const a = v[j * W + i], b = v[j * W + i + 1], d = v[(j + 1) * W + i], e = v[(j + 1) * W + i + 1];
+        const k = (a < 0 ? 1 : 0) | (b < 0 ? 2 : 0) | (e < 0 ? 4 : 0) | (d < 0 ? 8 : 0);
+        if (k === 0 || k === 15) continue;
+        const x = (this.gx0 + i) * c, y = (this.gy0 + j) * c;
+        const t = (p: number, q: number) => p / (p - q);
+        // Edge crossings: top (a-b), right (b-e), bottom (d-e), left (a-d).
+        const top = [x + c * t(a, b), y], right = [x + c, y + c * t(b, e)], bottom = [x + c * t(d, e), y + c], left = [x, y + c * t(a, d)];
+        const gx = (b + e - a - d) / 2, gy = (d + e - a - b) / 2;
+        const lines: number[][][] =
+          k === 1 || k === 14 ? [[left, top]] :
+          k === 2 || k === 13 ? [[top, right]] :
+          k === 3 || k === 12 ? [[left, right]] :
+          k === 4 || k === 11 ? [[right, bottom]] :
+          k === 6 || k === 9 ? [[top, bottom]] :
+          k === 7 || k === 8 ? [[left, bottom]] :
+          k === 5 ? [[left, top], [right, bottom]] : [[top, right], [left, bottom]];
+        for (const [p, q] of lines) push(p[0], p[1], q[0], q[1], gx, gy);
+      }
+    }
+  }
+
+  /** Paint the inside, darker the deeper, softened over a cell at the edge, then scale it onto the view. */
+  fill(g: CanvasRenderingContext2D, X: (x: number) => number, Y: (y: number) => number, scale: number): void {
+    const W = this.nx + 1, H = this.ny + 1;
+    const img = (this.img ??= document.createElement('canvas'));
+    if (img.width !== W || img.height !== H || !this.data) {
+      img.width = W;
+      img.height = H;
+      this.data = new ImageData(W, H);
+    }
+    const px = this.data.data, c = this.cell;
+    for (let k = 0; k < W * H; k++) {
+      const f = this.vals[k];
+      const edge = Math.max(0, Math.min(1, (c * 0.5 - f) / c));
+      const d = Math.max(0, Math.min(1, -f / 240));
+      px[k * 4] = 150 - 80 * d;
+      px[k * 4 + 1] = 40 - 26 * d;
+      px[k * 4 + 2] = 120 - 60 * d;
+      px[k * 4 + 3] = 255 * edge * (0.55 + 0.3 * d);
+    }
+    img.getContext('2d')!.putImageData(this.data, 0, 0);
+    g.imageSmoothingEnabled = true;
+    g.drawImage(img, X(this.gx0 * c) - (c * scale) / 2, Y(this.gy0 * c) - (c * scale) / 2, W * c * scale, H * c * scale);
+  }
+
+  /** Stroke the traced edge (all segments, or only those `keep` accepts). */
+  stroke(g: CanvasRenderingContext2D, X: (x: number) => number, Y: (y: number) => number, keep?: (x: number, y: number) => boolean): void {
+    g.beginPath();
+    for (let i = 0; i < this.nseg * SEG; i += SEG) {
+      if (keep && !keep(this.seg[i], this.seg[i + 1])) continue;
+      g.moveTo(X(this.seg[i]), Y(this.seg[i + 1]));
+      g.lineTo(X(this.seg[i + 2]), Y(this.seg[i + 3]));
+    }
+    g.stroke();
+  }
+}
+
+/** The Bloom's gap for drawing: the band (its bulge capped past the map, so it looks endless) and the seeds' circles. */
+export const bloomGapView = (b: Bloom, x: number, y: number, t: number): number => bloomGapWith(b, x, y, t, (yy) => bloomShape(b, yy));
+
+/** A slow organic wobble on the drawn edge, in map units. */
+export const wobble = (x: number, y: number, time: number): number =>
+  6 * Math.sin(x * 0.037 + y * 0.021 + time * 0.5) + 4 * Math.sin(x * 0.013 - y * 0.041 - time * 0.8);
 
 // ---- your swarm ---------------------------------------------------------------------
 
@@ -577,6 +695,8 @@ export class SwarmDots {
 /** Per-map effect state, kept by the run map between frames. */
 export class MapFx {
   readonly spores = new Spores();
+  readonly field = new BloomField();
+  readonly ghost = new BloomField();
   readonly swarm: SwarmDots;
   readonly style = iconStyle();
   private last = -1;

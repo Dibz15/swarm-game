@@ -5,7 +5,7 @@
 
 import type { AudioEngine } from '../audio/engine';
 import { mountCreatures } from '../art/creature';
-import { BLOOM, MapFx, battleMapCanvas, bloomShape, sigilCanvas, drawIcon, glyph, nodeRadius, ripple, tendrils } from './runmapfx';
+import { BLOOM, BloomField, MapFx, battleMapCanvas, bloomGapView, sigilCanvas, drawIcon, glyph, nodeRadius, tendrils, wobble } from './runmapfx';
 import { bloomLabel, rivals, type Rival } from '../campaign/battle';
 import { broodCreature, broodTemper } from '../campaign/character';
 import {
@@ -228,7 +228,7 @@ function star(g: CanvasRenderingContext2D, x: number, y: number, r: number): voi
 function drawMap(
   c: HTMLCanvasElement,
   run: RunState,
-  opts: { front: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam; fx?: MapFx },
+  opts: { bloomT: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam; fx?: MapFx; ghost?: boolean },
 ): View {
   const dpr = window.devicePixelRatio || 1;
   const cw = c.clientWidth * dpr, ch = c.clientHeight * dpr;
@@ -244,68 +244,55 @@ function drawMap(
   g.clearRect(0, 0, cw, ch);
   if (!opts.thumb) drawFog(g, run, known, v, cw, ch, opts.time, u);
 
-  // The Bloom: everything left of the front, out past the map's edges so it looks endless.
+  // The Bloom (#88): its band off the left edge and the circles growing from
+  // where you've been, sampled over whatever is in view so it looks endless.
   const b = run.bloom;
   const fx = opts.fx;
-  const y0 = Math.min(-60, -v.oy / v.s - 40), y1 = Math.max(MAP_H + 60, (ch - v.oy) / v.s + 40);
-  const x0 = Math.min(-60, -v.ox / v.s - 40);
-  const edge = (y: number) => Math.min(MAP_W + 80, opts.front + bloomShape(b, y)) + (fx ? ripple(y, opts.time) : 0);
-  const step = Math.max(8, (y1 - y0) / 160);
-  const frontPath = () => {
-    for (let y = y0; y <= y1 + step; y += step) g.lineTo(X(edge(y)), Y(y));
-  };
-  g.beginPath();
-  g.moveTo(X(x0), Y(y0));
-  frontPath();
-  g.lineTo(X(x0), Y(y1 + step));
-  g.closePath();
-  const grad = g.createLinearGradient(X(opts.front - 200), 0, X(opts.front + 60), 0);
-  grad.addColorStop(0, 'rgba(70, 14, 60, 0.85)');
-  grad.addColorStop(1, 'rgba(150, 40, 120, 0.55)');
-  g.fillStyle = grad;
-  g.fill();
-  if (!opts.thumb) {
-    g.save();
-    g.clip();
-    // Spores drifting inside the Bloom, tiled over whatever is in view.
-    const tx0 = Math.floor(x0 / 1000), tx1 = Math.floor((opts.front + b.bulge + 80) / 1000);
-    const ty0 = Math.floor(y0 / 620), ty1 = Math.floor(y1 / 620);
-    const tiles = (tx1 - tx0 + 1) * (ty1 - ty0 + 1);
-    const per = Math.max(30, Math.floor(280 / tiles));
-    for (let tx = tx0; tx <= tx1; tx++)
-      for (let ty = ty0; ty <= ty1; ty++)
-        for (let k = 0; k < Math.min(140, per); k++) {
+  const mx0 = -v.ox / v.s, mx1 = (cw - v.ox) / v.s, my0 = -v.oy / v.s, my1 = (ch - v.oy) / v.s;
+  const field = fx?.field ?? THUMB_FIELD;
+  const wob = (x: number, y: number) => (fx ? wobble(x, y, opts.time) : 0);
+  field.sample(mx0, my0, mx1, my1, (opts.thumb ? 6 : 9) * u / v.s, (x, y) => bloomGapView(b, x, y, opts.bloomT) + wob(x, y));
+  field.fill(g, X, Y, v.s);
+  if (!opts.thumb && fx) {
+    field.trace();
+    // Spores drifting inside the Bloom, tiled over the view.
+    for (let tx = Math.floor(mx0 / 1000); tx <= Math.floor(mx1 / 1000); tx++)
+      for (let ty = Math.floor(my0 / 620); ty <= Math.floor(my1 / 620); ty++)
+        for (let k = 0; k < 140; k++) {
           const sx = ((k * 7919 + run.seed) % 1000) + tx * 1000;
           const sy = ((k * 104729 + run.seed * 3) % 620) + ty * 620;
-          const wob = Math.sin(opts.time * 0.6 + k) * 4;
+          if (bloomGapView(b, sx, sy, opts.bloomT) > -8) continue;
+          const sw = Math.sin(opts.time * 0.6 + k) * 4;
           g.fillStyle = `rgba(230, 120, 200, ${0.15 + 0.15 * Math.sin(opts.time * 1.3 + k * 1.7)})`;
           g.beginPath();
-          g.arc(X(sx + wob), Y(sy), (1.5 + (k % 3)) * u, 0, Math.PI * 2);
+          g.arc(X(sx + sw), Y(sy), (1.5 + (k % 3)) * u, 0, Math.PI * 2);
           g.fill();
         }
-    g.restore();
-    if (fx) {
-      // The edge is alive: tendrils feel ahead, spores shed off and drift.
-      tendrils(g, y0, y1, opts.time, edge, X, Y, u);
-      fx.spores.shed(fx.dt, 14 * Math.min(4, (y1 - y0) / MAP_H), y0, y1, edge);
-      fx.spores.step(fx.dt, opts.time);
-      fx.spores.draw(g, X, Y, u);
-    }
-    // The glowing front, with a pulse running along it.
-    g.beginPath();
-    frontPath();
+    // The edge is alive: tendrils feel out, spores shed off and drift.
+    tendrils(g, field, opts.time, X, Y, u);
+    fx.spores.shed(fx.dt, Math.min(60, field.nseg * 0.25), field);
+    fx.spores.step(fx.dt, opts.time);
+    fx.spores.draw(g, X, Y, u);
+    // The glowing edge, with pulses of light running along it.
     g.strokeStyle = BLOOM;
     g.lineWidth = 2.5 * u;
+    g.lineCap = 'round';
     g.shadowColor = BLOOM;
     g.shadowBlur = 14 * u;
-    g.stroke();
+    field.stroke(g, X, Y);
     g.shadowBlur = 0;
-    if (fx) {
-      g.strokeStyle = 'rgba(255, 190, 240, 0.7)';
-      g.lineWidth = 2 * u;
-      g.setLineDash([30 * u, 220 * u]);
-      g.lineDashOffset = -opts.time * 70 * u;
-      g.stroke();
+    g.strokeStyle = 'rgba(255, 190, 240, 0.75)';
+    g.lineWidth = 2 * u;
+    field.stroke(g, X, Y, (x, y) => Math.sin(opts.time * 2.2 - x * 0.012 - y * 0.008) > 0.85);
+    // Where it will reach next turn, if you don't outpace it.
+    if (opts.ghost && run.status === 'active') {
+      const ghost = fx.ghost;
+      ghost.sample(mx0, my0, mx1, my1, (12 * u) / v.s, (x, y) => bloomGapView(b, x, y, b.time + 1));
+      ghost.trace();
+      g.strokeStyle = 'rgba(230, 120, 200, 0.45)';
+      g.lineWidth = 1.5 * u;
+      g.setLineDash([5 * u, 6 * u]);
+      ghost.stroke(g, X, Y);
       g.setLineDash([]);
     }
   }
@@ -425,6 +412,9 @@ function drawMap(
   if (fx && run.status === 'active') fx.swarm.draw(g, run.nodes[run.at], opts.time, X, Y, u, me);
   return v;
 }
+
+/** The field for hub thumbnails, which have no effects state. */
+const THUMB_FIELD = new BloomField();
 
 /** Where the camp symbol sits from the current node, in node radii (both axes). */
 const CAMP_AT = 1.75;
@@ -641,7 +631,7 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
 function thumbnail(run: RunState): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.className = 'run-thumb';
-  requestAnimationFrame(() => drawMap(c, run, { front: run.bloom.front, selected: null, hover: null, time: 0, fresh: new Set(), freshT: 1, thumb: true }));
+  requestAnimationFrame(() => drawMap(c, run, { bloomT: run.bloom.time, selected: null, hover: null, time: 0, fresh: new Set(), freshT: 1, thumb: true }));
   return c;
 }
 
@@ -738,7 +728,7 @@ export function runHub(
 // ---- run map ----------------------------------------------------------------
 
 export interface MapIntro {
-  /** where the front stood before this turn, to animate it moving */
+  /** the Bloom time before this turn, to animate it growing */
   from: number;
   /** nodes it swallowed this turn */
   fresh: number[];
@@ -1024,7 +1014,7 @@ export function runMap(
 
   // The Bloom's advance plays when the map opens after a turn.
   const ANIM = 1.4;
-  if (intro && intro.from !== run.bloom.front) sfx.bloomAdvance();
+  if (intro && intro.from !== run.bloom.time) sfx.bloomAdvance();
   const frame = () => {
     if (!m.isConnected) {
       if (performance.now() - t0 > 3000) return; // never attached
@@ -1034,7 +1024,7 @@ export function runMap(
     const time = (performance.now() - t0) / 1000;
     const k = intro ? Math.min(1, time / ANIM) : 1;
     const ease = k * k * (3 - 2 * k);
-    const front = intro ? intro.from + (run.bloom.front - intro.from) * ease : run.bloom.front;
+    const bloomT = intro ? intro.from + (run.bloom.time - intro.from) * ease : run.bloom.time;
     const freshT = intro ? Math.max(0, Math.min(1, (time - ANIM * 0.5) / ANIM)) : 1;
     if (!swallowSounded && freshT > 0 && fresh.size) {
       swallowSounded = true;
@@ -1047,7 +1037,7 @@ export function runMap(
       fx.burstDone = true;
       for (const id of fresh) fx.spores.burst(run.nodes[id].x, run.nodes[id].y, 36);
     }
-    view = drawMap(c, run, { front, selected, hover, time, fresh, freshT, cam: cam ?? undefined, fx });
+    view = drawMap(c, run, { bloomT, selected, hover, time, fresh, freshT, cam: cam ?? undefined, fx, ghost: k >= 1 && !moving });
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
