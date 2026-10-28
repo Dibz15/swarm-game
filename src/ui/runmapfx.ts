@@ -339,6 +339,38 @@ export function drawIcon(
   });
 }
 
+/** A node's sigil on its disc, as a small canvas for cards (`px` CSS pixels, ring included). */
+export function sigilCanvas(run: RunState, n: RunNode, px: number, me: string): HTMLCanvasElement {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const cv = document.createElement('canvas');
+  cv.className = 'sigil';
+  cv.width = cv.height = Math.round(px * dpr);
+  cv.style.width = cv.style.height = `${px}px`;
+  const g = cv.getContext('2d');
+  if (!g) return cv;
+  // Scale so the disc plus its difficulty ring and rival dots fill the canvas.
+  const r0 = nodeRadius(n, 'sigil');
+  const u = cv.width / 2 / (r0 + 6.5);
+  const c = cv.width / 2, r = r0 * u;
+  g.beginPath();
+  if (n.kind === 'finale') {
+    for (let k = 0; k < 10; k++) {
+      const a = -Math.PI / 2 + (k * Math.PI) / 5;
+      const rr = k % 2 ? r * 0.45 : r;
+      g.lineTo(c + Math.cos(a) * rr, c + Math.sin(a) * rr);
+    }
+    g.closePath();
+  } else g.arc(c, c, r, 0, Math.PI * 2);
+  g.fillStyle = n.kind === 'finale' ? '#5a1650' : '#141a33';
+  g.fill();
+  g.lineWidth = 1.5 * u;
+  g.strokeStyle = n.kind === 'finale' ? BLOOM : 'rgba(150, 170, 255, 0.5)';
+  g.stroke();
+  if (n.kind === 'start') glyph(g, n.kind, c, c, r, u, 'rgba(230, 234, 255, 0.85)');
+  else if (n.kind !== 'finale') drawIcon(g, run, n, 'sigil', c, c, r, u, { taken: false, dead: false, here: false, me });
+  return cv;
+}
+
 /** The first-cut glyphs: ✕ for Conquest, a ring for Domination, a roof for the camp. */
 export function glyph(g: CanvasRenderingContext2D, kind: RunNode['kind'], x: number, y: number, r: number, u: number, ink: string): void {
   g.strokeStyle = ink;

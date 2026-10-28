@@ -5,7 +5,7 @@
 
 import type { AudioEngine } from '../audio/engine';
 import { mountCreatures } from '../art/creature';
-import { BLOOM, MapFx, battleMapCanvas, bloomShape, drawIcon, glyph, nodeRadius, ripple, tendrils } from './runmapfx';
+import { BLOOM, MapFx, battleMapCanvas, bloomShape, sigilCanvas, drawIcon, glyph, nodeRadius, ripple, tendrils } from './runmapfx';
 import { bloomLabel, rivals, type Rival } from '../campaign/battle';
 import { broodCreature, broodTemper } from '../campaign/character';
 import {
@@ -849,13 +849,14 @@ export function runMap(
     const verb = !canGo ? null : needsBattle(run, n.id) ? 'Fight' : 'March';
     panel.innerHTML = `
       <button class="icon close" data-a="close" aria-label="Close">✕</button>
-      <h3>${KIND_LABEL[n.kind]}</h3>
+      <h3 class="with-sigil"><span class="sigil-slot"></span>${KIND_LABEL[n.kind]}</h3>
       <p>${KIND_TEXT[n.kind]}</p>
       ${rows.length ? `<dl>${rows.join('')}</dl>` : ''}
       ${status ? `<p class="hint">${status}</p>` : ''}
       ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}
       ${n.id === run.at ? '<button class="primary" data-a="camp">Open camp</button>' : ''}`;
     mountCreatures(panel, foes.map((r) => r.creature), 40);
+    panel.querySelector('.sigil-slot')?.append(sigilCanvas(run, n, 36, FACTION_HEX[run.color]));
     // The battle's actual map: you in your colour, the rivals in theirs.
     panel.querySelector('.battle-map-slot')?.append(battleMapCanvas(run, n, 210, FACTION_HEX[run.color]));
     panel.querySelector('[data-a=close]')!.addEventListener('click', close);

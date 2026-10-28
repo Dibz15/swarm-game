@@ -697,6 +697,8 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .node-card dt { color: var(--muted); }
 .node-card dd { margin: 0; }
 .battle-map-slot { margin-top: 6px; }
+.node-card h3.with-sigil { display: flex; align-items: center; gap: 10px; }
+.sigil-slot canvas { display: block; }
 .battle-map-slot canvas { display: block; border: 1px solid var(--line); border-radius: 6px; max-width: 100%; height: auto !important; }
 .node-card button.primary { width: 100%; margin-top: 10px; padding: 12px; font-size: 16px; }
 @media (max-width: 520px) {
