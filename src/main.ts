@@ -230,8 +230,8 @@ class App {
         start: (seed) =>
           this.setModal(
             starterPick(seed, {
-              pick: (pack) => {
-                const run = newRun(seed, loadPrefs().color, pack);
+              pick: (pack, difficulty) => {
+                const run = newRun(seed, loadPrefs().color, pack, Date.now(), difficulty);
                 saveRun(run);
                 this.sfx.runStart();
                 this.showRunMap(run);

@@ -17,6 +17,10 @@ import {
   rerollCost,
   rerollOffer,
   revealed,
+  DIFFICULTIES,
+  RUN_DIFFICULTY,
+  difficultyOf,
+  type RunDifficulty,
   skipReward,
   takeReward,
   unlock,
@@ -416,7 +420,7 @@ export function runHub(
         <div class="thumb-slot"></div>
         <div class="run-info">
           <b>${esc(run.seedText)}</b>
-          <span>Turn ${run.turn} · ${run.biomass} biomass</span>
+          <span>${RUN_DIFFICULTY[difficultyOf(run)].name} · turn ${run.turn} · ${run.biomass} biomass</span>
           <span>${broods(run)}</span>
           <span class="hint">${ago(run.updated)}</span>
         </div>
@@ -491,7 +495,7 @@ export function runMap(
     <div class="screen modal runmap">
       <div class="runmap-frame">
         <header>
-          <div class="run-title"><b>${esc(run.seedText)}</b><span>Turn ${run.turn}</span></div>
+          <div class="run-title"><b>${esc(run.seedText)}</b><span>${RUN_DIFFICULTY[difficultyOf(run)].name} · turn ${run.turn}</span></div>
           <div class="run-stats"></div>
           <button class="small" data-a="camp">Camp</button>
           <button class="small" data-a="leave">← All runs</button>
@@ -848,13 +852,26 @@ export function runDebrief(run: RunState, node: RunNode, won: boolean, res: Turn
 
 // ---- starter pick -----------------------------------------------------------
 
-export function starterPick(seed: string, h: { pick: (p: PackId) => void; back: () => void }): HTMLDivElement {
+const LAST_DIFFICULTY = 'swarm.runDifficulty';
+
+export function starterPick(seed: string, h: { pick: (p: PackId, d: RunDifficulty) => void; back: () => void }): HTMLDivElement {
   const ids = Object.keys(PACKS) as PackId[];
+  let difficulty: RunDifficulty = 'standard';
+  try {
+    const last = localStorage.getItem(LAST_DIFFICULTY) as RunDifficulty | null;
+    if (last && DIFFICULTIES.includes(last)) difficulty = last;
+  } catch {
+    /* storage unavailable: Standard */
+  }
   const m = el(`
     <div class="screen modal">
       <div class="card hub">
         <div class="eyebrow">${esc(seed)}</div>
         <h2>Choose your swarm</h2>
+        <div class="field run-difficulty">
+          <div class="seg wrap">${DIFFICULTIES.map((d) => `<button data-d="${d}">${RUN_DIFFICULTY[d].name}</button>`).join('')}</div>
+          <p class="hint" data-a="blurb"></p>
+        </div>
         <p class="hint">Your first broods, and what you can already use. Everything else is unlocked at the camp with biomass.</p>
         <div class="packs">
           ${ids
@@ -870,7 +887,28 @@ export function starterPick(seed: string, h: { pick: (p: PackId) => void; back: 
         <div class="row end"><button data-a="back">Back</button></div>
       </div>
     </div>`);
-  m.querySelectorAll<HTMLButtonElement>('[data-p]').forEach((b) => b.addEventListener('click', () => h.pick(b.dataset.p as PackId)));
+  const blurb = m.querySelector('[data-a=blurb]') as HTMLElement;
+  const showDifficulty = () => {
+    m.querySelectorAll<HTMLButtonElement>('[data-d]').forEach((b) => b.classList.toggle('on', b.dataset.d === difficulty));
+    blurb.textContent = RUN_DIFFICULTY[difficulty].blurb;
+  };
+  m.querySelectorAll<HTMLButtonElement>('[data-d]').forEach((b) =>
+    b.addEventListener('click', () => {
+      difficulty = b.dataset.d as RunDifficulty;
+      showDifficulty();
+    }),
+  );
+  showDifficulty();
+  m.querySelectorAll<HTMLButtonElement>('[data-p]').forEach((b) =>
+    b.addEventListener('click', () => {
+      try {
+        localStorage.setItem(LAST_DIFFICULTY, difficulty);
+      } catch {
+        /* not remembered */
+      }
+      h.pick(b.dataset.p as PackId, difficulty);
+    }),
+  );
   m.querySelector('[data-a=back]')!.addEventListener('click', h.back);
   return m;
 }
