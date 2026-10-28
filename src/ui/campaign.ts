@@ -4,7 +4,8 @@
  */
 
 import type { AudioEngine } from '../audio/engine';
-import { bloomLabel, nodeSetup } from '../campaign/battle';
+import { mountCreatures } from '../art/creature';
+import { bloomLabel, rivals, type Rival } from '../campaign/battle';
 import {
   MAP_H,
   MAP_W,
@@ -35,7 +36,7 @@ import { COST, KIND_NAME, MAX_ROSTER, PACKS, UNLOCKS, UNLOCK_TEXT, fit, veteran,
 import { Kind } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
-import { DIFFICULTY_NAMES } from '../sim/ai/bot';
+import { DIFFICULTY_NAMES, type Personality } from '../sim/ai/bot';
 
 function el(html: string): HTMLDivElement {
   const d = document.createElement('div');
@@ -65,6 +66,23 @@ const KIND_TEXT: Record<RunNode['kind'], string> = {
 
 /** A shape per unit kind, matching the in-battle silhouettes as closely as text allows. */
 const KIND_GLYPH: Record<number, string> = { [Kind.Dot]: '●', [Kind.Tank]: '■', [Kind.Lancer]: '▲', [Kind.Swift]: '◆' };
+
+const TEMPER_LABEL: Record<Personality, string> = { rusher: 'Rusher', turtler: 'Turtler', expander: 'Expander', opportunist: 'Opportunist' };
+const TEMPER_HINT: Record<Personality, string> = {
+  rusher: 'attacks early and often',
+  turtler: 'digs in and defends',
+  expander: 'grabs nests fast',
+  opportunist: 'preys on the weakest',
+};
+
+/** Rival portraits (#72) as slots for `mountCreatures`; `names` adds each one's name and temper. */
+function rivalStrip(list: Rival[], names: boolean, cls = ''): string {
+  const one = (r: Rival, i: number) =>
+    `<span class="rival" style="--c:${FACTION_HEX[r.faction]}" title="${r.creature.name}: ${TEMPER_LABEL[r.personality]}, ${TEMPER_HINT[r.personality]}">
+      <span class="portrait" data-creature="${i}"></span>${names ? `<span class="who"><b>${r.creature.name}</b><small>${TEMPER_LABEL[r.personality]}</small></span>` : ''}
+    </span>`;
+  return `<div class="rival-strip ${cls}">${list.map(one).join('')}</div>`;
+}
 
 function broodChip(b: Brood): string {
   const tags = `${veteran(b) ? '★' : ''}${b.strains.length ? '✦'.repeat(b.strains.length) : ''}${b.wounded ? ' ✚' : ''}`;
@@ -544,10 +562,10 @@ export function runMap(
     const taken = run.visited.includes(n.id);
     const dead = run.swallowed.includes(n.id);
     const rows: string[] = [];
+    let foes: Rival[] = [];
     if (n.kind !== 'start' && !taken && !dead) {
-      const s = nodeSetup(run, n.id, false);
-      const dots = s.players.slice(1).map((p) => `<i style="background:${FACTION_HEX[p.faction]}"></i>`).join('');
-      rows.push(`<dt>Enemies</dt><dd>${dots} ${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}</dd>`);
+      foes = rivals(run, n.id);
+      rows.push(`<dt>Enemies</dt><dd>${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}${rivalStrip(foes, true, 'small')}</dd>`);
       rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}</dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
       if (n.reward) {
@@ -566,6 +584,7 @@ export function runMap(
       ${rows.length ? `<dl>${rows.join('')}</dl>` : ''}
       ${status ? `<p class="hint">${status}</p>` : ''}
       ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}`;
+    mountCreatures(panel, foes.map((r) => r.creature), 40);
     panel.querySelector('[data-a=close]')!.addEventListener('click', close);
     panel.querySelector('[data-a=go]')?.addEventListener('click', () => {
       if (verb === 'Fight') return choose(n);
@@ -581,6 +600,7 @@ export function runMap(
     const max = maxFielded(run);
     const picked = new Set(run.fielded.filter((id) => fitOnes.some((b) => b.id === id)).slice(0, max));
     for (const b of fitOnes) if (picked.size < max) picked.add(b.id);
+    const foes = rivals(run, n.id);
     const draw = () => {
       const rows = run.broods
         .map(
@@ -594,6 +614,7 @@ export function runMap(
       panel.innerHTML = `
         <button class="icon close" data-a="close" aria-label="Close">✕</button>
         <h3>Field your broods</h3>
+        <div class="facing"><span class="hint">Facing</span>${rivalStrip(foes, true)}</div>
         <p class="hint">${max === 1 ? 'One only (Lone wolf), at double size' : `Up to ${max}`}. They are your starting army: win and they take the survivors of their kind; lose and they're wounded and halved.</p>
         <div class="brood-list">${rows}</div>
         ${fitOnes.length ? '' : '<p class="hint">Every brood is wounded. A militia of 10 Swarmers fights this one, and no brood is at risk.</p>'}
@@ -601,6 +622,7 @@ export function runMap(
           <button data-a="back">Back</button>
           <button class="primary grow1" data-a="fight" ${fitOnes.length && !count ? 'disabled' : ''}>${count ? `Fight with ${count} brood${count > 1 ? 's' : ''}` : 'Fight with the militia'}</button>
         </div>`;
+      mountCreatures(panel, foes.map((r) => r.creature), 56);
       panel.querySelector('[data-a=close]')!.addEventListener('click', close);
       panel.querySelector('[data-a=back]')!.addEventListener('click', preview);
       panel.querySelectorAll<HTMLButtonElement>('[data-b]').forEach((btn) =>
@@ -831,12 +853,14 @@ export function runDebrief(run: RunState, node: RunNode, won: boolean, res: Turn
           ? `${KIND_LABEL[node.kind]} won. +${res.biomass} biomass.`
           : 'Your swarm falls back. The Bloom advances anyway.';
   const events = restored ? [] : res.events;
+  const foes = node.kind === 'start' ? [] : rivals(run, node.id);
   const m = el(`
     <div class="screen modal dim">
       <div class="card brief run-debrief ${run.status === 'won' || (won && !over) ? 'win' : 'lose'}">
         <div class="eyebrow">${esc(run.seedText)} · turn ${run.turn}</div>
         <h2>${title}</h2>
         <p>${text}</p>
+        ${foes.length && !restored ? rivalStrip(foes, true, won ? 'beaten' : '') : ''}
         ${events.length ? `<ul class="brood-events">${events.map((e) => `<li><span class="glyph">${KIND_GLYPH[e.kind]}</span> <b>${esc(e.name)}</b> ${EVENT_TEXT[e.what](e)}</li>`).join('')}</ul>` : ''}
         ${res.checkpoint === 'reached' ? '<p class="hint">⚑ Checkpoint reached: if your swarm falls after this, the run restarts here once.</p>' : ''}
         <p>${broods(run)} <span class="hint">${run.biomass} biomass</span></p>
@@ -845,6 +869,7 @@ export function runDebrief(run: RunState, node: RunNode, won: boolean, res: Turn
         </div>
       </div>
     </div>`);
+  mountCreatures(m, foes.map((r) => r.creature), 48);
   m.querySelector('[data-a=next]')?.addEventListener('click', h.next);
   m.querySelector('[data-a=hub]')?.addEventListener('click', h.hub);
   return m;
