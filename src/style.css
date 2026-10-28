@@ -746,3 +746,7 @@ button.danger, button.danger:hover:not(:disabled) { border-color: var(--hot); co
   .reward { flex: 1; min-width: 0; }
 }
 .reward-card .row button.grow1 { flex: 1; }
+.run-difficulty { margin: 10px 0 2px; }
+.run-difficulty .seg { display: flex; }
+.run-difficulty .seg button { flex: 1; }
+.run-difficulty .hint { margin: 6px 0 0; min-height: 2.6em; }

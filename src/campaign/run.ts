@@ -36,12 +36,35 @@ export const MAP_H = 620;
 export const RUN_VERSION = 2;
 /** share of battle nodes that offer a brood to rescue */
 const RESCUE_ODDS = 0.25;
+
 /**
- * The Bloom's speed as a share of the fastest the shortest route survives.
- * At 0.6 one lost battle is almost always survivable and two spread-out ones
- * usually are (measured over 150 seeds).
+ * The run's difficulty, chosen when it starts. Mostly the Bloom: its pace is a
+ * share of the fastest the shortest route survives (at Standard's 0.6, one lost
+ * battle is almost always survivable and two spread-out ones usually are;
+ * measured over 150 seeds). Gentle also holds the Bloom still after a lost
+ * battle; the two ends shift the bots a level on some nodes.
+ * Calibrated with scripts/run-probe.ts against the human proxy's skill dial.
  */
-const BLOOM_PACE = 0.6;
+export type RunDifficulty = 'gentle' | 'standard' | 'hard' | 'brutal';
+export interface DifficultyRules {
+  name: string;
+  blurb: string;
+  /** Bloom pace, as a share of the fastest the shortest route survives */
+  pace: number;
+  /** a lost battle doesn't advance the Bloom */
+  holdOnLoss: boolean;
+  /** bot difficulty shift: -1 on Normal nodes (Gentle), +1 on Hard nodes and the finale (Brutal) */
+  bots: -1 | 0 | 1;
+}
+export const DIFFICULTIES: RunDifficulty[] = ['gentle', 'standard', 'hard', 'brutal'];
+export const RUN_DIFFICULTY: Record<RunDifficulty, DifficultyRules> = {
+  gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, and easier middle battles.', pace: 0.45, holdOnLoss: true, bots: -1 },
+  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.6, holdOnLoss: false, bots: 0 },
+  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.75, holdOnLoss: false, bots: 0 },
+  brutal: { name: 'Brutal', blurb: 'A fast Bloom, and Brutal bots in the late battles and the finale.', pace: 0.8, holdOnLoss: false, bots: 1 },
+};
+/** saves from before difficulty were Standard */
+export const difficultyOf = (run: { difficulty?: RunDifficulty }): RunDifficulty => run.difficulty ?? 'standard';
 
 export type NodeKind = 'start' | 'conquest' | 'domination' | 'finale';
 
@@ -100,6 +123,8 @@ export interface RunState {
   swallowed: number[];
   bloom: Bloom;
   turn: number;
+  /** chosen at the start (older saves: Standard, see difficultyOf) */
+  difficulty?: RunDifficulty;
   broods: Brood[];
   nextBrood: number;
   /** the broods fielded last time, as the default pick */
@@ -203,10 +228,10 @@ export function inBloom(b: Bloom, x: number, y: number, front = b.front): boolea
 }
 
 /** Battle settings for a node, harder the further it is from the start. */
-function battle(node: RunNode, t: number, rng: Rng): void {
+function battle(node: RunNode, t: number, rng: Rng, rules: DifficultyRules): void {
   if (node.kind === 'start') return;
   if (node.kind === 'finale') {
-    Object.assign(node, { size: 'large', rivals: 3, difficulty: 2, caves: rng.pick<CaveLevel>(['off', 'belt']), terrain: 'standard', reward: 0 });
+    Object.assign(node, { size: 'large', rivals: 3, difficulty: 2 + Math.max(0, rules.bots), caves: rng.pick<CaveLevel>(['off', 'belt']), terrain: 'standard', reward: 0 });
     return;
   }
   // One step at a time: a second rival first (still Easy), then Normal bots, then Hard.
@@ -216,13 +241,18 @@ function battle(node: RunNode, t: number, rng: Rng): void {
   // Domination maps run one rival busier (a race for nests rather than a purge),
   // but only once the bots are Normal: three Easy racers early were their own wall.
   if (node.kind === 'domination' && node.difficulty >= 1) node.rivals = Math.min(3, node.rivals + 1);
+  // Only Normal eases: in an FFA, Hard bots fight each other harder and leave more
+  // openings, so easing Hard nodes to Normal made Gentle runs harder in the probe.
+  if (rules.bots < 0 && node.difficulty === 1) node.difficulty = 0;
+  if (rules.bots > 0 && node.difficulty === 2) node.difficulty = 3;
   node.size = node.rivals <= 1 ? 'small' : 'medium';
   node.caves = rng.pick<CaveLevel>(['off', 'off', 'off', 'belt', 'belt', 'full']);
   node.terrain = rng.pick<TerrainLevel>(['light', 'standard', 'standard', 'heavy']);
   node.reward = Math.round(10 + 20 * t + node.rivals * 4 + (node.kind === 'domination' ? 4 : 0));
 }
 
-export function newRun(seedText: string, color: number, pack: PackId = 'swarm', now = Date.now()): RunState {
+export function newRun(seedText: string, color: number, pack: PackId = 'swarm', now = Date.now(), difficulty: RunDifficulty = 'standard'): RunState {
+  const rules = RUN_DIFFICULTY[difficulty];
   const seed = hashString(`run:${seedText.trim() || 'swarm'}`);
   const rng = new Rng(seed);
   const lobes: [number, number, number][] = [1, 2, 3].map((k) => [rng.range(0.03, 0.09), k + 1, rng.range(0, Math.PI * 2)]);
@@ -253,7 +283,7 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
   const far = Math.max(1, depth[heart]);
   for (const n of nodes) {
     n.depth = depth[n.id];
-    battle(n, Math.min(1, n.depth / far), rng);
+    battle(n, Math.min(1, n.depth / far), rng, rules);
   }
   // One checkpoint about halfway to the heart; rescues scattered over the rest.
   const mid = nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale' && n.depth === Math.max(1, Math.round(far / 2)));
@@ -276,7 +306,7 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
     ],
   };
   bloom.front = Math.min(...nodes.map((n) => n.x - frontShape(bloom, n.y))) - 40;
-  bloom.step = paceFor(nodes, start, heart, bloom) * BLOOM_PACE;
+  bloom.step = paceFor(nodes, start, heart, bloom) * rules.pace;
 
   return {
     v: RUN_VERSION,
@@ -292,6 +322,7 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
     swallowed: [],
     bloom,
     turn: 0,
+    difficulty,
     ...startBroods(seed, pack),
     biomass: 0,
     perks: [],
@@ -395,7 +426,8 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
     }
   }
 
-  run.bloom.front += run.bloom.step;
+  // Gentle: the Bloom waits while you recover from a lost battle.
+  if (!(report && !report.won && RUN_DIFFICULTY[difficultyOf(run)].holdOnLoss)) run.bloom.front += run.bloom.step;
   res.fresh = swallowedAt(run, run.bloom.front).filter((n) => !run.swallowed.includes(n));
   run.swallowed.push(...res.fresh);
 

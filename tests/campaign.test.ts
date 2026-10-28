@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, armyFor, nodeSetup } from '../src/campaign/battle';
 import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { MAP_H, MAP_W, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
+import { DIFFICULTIES, MAP_H, MAP_W, difficultyOf, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 
@@ -77,6 +77,43 @@ describe('battle settings', () => {
       // A Normal or Hard node always has company the player has already met at Easy.
       for (const n of run.nodes) if (n.kind === 'conquest' && n.difficulty >= 1) expect(n.rivals).toBeGreaterThanOrEqual(2);
     }
+  });
+});
+
+describe('run difficulty', () => {
+  it.each(DIFFICULTIES)('%s: the shortest route still reaches the heart before the Bloom closes it', (d) => {
+    for (const seed of SEEDS.slice(0, 20)) {
+      const run = newRun(seed, 0, 'swarm', 0, d);
+      expect(run.difficulty).toBe(d);
+      expect(rush(run).status).toBe('won');
+    }
+  });
+
+  it('the Bloom is slower on easier runs, and Gentle holds it still after a loss', () => {
+    const steps = DIFFICULTIES.map((d) => newRun('pace', 0, 'swarm', 0, d).bloom.step);
+    for (let k = 1; k < steps.length; k++) expect(steps[k]).toBeGreaterThan(steps[k - 1]);
+    const gentle = newRun('pace', 0, 'swarm', 0, 'gentle');
+    const front = gentle.bloom.front;
+    resolveTurn(gentle, moves(gentle)[0], LOSS, gentle.fielded, 0);
+    expect(gentle.bloom.front).toBe(front);
+    const standard = newRun('pace', 0, 'swarm', 0, 'standard');
+    resolveTurn(standard, moves(standard)[0], LOSS, standard.fielded, 0);
+    expect(standard.bloom.front).toBeGreaterThan(front);
+  });
+
+  it('Gentle has no Normal nodes; Brutal puts Brutal bots on the late nodes and the finale', () => {
+    for (const seed of SEEDS.slice(0, 20)) {
+      expect(newRun(seed, 0, 'swarm', 0, 'gentle').nodes.some((n) => n.difficulty === 1)).toBe(false);
+      const brutal = newRun(seed, 0, 'swarm', 0, 'brutal');
+      expect(brutal.nodes[brutal.heart].difficulty).toBe(3);
+      expect(brutal.nodes.some((n) => n.difficulty === 2)).toBe(false);
+    }
+  });
+
+  it('runs saved before difficulty count as Standard', () => {
+    const run = newRun('old', 0, 'swarm', 0);
+    delete run.difficulty;
+    expect(difficultyOf(run)).toBe('standard');
   });
 });
 

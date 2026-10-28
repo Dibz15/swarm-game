@@ -5,11 +5,11 @@
 // Reports run outcomes, battle win rates by node kind, difficulty and depth,
 // brood attrition, biomass and reward picks.
 // Usage: npx vite-node scripts/run-probe.ts [runs] [skill] [first seed]
-//   PACK=swarm|wall|raid (default: rotate)   PROXY='{...}' knob overrides
+//   PACK=swarm|wall|raid (default: rotate)   DIFFICULTY=gentle|standard|hard|brutal   PROXY='{...}' knob overrides
 import { battleReport, nodeSetup } from '../src/campaign/battle';
 import { COST, KIND_NEST, UNLOCKS, fit, type PackId, type Unlock } from '../src/campaign/broods';
 import { REWARD, STRAIN_SLOTS, TIER_WEIGHT } from '../src/campaign/rewards';
-import { grow, heal, hops, maxFielded, moves, needsBattle, newRun, resolveTurn, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
+import { type RunDifficulty, grow, heal, hops, maxFielded, moves, needsBattle, newRun, resolveTurn, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
 import { TICK_HZ } from '../src/sim/constants';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -19,6 +19,7 @@ const runs = Number(process.argv[2] ?? 10);
 const skill = Number(process.argv[3] ?? 1);
 const firstSeed = Number(process.argv[4] ?? 0);
 const knobs: Partial<ProxyKnobs> = process.env.PROXY ? JSON.parse(process.env.PROXY) : {};
+const DIFFICULTY = (process.env.DIFFICULTY ?? 'standard') as RunDifficulty;
 const PACKS: PackId[] = process.env.PACK ? [process.env.PACK as PackId] : ['swarm', 'wall', 'raid'];
 /** a battle still running after this long counts as a retreat (a loss) */
 const CAP = 15 * 60 * TICK_HZ;
@@ -118,7 +119,7 @@ const t0 = performance.now();
 
 for (let r = 0; r < runs; r++) {
   const pack = PACKS[(firstSeed + r) % PACKS.length];
-  const run = newRun(`probe-${firstSeed + r}`, 0, pack, 0);
+  const run = newRun(`probe-${firstSeed + r}`, 0, pack, 0, DIFFICULTY);
   let restored = false, earned = 0;
   for (let guard = 0; guard < 80 && run.status === 'active'; guard++) {
     const picked = pickReward(run);
@@ -161,7 +162,7 @@ for (let r = 0; r < runs; r++) {
 
 const pct = (a: number, b: number) => (b ? `${((100 * a) / b).toFixed(0)}%` : '-').padStart(4);
 const won = outcomes.filter((o) => o.status === 'won').length;
-console.log(`\n${runs} runs at skill ${skill}${Object.keys(knobs).length ? `, knobs ${JSON.stringify(knobs)}` : ''}: ${pct(won, runs)} won`);
+console.log(`\n${runs} runs at skill ${skill}, ${DIFFICULTY}${Object.keys(knobs).length ? `, knobs ${JSON.stringify(knobs)}` : ''}: ${pct(won, runs)} won`);
 const lost = (why: string) => outcomes.filter((o) => o.lostTo === why).length;
 console.log(`  lost to: broods ${lost('broods')}, bloom ${lost('bloom')}; checkpoint used in ${outcomes.filter((o) => o.restored).length}`);
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
