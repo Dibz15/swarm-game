@@ -1,6 +1,6 @@
 import { DT, HOLD_EXTRA, Kind, LEASH, LEVEL, MAX_LEVEL, POWER, TERRAIN, TRAITS, UNIT_STATS, UPGRADE_COST } from './constants';
 import { T_NEBULA, T_RIFT } from './terrain';
-import { pushFx, removeUnit, UNIT_FEEDING, type World } from './world';
+import { pushFx, removeUnit, UNIT_FEEDING, WILD_HEART, type World } from './world';
 
 const MAX_SEP_SCAN = 22;
 const STEER = 0.3;
@@ -20,7 +20,8 @@ export function updateMovement(w: World): void {
   const W = w.width, H = w.height;
   const tr = w.terrain;
   for (let i = 0; i < n; i++) {
-    if (!w.alive[i]) continue;
+    // The Bloom's heart is rooted (heart.ts).
+    if (!w.alive[i] || w.wild[i] === WILD_HEART) continue;
     const st = UNIT_STATS[w.kind[i]];
     const x = w.x[i], y = w.y[i];
     const fm = w.factions[w.owner[i]].mods;

@@ -15,7 +15,7 @@ import { PERSONALITIES } from './sim/ai/bot';
 import { Kind, MAX_UNITS, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
-import { needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
+import { mapBloom, needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
 import type { BattleReport } from './campaign/broods';
 import { battleReport, nodeSetup } from './campaign/battle';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
@@ -111,6 +111,7 @@ class App {
     if (bench > 0) this.startBench(bench);
     else if (q.has('eventdemo')) this.startEventDemo();
     else if (q.has('creatures')) this.setScreen(creatureGrid());
+    else if (q.has('heart')) this.startHeartDemo(Number(q.get('heart')) || 0);
     else this.showMenu();
     requestAnimationFrame((t) => this.loop(t));
   }
@@ -124,6 +125,8 @@ class App {
   }
 
   private setModal(m: HTMLElement | null): void {
+    // Only the run map darkens the score (showRunMap sets it again).
+    this.sfx.setBloom(0);
     this.modal?.remove();
     this.modal = m;
     if (m) this.ui.appendChild(m);
@@ -260,6 +263,15 @@ class App {
     this.setModal(
       runMap(run, this.sfx, { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.showRunHub(), save: () => saveRun(run) }, intro),
     );
+    this.sfx.setBloom(mapBloom(run));
+  }
+
+  /** Dev (?heart=N): a throwaway run's finale, the Bloom fed by N nodes. Nothing is saved. */
+  private startHeartDemo(strength: number): void {
+    const run = newRun(`heart-${strength}`, loadPrefs().color, 'swarm', Date.now());
+    run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, strength).map((n) => n.id);
+    for (const b of run.broods) b.size = 20;
+    this.startGame(nodeSetup(run, run.heart, window.innerHeight > window.innerWidth * 1.15, run.broods.map((b) => b.id)), { scenario: 'campaign: finale (dev)' });
   }
 
   /** Move to a node: fight for it, or march through a node already taken. */

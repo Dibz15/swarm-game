@@ -70,6 +70,7 @@ export class GameView {
   private supplyBlocked = false;
   private supplyNests = 0;
   private supplyToastTick = -1e9;
+  private bloomToasted = false;
 
   constructor(
     readonly setup: MatchSetup,
@@ -431,6 +432,42 @@ export class GameView {
           sfx.swarmHorn();
           toast('A wild swarm is coming! It hunts the biggest army', '#d65c4e');
           break;
+        case 'bloomSwarm':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 2.5, r1: e.r * 0.5, dur: 0.9, c: FERAL, thick: 3 });
+          sfx.bloomSwarm();
+          if (!this.bloomToasted) toast('The Bloom sends its swarms. They hunt every army alike', '#d65c4e');
+          this.bloomToasted = true;
+          break;
+        case 'heartWindup':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 1.6, r1: e.r, dur: 0.9, c: FERAL, thick: 2 });
+          sfx.heartWindup(e.x, e.y);
+          break;
+        case 'heartPulse': {
+          rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r, dur: 0.4, c: FERAL, thick: 5 });
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.4, r1: e.r, dur: 0.35, c: FERAL, thick: 0, disc: true });
+          const [sx, sy] = camera.toScreen(e.x, e.y);
+          if (sx > -100 && sy > -100 && sx < camera.viewW + 100 && sy < camera.viewH + 100) camera.shake = Math.min(1, camera.shake + 0.3);
+          sfx.heartPulse(e.x, e.y);
+          break;
+        }
+        case 'heartPhase':
+          rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r * 2.2, dur: 1, c: WHITE, thick: 4 });
+          particles.burst(e.x, e.y, FERAL, 60, 160, 3, 1);
+          camera.shake = Math.min(1, camera.shake + 0.5);
+          sfx.heartPhase();
+          toast('The heart rages! Its swarms rally to defend it', '#d65c4e');
+          break;
+        case 'heartDown': {
+          const kc = e.f >= 0 && e.f < NEUTRAL ? c : FERAL;
+          rings.add({ x: e.x, y: e.y, r0: 10, r1: e.r * 3, dur: 1.4, c: WHITE, thick: 6 });
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 2, dur: 0.8, c: kc, thick: 0, disc: true });
+          particles.burst(e.x, e.y, FERAL, 140, 240, 3.4, 1.6);
+          camera.shake = 1;
+          sfx.heartDown(e.x, e.y, e.f === this.human);
+          if (e.f === this.human) toast('You destroyed the heart of the Bloom!', hex(e.f));
+          else if (e.f >= 0 && e.f < NEUTRAL) toast(`${FACTION_NAMES[e.f]} destroyed the heart. Now beat them`, hex(e.f));
+          break;
+        }
         case 'dropIncoming':
           sfx.dropIncoming();
           toast('Supply drop incoming: hold it alone for energy and a free upgrade', '#ffe28c');

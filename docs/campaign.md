@@ -49,7 +49,11 @@ They are deliberately separate, and each has one job.
 | **Where it shows** | Bloom pressure in battles near the front, and the finale | Their domain battles along the way |
 | **Rule** | What you skip, it eats, and that's what makes the finale harder | Harder battles, richer rewards; fight through, go around, or let the Bloom take them |
 
-**The Bloom in battle.** It reuses the wild-swarm faction (`src/sim/events.ts`). Nodes near the front get Bloom pressure: more and bigger wild swarms, scaled by the Bloom's strength, attacking every faction alike.
+**The Bloom in battle** (#65). It reuses the wild-swarm faction (`src/sim/events.ts`), and every faction is fair game for it.
+- **Pressure:** the closer the Bloom is to a node (0 far, 1 when it falls next turn), the sooner and more often its swarms come (`bloomEvents` in `src/campaign/battle.ts`). Past 0.2 they're the Bloom's swarms, with their own cue. Far from the front they're the calm preset's wild swarms.
+- **Strength:** every node the Bloom swallowed makes its swarms 6% bigger, up to double.
+- **Previews:** the node card shows how near it is and how big its swarms are.
+- The run-map music darkens with the pressure on the nodes you can move to, and Bloom battles keep it dark.
 
 **Warlords.**
 - **Who:** 2–4 named rival colours per run, each with one **trait**: a small, clear buff such as *Ironhide* (Shields +50% HP), *Swarmlord* (faster spawning, no powers) or *Raider-king* (Raiders capture even faster). Traits are the first slice of the champion modifiers planned for later.
@@ -113,8 +117,17 @@ After every won node, **pick 1 of 3** offers.
 - **In the sim:** a deterministic per-faction modifier table (`FactionMods` in `world.ts`), read where stats are used (`combat.ts`, `movement.ts`, `nests.ts`, and the power code in `commands.ts` and `step.ts`). The v1 items are all numeric multipliers. Champion modifiers on enemies will reuse the same table.
 
 ## Finale: the Bloom's heart
-- **Map:** a large map overrun by the Bloom: wild-swarm nests, constant swarms, and a Colossus-class heart to destroy.
-- **Strength:** scales with the number of nodes the Bloom ate.
+- **Map:** a large map overrun by the Bloom, with its swarms at full pressure. The heart, a rooted boss (`src/sim/heart.ts`), sits near the centre.
+- **Bloom nests:** the 2–4 neutral nests nearest the heart. While the Bloom holds them, they release swarms and **ward** the heart: each one cuts the damage it takes by 15%. Take them first.
+- **The heart fights back:**
+  - a **pulse:** a telegraphed shockwave (pull back during the wind-up);
+  - **spore lobs** at the thickest crowd;
+  - **defenders** called up when it's pressed;
+  - at **66% and 33%** health, it rages: a burst of defenders, every Bloom nest releases, and its swarms rally home.
+  - Left alone it regrows, but never past a phase it has lost.
+- **Strength:** the nodes the Bloom ate add health to the heart (6% each), more Bloom nests, and bigger swarms.
+- **Winning:** on Gentle, Standard and Hard, your killing blow wins. If a rival lands it, the battle goes on as a normal one. On Brutal, the heart's death only opens the fight: the rivals must be beaten too. Losing all your units and nests still loses.
+- The `?heart=N` dev link jumps straight into a finale, with the Bloom fed by N nodes.
 - **Warlords:** any still alive whose domain borders the heart join as rivals. They suffer the Bloom too.
 
 ## Sound and music

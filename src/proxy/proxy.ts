@@ -21,8 +21,12 @@
 
 import { barrageLaunch, feedNeed, hasPower, surgeCost, type Command } from '../sim/commands';
 import { LEVEL, MAX_LEVEL, NEUTRAL, NestType, POWER, TICK_HZ, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, bastionTurret } from '../sim/constants';
+import { heartSlot, standingNests } from '../sim/heart';
 import { queryRadius } from '../sim/spatial';
 import { UNIT_FEEDING, type Nest, type World } from '../sim/world';
+
+/** `goal` while assaulting the Bloom's heart (not a nest id) */
+const HEART_GOAL = -2;
 
 export interface ProxyKnobs {
   /** seconds between strategic decisions */
@@ -259,6 +263,22 @@ export class Proxy {
       for (const s of blob) (bx += w.x[s]), (by += w.y[s]);
       bx /= blob.length;
       by /= blob.length;
+      // The Bloom's heart (campaign finale): once its nests are taken, or the
+      // blob is big enough to grind through the ward, go for it.
+      const heart = heartSlot(w);
+      if (heart >= 0 && blob.length >= 45 && (standingNests(w) === 0 || blob.length >= 90)) {
+        const hx = w.x[heart], hy = w.y[heart];
+        if (this.goal !== HEART_GOAL || w.tick - this.lastOrder >= this.k.refresh * TICK_HZ) {
+          const units = this.straggle(w, blob, bx, by);
+          out.push({ t: 'move', p: me, units: units.map((s) => w.uid[s]), x: hx, y: hy, nest: -1 });
+          if (mine.length && this.goal !== HEART_GOAL) out.push({ t: 'rally', p: me, nests: mine.map((n) => n.id), x: hx, y: hy });
+          this.goal = HEART_GOAL;
+          this.lastOrder = w.tick;
+        }
+        this.mode = 'counter';
+        this.upgrade(w, mine, army, out);
+        return out;
+      }
       const pushing = this.mode === 'counter' && this.pushFrom > 0;
       const bled = pushing && mySize < this.pushFrom * this.k.bleed;
       if (bled) this.pushFrom = 0;

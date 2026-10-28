@@ -633,6 +633,16 @@ export function pressure(run: RunState, id: number): number {
   return Math.max(0, Math.min(1, 1 - bloomGap(run.bloom, n.x, n.y) / (run.bloom.step * 3)));
 }
 
+/** How close the Bloom is to where you can go next (0..1): the run map's music darkens with it. */
+export function mapBloom(run: RunState): number {
+  return Math.max(0, ...moves(run).map((id) => pressure(run, id)), pressure(run, run.at));
+}
+
+/** The Bloom's strength: every node it swallowed feeds its swarms and its heart. */
+export function bloomStrength(run: RunState): number {
+  return run.swallowed.length;
+}
+
 /** Speed the Bloom up from now on, keeping how far it has already grown. */
 export function speedBloom(b: Bloom, factor: number): void {
   const step = b.step * factor;

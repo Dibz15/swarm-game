@@ -145,6 +145,17 @@ function checkVictory(w: World): void {
   }
 
   if (w.endless) return;
+  // While the Bloom's heart lives it is the goal: only losing every human ends the match.
+  if (w.heart && !w.heart.slain) {
+    let human = false;
+    for (let f = 0; f < NEUTRAL; f++) if (w.factions[f].human && w.factions[f].active && !w.factions[f].eliminated) human = true;
+    if (!human) {
+      w.over = true;
+      w.winnerTeam = -1;
+      w.winReason = 'elimination';
+    }
+    return;
+  }
   if (aliveTeams.size <= 1) {
     w.over = true;
     w.winnerTeam = aliveTeams.size === 1 ? [...aliveTeams][0] : -1;

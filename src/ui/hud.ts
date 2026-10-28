@@ -1,6 +1,7 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
 import { isMobile } from './mobile';
+import { heartSlot, standingNests } from '../sim/heart';
 import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, surgeCost } from '../sim/index';
 
 const TIPS = [
@@ -63,6 +64,7 @@ export class Hud {
   private btn: Record<string, HTMLButtonElement> = {};
   private toasts: HTMLDivElement;
   private dom: HTMLDivElement;
+  private heartBar: HTMLDivElement;
   private nestShare: HTMLDivElement;
   private domMark: HTMLElement;
   private nestCard: HTMLDivElement;
@@ -101,6 +103,7 @@ export class Hud {
         <button class="icon" data-a="mute" title="Mute (M)">♪</button>
         <button class="icon" data-a="pause" title="Pause (Esc)">❚❚</button>
       </div>
+      <div class="heartbar"><div class="heart-name">The Bloom's heart</div><div class="heart-hp"><i></i></div><div class="heart-ward"></div></div>
       <div class="dom"><div class="dom-time"></div><div class="dom-text"></div><div class="dom-bar"><i></i></div></div>
       <div class="toasts"></div>
       <div class="nestcard"></div>
@@ -174,6 +177,7 @@ export class Hud {
     this.energyText = q('.energy span');
     this.toasts = q('.toasts');
     this.dom = q('.dom');
+    this.heartBar = q('.heartbar');
     this.nestShare = q('.nestshare .segs');
     this.domMark = q('.nestshare .mark');
     this.nestCard = q('.nestcard');
@@ -335,6 +339,20 @@ export class Hud {
     active.forEach((f, k) => {
       (this.nestShare.children[k] as HTMLElement).style.width = `${(100 * nestsOf(f.id)) / Math.max(1, w.nests.length)}%`;
     });
+
+    // The Bloom's heart (campaign finale): its health, and what wards it.
+    const hs = heartSlot(w);
+    this.heartBar.style.display = hs >= 0 ? 'block' : 'none';
+    this.nestShare.style.visibility = hs >= 0 ? 'hidden' : '';
+    if (hs >= 0) {
+      const h = w.heart!;
+      const ward = standingNests(w);
+      (this.heartBar.children[1].children[0] as HTMLElement).style.width = `${(100 * w.hp[hs]) / h.maxHp}%`;
+      const text = ward > 0 ? `Warded by ${ward} Bloom nest${ward > 1 ? 's' : ''}: take them to break the ward` : 'Unwarded: strike now';
+      const el = this.heartBar.children[2] as HTMLElement;
+      if (el.textContent !== text) el.textContent = text;
+      this.heartBar.classList.toggle('open', ward === 0);
+    }
 
     // Domination: a big countdown nobody can miss, with what to do about it.
     const ds = dominationStatus(w);

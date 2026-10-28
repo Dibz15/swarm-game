@@ -3,8 +3,9 @@ import { defaultMods, type FactionMods } from './mods';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
 import { generateMap, type MapSpec, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapLayout, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
 import { initEvents } from './events';
+import { initHeart } from './heart';
 import { TAU, dcos, dsin } from './mathx';
-import { spawnUnit, World } from './world';
+import { spawnUnit, World, type HeartRule } from './world';
 
 export interface PlayerSetup {
   /** faction id == color index 0..5 */
@@ -46,6 +47,8 @@ export interface MatchSetup {
   endless?: boolean;
   /** share of nests needed for domination, instead of the map size's default */
   domShare?: number;
+  /** the Bloom's heart (campaign finale): a rooted boss; strength = nodes the Bloom ate */
+  heart?: { strength: number; rule: HeartRule };
 }
 
 export const START_UNITS = 10;
@@ -131,6 +134,7 @@ export function createWorld(setup: MatchSetup): World {
   });
 
   initEvents(w, map.events);
+  if (setup.heart) initHeart(w, setup.heart.strength, setup.heart.rule);
 
   for (const p of setup.players) {
     const fs = w.factions[p.faction].stats;

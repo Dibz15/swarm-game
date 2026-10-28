@@ -89,7 +89,12 @@ export type FxType =
   | 'colossusDown'
   | 'stomp'
   | 'domStart'
-  | 'domBreak';
+  | 'domBreak'
+  | 'bloomSwarm'
+  | 'heartWindup'
+  | 'heartPulse'
+  | 'heartPhase'
+  | 'heartDown';
 
 export interface FxEvent {
   type: FxType;
@@ -171,6 +176,37 @@ export interface EventState {
 
 export const WILD_SWARM = 1;
 export const WILD_COLOSSUS = 2;
+/** the Bloom's heart: a rooted boss (campaign finale, see heart.ts) */
+export const WILD_HEART = 3;
+
+/** How the finale ends: the heart alone, or the heart and then the rivals (Brutal). */
+export type HeartRule = 'heart' | 'heart+rivals';
+
+/** The Bloom's heart and its nests (campaign finale). */
+export interface HeartState {
+  uid: number;
+  x: number;
+  y: number;
+  maxHp: number;
+  strength: number;
+  rule: HeartRule;
+  /** 0, 1, 2: drops at 66% and 33% hp */
+  phase: number;
+  /** Bloom nests (ids): they release swarms while neutral and ward the heart */
+  nests: number[];
+  /** tick each Bloom nest next releases a swarm */
+  nestNext: number[];
+  nextPulse: number;
+  /** tick the telegraphed pulse lands, or -1 */
+  pulseAt: number;
+  nextLob: number;
+  nextCall: number;
+  /** last tick an enemy was close */
+  threat: number;
+  /** wild swarms rally to the heart until this tick */
+  recall: number;
+  slain: boolean;
+}
 
 export const UNIT_FEEDING = 1;
 
@@ -228,7 +264,7 @@ export class World {
   readonly pack = new Uint8Array(MAX_UNITS);
   /** spawned by a level-3 nest: extra HP */
   readonly vet = new Uint8Array(MAX_UNITS);
-  /** neutral event units: WILD_SWARM or WILD_COLOSSUS, else 0 */
+  /** neutral event units: WILD_SWARM, WILD_COLOSSUS or WILD_HEART, else 0 */
   readonly wild = new Uint8Array(MAX_UNITS);
 
   readonly free: number[] = [];
@@ -243,6 +279,8 @@ export class World {
   crystals: Crystal[] = [];
   /** living-map events, or null when they're off */
   events: EventState | null = null;
+  /** the Bloom's heart (campaign finale), or null */
+  heart: HeartState | null = null;
   bots: Bot[] = [];
 
   /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
@@ -261,7 +299,7 @@ export class World {
   /** no elimination or domination win (tutorial missions without an opponent) */
   endless = false;
   /** how the match ended */
-  winReason: '' | 'elimination' | 'domination' = '';
+  winReason: '' | 'elimination' | 'domination' | 'heart' = '';
   /** consecutive ticks each team has held the domination share */
   readonly domTicks = new Int32Array(NEUTRAL_TEAM + 1);
   /** per-faction unit counts sampled once a second */
