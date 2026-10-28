@@ -735,19 +735,86 @@ canvas.creature { display: block; }
 
 /* ---- broods and camp (#63) -------------------------------------------- */
 
+/* The camp (#76): a tabbed modal over the run map. */
+.camp { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 12px; background: rgba(4, 5, 12, 0.55); backdrop-filter: blur(2px); }
+.camp-card {
+  width: min(760px, 100%); max-height: 100%; display: grid; grid-template-columns: 132px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px 16px; padding: 18px 20px;
+}
+.camp-card header { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; }
+.camp-card header h3 { margin: 0; font-size: 15px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+.camp-biomass { position: relative; margin-left: auto; color: var(--muted); font-size: 14px; }
+.camp-biomass b { color: #b4ff39; font-size: 20px; font-variant-numeric: tabular-nums; }
+.camp-biomass .spent { position: absolute; left: 0; top: -2px; color: var(--hot); font-weight: 700; animation: spent 0.9s ease-out forwards; pointer-events: none; }
+@keyframes spent { to { transform: translateY(-22px); opacity: 0; } }
+.camp-tabs { display: flex; flex-direction: column; gap: 6px; }
+.camp-tabs button { min-height: 44px; text-align: left; padding: 8px 12px; }
+.camp-tabs button span { color: var(--accent); margin-right: 4px; }
+.camp-tabs button.on { border-color: var(--accent); background: rgba(45, 226, 230, 0.14); color: var(--text); }
+.camp-body { min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
+.camp-body .hint { color: var(--muted); font-size: 13px; line-height: 1.45; margin: 4px 0 10px; }
+
+.brood-cards {
+  display: flex; gap: 12px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory;
+  padding: 4px 2px 10px; touch-action: pan-x; -webkit-overflow-scrolling: touch;
+}
+.brood-card {
+  position: relative; flex: 0 0 210px; scroll-snap-align: start; display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(10, 13, 28, 0.85);
+}
+.brood-card.vet { border-color: rgba(255, 182, 39, 0.55); }
+.brood-card .portrait { align-self: center; border-radius: 50%; background: radial-gradient(circle, rgba(45, 226, 230, 0.12), transparent 70%); }
+.brood-card.hurt .portrait { filter: saturate(0.5); }
+.brood-card .badge.vet { position: absolute; top: 10px; right: 12px; color: var(--warn); font-size: 18px; text-shadow: 0 0 8px var(--warn); }
+.brood-card .temper { position: absolute; top: 12px; left: 14px; color: var(--muted); font-size: 12px; font-style: italic; }
+.brood-card h4 { margin: 0; font-size: 16px; text-align: center; }
+.brood-card .kind, .brood-card .state { margin: 0; text-align: center; font-size: 13px; color: var(--muted); }
+.brood-card .kind .glyph { color: var(--accent); }
+.brood-card.hurt .state { color: var(--hot); }
+.size-bar { position: relative; height: 16px; border-radius: 8px; background: rgba(150, 170, 255, 0.12); overflow: hidden; }
+.size-bar i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(45, 226, 230, 0.45), rgba(45, 226, 230, 0.8)); }
+.size-bar span { position: relative; display: block; text-align: center; font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.strains { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.strain-slot { padding: 5px 8px; border: 1px dashed var(--line-strong); border-radius: 8px; font-size: 12px; color: var(--muted); }
+.strain-slot.on { border-style: solid; border-color: rgba(160, 123, 255, 0.6); color: var(--text); display: flex; flex-direction: column; }
+.strain-slot.on b { color: #c9b4ff; font-size: 12px; }
+.strain-slot.on small { color: var(--muted); font-size: 11px; }
+.brood-card .actions { margin-top: auto; display: flex; gap: 6px; }
+.brood-card .actions button, .unlock-card button { flex: 1; min-height: 40px; padding: 6px 8px; font-size: 13px; }
+.cost { color: #b4ff39; margin-left: 2px; }
+button:disabled .cost { color: inherit; }
+
+.unlock-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.unlock-card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(10, 13, 28, 0.85); }
+.unlock-card .icon-art { flex: none; color: var(--muted); display: grid; place-items: center; width: 40px; }
+.unlock-card .icon-art.reward { color: #c9b4ff; font-size: 24px; }
+.unlock-card.on { border-color: rgba(45, 226, 230, 0.5); }
+.unlock-card.on .icon-art { color: var(--accent); filter: drop-shadow(0 0 6px var(--accent)); }
+.unlock-card .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 14px; }
+.unlock-card .who small { color: var(--muted); font-size: 12px; }
+.unlock-card .state { color: var(--accent); font-size: 12px; }
+.unlock-card button { flex: 0 0 auto; }
+
+@media (max-width: 560px) {
+  .camp { padding: 8px; }
+  .camp-card { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); padding: 14px; }
+  .camp-tabs { flex-direction: row; }
+  .camp-tabs button { flex: 1; min-height: 40px; text-align: center; padding: 6px 4px; white-space: nowrap; font-size: 13px; }
+  .brood-card { flex-basis: 78%; }
+}
+
 .broods { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .brood-chip { font-size: 13px; color: var(--accent); white-space: nowrap; }
 .brood-chip.hurt { color: var(--hot); }
-.brood-list, .camp-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.brood-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .brood-pick { display: flex; gap: 10px; align-items: center; text-align: left; padding: 8px 10px; }
 .brood-pick.on { border-color: var(--accent); background: rgba(45, 226, 230, 0.14); }
-.brood-pick .glyph, .camp-row .glyph, .brood-events .glyph { color: var(--accent); width: 16px; text-align: center; }
-.brood-pick .who, .camp-row .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 14px; }
-.brood-pick small, .camp-row small { color: var(--muted); font-size: 12px; }
+.brood-pick .glyph, .brood-events .glyph { color: var(--accent); width: 16px; text-align: center; }
+.brood-pick .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 14px; }
+.brood-pick small { color: var(--muted); font-size: 12px; }
 .node-card .row { margin-top: 10px; }
 .node-card .row button.grow1 { flex: 1; margin-top: 0; }
 .node-card h3.sub { margin-top: 14px; }
-.camp-row { display: flex; gap: 8px; align-items: center; }
 .brood-events { margin: 10px 0; padding: 0; list-style: none; font-size: 14px; line-height: 1.6; color: #c6cceb; }
 .packs { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 4px; }
 .pack { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 12px 14px; }

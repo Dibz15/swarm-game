@@ -6,6 +6,7 @@
 import type { AudioEngine } from '../audio/engine';
 import { mountCreatures } from '../art/creature';
 import { bloomLabel, rivals, type Rival } from '../campaign/battle';
+import { broodCreature, broodTemper } from '../campaign/character';
 import {
   MAP_H,
   MAP_W,
@@ -32,8 +33,8 @@ import {
   type TurnResult,
 } from '../campaign/run';
 import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, type Reward } from '../campaign/rewards';
-import { COST, KIND_NAME, MAX_ROSTER, PACKS, UNLOCKS, UNLOCK_TEXT, fit, veteran, type Brood, type BroodEvent, type PackId } from '../campaign/broods';
-import { Kind } from '../sim/constants';
+import { COST, KIND_NAME, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
+import { Kind, NestType } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
 import { DIFFICULTY_NAMES, type Personality } from '../sim/ai/bot';
@@ -377,6 +378,8 @@ function drawMap(
       g.fill();
     }
     // A small brood badge where one waits to be rescued.
+    // The camp beside your swarm: tap it (or your node) to open the camp.
+    if (here && !opts.thumb) campSymbol(g, x + r * CAMP_AT, y - r * CAMP_AT, u, me, pulse);
     if (n.rescue !== undefined && !taken && !dead) {
       const bx = x - r * 0.85, by = y - r * 0.85;
       g.fillStyle = '#06070f';
@@ -394,6 +397,217 @@ function drawMap(
     }
   }
   return v;
+}
+
+/** Where the camp symbol sits from the current node, in node radii (both axes). */
+const CAMP_AT = 1.75;
+
+/** A small campfire badge: a dark disc, a ring in your colour and a flickering flame. */
+function campSymbol(g: CanvasRenderingContext2D, x: number, y: number, u: number, me: string, pulse: number): void {
+  const r = 10 * u;
+  g.fillStyle = '#06070f';
+  g.beginPath();
+  g.arc(x, y, r, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = me;
+  g.lineWidth = 1.5 * u;
+  g.stroke();
+  const f = r * (0.55 + 0.08 * pulse);
+  g.fillStyle = '#ffb627';
+  g.beginPath();
+  g.moveTo(x, y - f);
+  g.quadraticCurveTo(x + f * 0.7, y, x, y + f * 0.55);
+  g.quadraticCurveTo(x - f * 0.7, y, x, y - f);
+  g.fill();
+  g.strokeStyle = '#e6eaff';
+  g.lineWidth = 1.2 * u;
+  g.beginPath();
+  g.moveTo(x - r * 0.5, y + r * 0.55);
+  g.lineTo(x + r * 0.5, y + r * 0.35);
+  g.moveTo(x + r * 0.5, y + r * 0.55);
+  g.lineTo(x - r * 0.5, y + r * 0.35);
+  g.stroke();
+}
+
+// ---- the camp (#76) ----------------------------------------------------------
+
+const UNLOCK_CARD: Record<string, { name: string; gives: string; power: string }> = {
+  [NestType.Forge]: { name: 'Forge', gives: 'Spawns Shields', power: 'Fortify' },
+  [NestType.Spire]: { name: 'Spire', gives: 'Spawns Spears', power: 'Barrage' },
+  [NestType.Swift]: { name: 'Den', gives: 'Spawns Raiders', power: 'Blink' },
+  [NestType.Bastion]: { name: 'Bastion', gives: 'A turret nest', power: 'Lockdown' },
+  nova: { name: 'Nova', gives: 'A power, not a nest', power: 'Nova shockwave' },
+};
+
+/** Inline symbols for the unlock cards: nest shapes, and a burst for Nova. */
+function unlockIcon(u: Unlock): string {
+  const path =
+    u === NestType.Forge
+      ? '<rect x="7" y="7" width="18" height="18" rx="2"/>'
+      : u === NestType.Spire
+        ? '<path d="M16 5 L27 26 L5 26 Z"/>'
+        : u === NestType.Swift
+          ? '<path d="M16 4 L28 16 L16 28 L4 16 Z"/>'
+          : u === NestType.Bastion
+            ? '<path d="M16 4 L27 10 L27 22 L16 28 L5 22 L5 10 Z"/><path d="M16 11 L16 21 M11 16 L21 16"/>'
+            : '<circle cx="16" cy="16" r="4"/><path d="M16 3 V8 M16 24 V29 M3 16 H8 M24 16 H29 M7 7 L10.5 10.5 M21.5 21.5 L25 25 M25 7 L21.5 10.5 M10.5 21.5 L7 25"/>';
+  return `<svg viewBox="0 0 32 32" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">${path}</svg>`;
+}
+
+type CampTab = 'broods' | 'unlocks' | 'rewards';
+const CAMP_TABS: { id: CampTab; label: string; icon: string }[] = [
+  { id: 'broods', label: 'Broods', icon: '●' },
+  { id: 'unlocks', label: 'Unlocks', icon: '⬡' },
+  { id: 'rewards', label: 'Rewards', icon: '✦' },
+];
+
+/**
+ * The camp: a tabbed modal of brood character cards (portraits from #72),
+ * unlock cards and the run's rewards. Buying goes through run.ts and saves.
+ */
+function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close: () => void; changed: () => void }): HTMLDivElement {
+  let tab: CampTab = 'broods';
+  const m = el(`
+    <div class="camp" role="dialog" aria-label="Camp">
+      <div class="card camp-card">
+        <header>
+          <h3>Camp</h3>
+          <span class="camp-biomass"><b>${run.biomass}</b> biomass</span>
+          <button class="icon close" data-a="close" aria-label="Close">✕</button>
+        </header>
+        <nav class="camp-tabs" role="tablist"></nav>
+        <div class="camp-body"></div>
+      </div>
+    </div>`);
+  const nav = m.querySelector('.camp-tabs') as HTMLElement;
+  const body = m.querySelector('.camp-body') as HTMLElement;
+  const shown = m.querySelector('.camp-biomass b') as HTMLElement;
+  m.querySelector('[data-a=close]')!.addEventListener('click', h.close);
+  // Tapping off the card closes it.
+  m.addEventListener('pointerdown', (e) => {
+    if (e.target === m) h.close();
+  });
+
+  let tween = 0;
+  const spent = (from: number) => {
+    const to = run.biomass;
+    const float = el(`<span class="spent">−${from - to}</span>`);
+    shown.parentElement!.append(float);
+    float.addEventListener('animationend', () => float.remove());
+    const t0 = performance.now();
+    const id = ++tween;
+    const step = (now: number) => {
+      if (id !== tween) return;
+      const t = Math.min(1, (now - t0) / 450);
+      shown.textContent = String(Math.round(from + (to - from) * (1 - (1 - t) ** 3)));
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+
+  const price = (cost: number, label: string, act: string) =>
+    `<button data-act="${act}" ${run.biomass >= cost ? '' : 'disabled'}>${label} <span class="cost">${cost}</span></button>`;
+
+  const broodsTab = () => {
+    const card = (b: Brood, i: number) => {
+      const { word } = broodTemper(run, b);
+      const slots = Array.from({ length: STRAIN_SLOTS }, (_, k) => {
+        const r = REWARD[b.strains[k]];
+        return r ? `<li class="strain-slot on" title="${esc(r.text)}"><b>✦ ${esc(r.name)}</b><small>${esc(r.text)}</small></li>` : '<li class="strain-slot">✦ empty strain slot</li>';
+      }).join('');
+      return `<article class="brood-card${b.wounded ? ' hurt' : ''}${veteran(b) ? ' vet' : ''}">
+        <div class="portrait" data-creature="${i}"></div>
+        ${veteran(b) ? '<span class="badge vet" title="Veteran: its dots start tougher">★</span>' : ''}
+        <span class="temper">${word}</span>
+        <h4>${esc(b.name)}</h4>
+        <p class="kind"><span class="glyph">${KIND_GLYPH[b.kind]}</span> ${KIND_NAME[b.kind]} · ${b.wins} win${b.wins === 1 ? '' : 's'}</p>
+        <div class="size-bar" title="${b.size} of ${b.cap} dots"><i style="width:${Math.min(100, (100 * b.size) / b.cap)}%"></i><span>${b.size}/${b.cap}</span></div>
+        <p class="state">${b.wounded ? `Wounded · sits out ${b.wounded} battle${b.wounded > 1 ? 's' : ''}` : 'Ready to fight'}</p>
+        <ul class="strains">${slots}</ul>
+        <div class="actions">
+          ${b.wounded ? price(COST.heal, 'Heal', `heal:${b.id}`) : ''}
+          ${price(COST.grow(b), `Cap +${COST.growBy}`, `grow:${b.id}`)}
+        </div>
+      </article>`;
+    };
+    body.innerHTML = `<div class="brood-cards">${run.broods.map(card).join('')}</div>
+      <p class="hint">${run.broods.length} of ${MAX_ROSTER} broods. Heal a wounded brood so it can fight next battle; raise its cap so it can grow larger.</p>`;
+    mountCreatures(body, run.broods.map((b) => broodCreature(run, b)), 112);
+    const row = body.querySelector('.brood-cards') as HTMLElement;
+    // A mouse wheel scrolls the row sideways.
+    row.addEventListener(
+      'wheel',
+      (e) => {
+        if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+        e.preventDefault();
+        row.scrollLeft += e.deltaY;
+      },
+      { passive: false },
+    );
+  };
+
+  const unlocksTab = () => {
+    const card = (u: Unlock) => {
+      const d = UNLOCK_CARD[u];
+      const own = unlocked(run, u);
+      return `<article class="unlock-card${own ? ' on' : ''}">
+        <span class="icon-art">${unlockIcon(u)}</span>
+        <div class="who"><b>${d.name}</b><small>${d.gives}</small><small>Power: ${d.power}</small></div>
+        ${own ? '<span class="state">Unlocked</span>' : price(unlockCost(u), 'Unlock', `unlock:${u}`)}
+      </article>`;
+    };
+    body.innerHTML = `<p class="hint">Until a nest type is unlocked, it spawns Swarmers for you and gives no power.</p>
+      <div class="unlock-cards">${UNLOCKS.map(card).join('')}</div>`;
+  };
+
+  const rewardsTab = () => {
+    body.innerHTML = run.perks.length
+      ? `<div class="unlock-cards">${run.perks
+          .map((p) => {
+            const r = REWARD[p];
+            return `<article class="unlock-card on"><span class="icon-art reward">✦</span><div class="who"><b>${esc(r?.name ?? p)}</b><small>${esc(r?.text ?? '')}</small></div></article>`;
+          })
+          .join('')}</div>`
+      : '<p class="hint">No run-wide rewards yet. Win battles to pick them; strains show on their brood\'s card.</p>';
+  };
+
+  const draw = () => {
+    nav.innerHTML = CAMP_TABS.map(
+      (t) => `<button role="tab" aria-selected="${t.id === tab}" class="${t.id === tab ? 'on' : ''}" data-tab="${t.id}"><span>${t.icon}</span> ${t.label}</button>`,
+    ).join('');
+    nav.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach((b) =>
+      b.addEventListener('click', () => {
+        if (b.dataset.tab === tab) return;
+        tab = b.dataset.tab as CampTab;
+        sfx.mapHover();
+        draw();
+      }),
+    );
+    const keep = (body.querySelector('.brood-cards') as HTMLElement | null)?.scrollLeft ?? 0;
+    if (tab === 'broods') broodsTab();
+    else if (tab === 'unlocks') unlocksTab();
+    else rewardsTab();
+    const row = body.querySelector('.brood-cards') as HTMLElement | null;
+    if (row) row.scrollLeft = keep;
+    body.querySelectorAll<HTMLButtonElement>('[data-act]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const [act, arg] = btn.dataset.act!.split(':');
+        const from = run.biomass;
+        const done =
+          act === 'heal' ? heal(run, Number(arg)) : act === 'grow' ? grow(run, Number(arg)) : unlock(run, arg === 'nova' ? 'nova' : Number(arg));
+        if (!done) return;
+        if (act === 'heal') sfx.broodHealed();
+        else if (act === 'grow') sfx.broodGrown();
+        else sfx.biomassSpent();
+        h.save();
+        h.changed();
+        spent(from);
+        draw();
+      }),
+    );
+  };
+  draw();
+  return m;
 }
 
 /** A small static picture of a run, for the hub. */
@@ -515,12 +729,11 @@ export function runMap(
         <header>
           <div class="run-title"><b>${esc(run.seedText)}</b><span>${RUN_DIFFICULTY[difficultyOf(run)].name} · turn ${run.turn}</span></div>
           <div class="run-stats"></div>
-          <button class="small" data-a="camp">Camp</button>
           <button class="small" data-a="leave">← All runs</button>
         </header>
         <div class="map-wrap">
           <canvas></canvas>
-          <p class="map-hint">Tap a highlighted territory next to your swarm. Each move is a battle, then the Bloom advances. Drag to look around.</p>
+          <p class="map-hint">Tap a highlighted territory next to your swarm. Each move is a battle, then the Bloom advances. Tap your swarm to open the camp. Drag to look around.</p>
           <div class="node-veil" hidden><div class="card node-card" role="dialog"></div></div>
         </div>
       </div>
@@ -540,11 +753,21 @@ export function runMap(
   const showStats = () => (stats.innerHTML = `${broods(run)}<span class="biomass">${run.biomass} biomass</span>`);
   showStats();
   m.querySelector('[data-a=leave]')!.addEventListener('click', h.leave);
-  m.querySelector('[data-a=camp]')!.addEventListener('click', () => {
-    selected = null;
+  let campEl: HTMLElement | null = null;
+  const camp = () => {
+    close();
     sfx.mapSelect();
-    camp();
-  });
+    campEl?.remove();
+    campEl = campModal(run, sfx, {
+      save: h.save,
+      changed: showStats,
+      close: () => {
+        campEl?.remove();
+        campEl = null;
+      },
+    });
+    m.querySelector('.map-wrap')!.append(campEl);
+  };
 
   const open = moves(run);
   let selected: number | null = null;
@@ -575,7 +798,7 @@ export function runMap(
       }
       if (n.checkpoint) rows.push(`<dt>Checkpoint</dt><dd>${run.checkpointUsed ? 'Already used' : 'Reach it to save the run here, once'}</dd>`);
     }
-    const status = n.id === run.at ? 'Your swarm is here.' : dead ? 'Lost to the Bloom.' : taken ? 'Taken: march through without a battle.' : canGo ? '' : 'Not next to your swarm.';
+    const status = n.id === run.at ? 'Your swarm is here, at its camp.' : dead ? 'Lost to the Bloom.' : taken ? 'Taken: march through without a battle.' : canGo ? '' : 'Not next to your swarm.';
     const verb = !canGo ? null : needsBattle(run, n.id) ? 'Fight' : 'March';
     panel.innerHTML = `
       <button class="icon close" data-a="close" aria-label="Close">✕</button>
@@ -583,9 +806,11 @@ export function runMap(
       <p>${KIND_TEXT[n.kind]}</p>
       ${rows.length ? `<dl>${rows.join('')}</dl>` : ''}
       ${status ? `<p class="hint">${status}</p>` : ''}
-      ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}`;
+      ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}
+      ${n.id === run.at ? '<button class="primary" data-a="camp">Open camp</button>' : ''}`;
     mountCreatures(panel, foes.map((r) => r.creature), 40);
     panel.querySelector('[data-a=close]')!.addEventListener('click', close);
+    panel.querySelector('[data-a=camp]')?.addEventListener('click', camp);
     panel.querySelector('[data-a=go]')?.addEventListener('click', () => {
       if (verb === 'Fight') return choose(n);
       sfx.march();
@@ -642,52 +867,6 @@ export function runMap(
     draw();
   };
 
-  /** The camp: spend biomass on broods and unlocks. */
-  const camp = () => {
-    veil.hidden = false;
-    const price = (cost: number, label: string, act: string) =>
-      `<button class="small" data-act="${act}" ${run.biomass >= cost ? '' : 'disabled'}>${label} · ${cost}</button>`;
-    const rows = run.broods
-      .map(
-        (b) => `<div class="camp-row">
-          <span class="glyph">${KIND_GLYPH[b.kind]}</span>
-          <span class="who"><b>${esc(b.name)}</b><small>${KIND_NAME[b.kind]} · ${b.size}/${b.cap}${veteran(b) ? ' · ★' : ''}${strainText(b, ' · ✦ ')}${b.wounded ? ' · wounded' : ''}</small></span>
-          ${b.wounded ? price(COST.heal, 'Heal', `heal:${b.id}`) : ''}
-          ${price(COST.grow(b), `Cap +${COST.growBy}`, `grow:${b.id}`)}
-        </div>`,
-      )
-      .join('');
-    const unlocks = UNLOCKS.map(
-      (u) => `<div class="camp-row">
-        <span class="who"><b>${UNLOCK_TEXT[u]}</b></span>
-        ${unlocked(run, u) ? '<span class="hint">Unlocked</span>' : price(unlockCost(u), 'Unlock', `unlock:${u}`)}
-      </div>`,
-    ).join('');
-    panel.innerHTML = `
-      <button class="icon close" data-a="close" aria-label="Close">✕</button>
-      <h3>Camp · ${run.biomass} biomass</h3>
-      <div class="camp-list">${rows}</div>
-      ${run.perks.length ? `<h3 class="sub">Rewards</h3><div class="camp-list">${run.perks.map((p) => `<div class="camp-row"><span class="who"><b>${REWARD[p]?.name ?? p}</b><small>${REWARD[p]?.text ?? ''}</small></span></div>`).join('')}</div>` : ''}
-      <h3 class="sub">Unlocks</h3>
-      <p class="hint">Until a nest type is unlocked, it spawns Swarmers for you and gives no power.</p>
-      <div class="camp-list">${unlocks}</div>`;
-    panel.querySelector('[data-a=close]')!.addEventListener('click', close);
-    panel.querySelectorAll<HTMLButtonElement>('[data-act]').forEach((btn) =>
-      btn.addEventListener('click', () => {
-        const [act, arg] = btn.dataset.act!.split(':');
-        const done =
-          act === 'heal' ? heal(run, Number(arg)) : act === 'grow' ? grow(run, Number(arg)) : unlock(run, arg === 'nova' ? 'nova' : Number(arg));
-        if (!done) return;
-        if (act === 'heal') sfx.broodHealed();
-        else if (act === 'grow') sfx.broodGrown();
-        else sfx.biomassSpent();
-        h.save();
-        showStats();
-        camp();
-      }),
-    );
-  };
-
   const dpr = () => window.devicePixelRatio || 1;
   const local = (e: { clientX: number; clientY: number }) => {
     const r = c.getBoundingClientRect();
@@ -697,6 +876,9 @@ export function runMap(
   const pick = (e: PointerEvent): number | null => {
     const p = local(e);
     let best: number | null = null, bestD = (30 * dpr()) ** 2;
+    const here = run.nodes[run.at];
+    const off = 12 * CAMP_AT * dpr();
+    if ((view.ox + here.x * view.s + off - p.x) ** 2 + (view.oy + here.y * view.s - off - p.y) ** 2 < (16 * dpr()) ** 2) return run.at;
     for (const n of run.nodes) {
       if (!known.has(n.id)) continue;
       const d = (view.ox + n.x * view.s - p.x) ** 2 + (view.oy + n.y * view.s - p.y) ** 2;
@@ -770,6 +952,7 @@ export function runMap(
     pinch = 0;
     if (dragged) return;
     const n = pick(e);
+    if (n !== null && n === run.at && run.status === 'active') return camp();
     if (n === null || n === selected) return;
     selected = n;
     sfx.mapSelect();
