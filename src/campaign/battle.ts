@@ -1,6 +1,7 @@
-import { PERSONALITIES } from '../sim/ai/bot';
+import { creature, type Creature } from '../art/creature';
+import { PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { EventLevel } from '../sim/mapgen';
-import { Rng } from '../sim/rng';
+import { Rng, hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import { TICK_HZ } from '../sim/constants';
 import type { World } from '../sim/world';
@@ -63,6 +64,23 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
       })),
     ],
   };
+}
+
+export interface Rival {
+  faction: number;
+  personality: Personality;
+  creature: Creature;
+}
+
+/** A node's rivals as the battle will field them, each with its creature portrait (#72). */
+export function rivals(run: RunState, id: number): Rival[] {
+  const n = run.nodes[id];
+  return nodeSetup(run, id, false)
+    .players.filter((p) => p.bot)
+    .map((p, i) => {
+      const personality = p.bot!.personality;
+      return { faction: p.faction, personality, creature: creature(hashString(`rival:${n.seed}:${i}`), p.faction, { temper: personality, tier: n.difficulty }) };
+    });
 }
 
 /** Events level the node's battle would get right now, for previews. */

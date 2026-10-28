@@ -24,6 +24,7 @@ import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
 import { buildSetup, campaignMenu, randomSetup, skirmishMenu, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
+import { creatureGrid } from './ui/creatures';
 
 class App {
   private canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -109,6 +110,7 @@ class App {
     const bench = Number(q.get('bench'));
     if (bench > 0) this.startBench(bench);
     else if (q.has('eventdemo')) this.startEventDemo();
+    else if (q.has('creatures')) this.setScreen(creatureGrid());
     else this.showMenu();
     requestAnimationFrame((t) => this.loop(t));
   }
