@@ -128,9 +128,9 @@ export const seedRadius = (b: Bloom, s: BloomSeed, time = b.time): number => b.s
 /** How the Bloom's parts fuse: circles and the band melt together within this distance (a smooth union). */
 export const BLOOM_FUSE = 60;
 /** Its whole edge also grows near where it's growing from: by this share of each seed's radius... */
-export const BLOOM_SWELL = 0.3;
+export const BLOOM_SWELL = 0.45;
 /** ...fading with distance from that seed over this length. */
-export const BLOOM_REACH = 220;
+export const BLOOM_REACH = 320;
 
 /** A smooth minimum: like min(a, b), but rounded where they're within k of each other. */
 function smin(a: number, b: number, k: number): number {
