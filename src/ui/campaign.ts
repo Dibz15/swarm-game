@@ -409,7 +409,8 @@ function drawMap(
     }
   }
   // Your swarm: its dots orbit your node, over the nodes' glow.
-  if (fx && run.status === 'active') fx.swarm.draw(g, run.nodes[run.at], opts.time, X, Y, u, me);
+  // Unlike the node icons, the swarm lives in the map: it shrinks as you zoom out (1 at the default zoom).
+  if (fx && run.status === 'active') fx.swarm.draw(g, run.nodes[run.at], opts.time, X, Y, u, me, (v.s * VIEW_SPAN) / cw);
   return v;
 }
 

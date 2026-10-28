@@ -481,18 +481,22 @@ export class Spores {
   }
 }
 
+const TENDRIL_SPOTS = new Set<number>();
+
 /** Tendrils feeling out from the edge at stable spots (hashed by grid cell), swaying. */
 export function tendrils(g: CanvasRenderingContext2D, f: BloomField, time: number, X: (x: number) => number, Y: (y: number) => number, u: number): void {
   g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
   g.fillStyle = 'rgba(240, 140, 215, 0.8)';
   g.lineWidth = 1.4 * u;
-  let drawn = 0;
-  for (let i = 0; i < f.nseg * SEG && drawn < 70; i += SEG) {
+  // One tendril at most per 24-unit spot: zoomed in, several edge segments share a spot.
+  TENDRIL_SPOTS.clear();
+  for (let i = 0; i < f.nseg * SEG && TENDRIL_SPOTS.size < 70; i += SEG) {
     const x = (f.seg[i] + f.seg[i + 2]) / 2, y = (f.seg[i + 1] + f.seg[i + 3]) / 2;
-    const h = Math.abs(Math.sin(Math.round(x / 9) * 12.9898 + Math.round(y / 9) * 78.233) * 43758.5453) % 1;
-    if (h > 0.09) continue;
-    drawn++;
-    const k = h / 0.09;
+    const cx = Math.round(x / 24), cy = Math.round(y / 24);
+    const h = Math.abs(Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453) % 1;
+    if (h > 0.25 || TENDRIL_SPOTS.has(cx * 100003 + cy)) continue;
+    TENDRIL_SPOTS.add(cx * 100003 + cy);
+    const k = h / 0.25;
     const len = 10 + k * 22;
     const a = Math.atan2(f.seg[i + 5], f.seg[i + 4]) + Math.sin(time * (0.6 + k * 0.7) + k * 9) * 0.7;
     const ex = x + len * Math.cos(a), ey = y + len * Math.sin(a);
@@ -657,14 +661,18 @@ export class SwarmDots {
     this.march = null;
   }
 
-  draw(g: CanvasRenderingContext2D, at: RunNode, time: number, X: (x: number) => number, Y: (y: number) => number, u: number, color: string): void {
+  /** `zoom` is the map's zoom against the default view: the orbit scales with it, but never shrinks inside the node's disc. */
+  draw(g: CanvasRenderingContext2D, at: RunNode, time: number, X: (x: number) => number, Y: (y: number) => number, u: number, color: string, zoom = 1): void {
+    const ru = u * zoom;
+    const inner = (nodeRadius(at, DEFAULT_ICONS) + 4) * u;
+    const dot = u * Math.max(0.55, Math.min(1.6, Math.sqrt(zoom)));
     g.save();
     g.globalCompositeOperation = 'lighter';
     g.fillStyle = color;
     const m = this.march;
     for (let i = 0; i < this.n; i++) {
       const a = this.ang[i] + time * this.spd[i];
-      const r = (this.rad[i] + 3 * Math.sin(time * 1.3 + this.wob[i])) * u;
+      const r = Math.max(inner + (this.rad[i] - 24) * u * 0.4, (this.rad[i] + 3 * Math.sin(time * 1.3 + this.wob[i])) * ru);
       const ox = Math.cos(a) * r, oy = Math.sin(a) * r * 0.85;
       let x = X(at.x) + ox, y = Y(at.y) + oy;
       if (m) {
@@ -675,17 +683,17 @@ export class SwarmDots {
         const tx = X(m.to.x) + ox, ty = Y(m.to.y) + oy;
         const dx = tx - fx, dy = ty - fy;
         const len = Math.hypot(dx, dy) || 1;
-        const bow = Math.sin(e * Math.PI) * 10 * u * Math.sin(this.wob[i] * 3);
+        const bow = Math.sin(e * Math.PI) * 10 * ru * Math.sin(this.wob[i] * 3);
         x = fx + dx * e - (dy / len) * bow;
         y = fy + dy * e + (dx / len) * bow;
       }
       g.globalAlpha = 0.22;
       g.beginPath();
-      g.arc(x, y, 4.5 * u, 0, Math.PI * 2);
+      g.arc(x, y, 4.5 * dot, 0, Math.PI * 2);
       g.fill();
       g.globalAlpha = 0.95;
       g.beginPath();
-      g.arc(x, y, 2 * u, 0, Math.PI * 2);
+      g.arc(x, y, 2 * dot, 0, Math.PI * 2);
       g.fill();
     }
     g.restore();
