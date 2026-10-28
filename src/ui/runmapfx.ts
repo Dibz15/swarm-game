@@ -481,29 +481,80 @@ export class Spores {
   }
 }
 
-/** Tendrils feeling out from the edge at stable spots (hashed by grid cell), swaying. */
-export function tendrils(g: CanvasRenderingContext2D, f: BloomField, time: number, X: (x: number) => number, Y: (y: number) => number, u: number): void {
-  g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
-  g.fillStyle = 'rgba(240, 140, 215, 0.8)';
-  g.lineWidth = 1.4 * u;
+/**
+ * Tendrils rooted at fixed spots in the map (a hashed lattice), not on the
+ * traced edge, so they never blink as the edge redraws. A spot near the edge
+ * sends one out from the edge's surface (its root found by Newton steps), at a
+ * fixed size; it fades in as the edge nears and out as the edge moves on.
+ * The lattice is the same at every zoom (spots are culled cheaply against the
+ * sampled field), so zooming never swaps one set of tendrils for another.
+ * `gap` is the drawn Bloom (negative inside), and `field` its samples over the view.
+ */
+/** Spacing of the spots tendrils grow from, in map units. */
+const TENDRIL_STEP = 24;
+
+export function tendrils(
+  g: CanvasRenderingContext2D,
+  gap: (x: number, y: number) => number,
+  field: BloomField,
+  view: { x0: number; y0: number; x1: number; y1: number },
+  time: number,
+  X: (x: number) => number,
+  Y: (y: number) => number,
+  u: number,
+): void {
+  const step = TENDRIL_STEP;
+  const band = step * 1.2;
+  // Zoomed far out they fade smoothly as they get too small to read, rather than vanishing at once.
+  const zoomFade = Math.max(0, Math.min(1, (Math.abs(X(10) - X(0)) / u - 1.5) / 2));
+  if (zoomFade === 0) return;
   let drawn = 0;
-  for (let i = 0; i < f.nseg * SEG && drawn < 70; i += SEG) {
-    const x = (f.seg[i] + f.seg[i + 2]) / 2, y = (f.seg[i + 1] + f.seg[i + 3]) / 2;
-    const h = Math.abs(Math.sin(Math.round(x / 9) * 12.9898 + Math.round(y / 9) * 78.233) * 43758.5453) % 1;
-    if (h > 0.09) continue;
-    drawn++;
-    const k = h / 0.09;
-    const len = 10 + k * 22;
-    const a = Math.atan2(f.seg[i + 5], f.seg[i + 4]) + Math.sin(time * (0.6 + k * 0.7) + k * 9) * 0.7;
-    const ex = x + len * Math.cos(a), ey = y + len * Math.sin(a);
-    g.beginPath();
-    g.moveTo(X(x), Y(y));
-    g.quadraticCurveTo(X(x + f.seg[i + 4] * len * 0.5), Y(y + f.seg[i + 5] * len * 0.5), X(ex), Y(ey));
-    g.stroke();
-    g.beginPath();
-    g.arc(X(ex), Y(ey), 1.6 * u, 0, Math.PI * 2);
-    g.fill();
+  g.lineWidth = 1.4 * u;
+  for (let cx = Math.floor(view.x0 / step); cx <= Math.ceil(view.x1 / step); cx++) {
+    for (let cy = Math.floor(view.y0 / step); cy <= Math.ceil(view.y1 / step); cy++) {
+      const h = Math.abs(Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453) % 1;
+      if (h > 0.32) continue;
+      // The spot itself, jittered inside its cell.
+      const px = (cx + ((h * 7.13) % 1) - 0.5) * step, py = (cy + ((h * 3.71) % 1) - 0.5) * step;
+      // Cull against the samples (slack for their coarseness), then measure exactly.
+      if (Math.abs(field.at(px, py)) > band + field.cell) continue;
+      const d = gap(px, py);
+      if (Math.abs(d) > band || ++drawn > 400) continue;
+      // Root it on the edge itself: a few Newton steps along the gradient.
+      // (The gap isn't a true distance, so one step back by it lands off the surface.)
+      const e = 1.5;
+      let x = px, y = py, gx = 1, gy = 0, gd = d;
+      for (let it = 0; it < 4; it++) {
+        gx = (gap(x + e, y) - gap(x - e, y)) / (2 * e);
+        gy = (gap(x, y + e) - gap(x, y - e)) / (2 * e);
+        const g2 = gx * gx + gy * gy || 1;
+        x -= (gd * gx) / g2;
+        y -= (gd * gy) / g2;
+        gd = gap(x, y);
+        if (Math.abs(gd) < 0.5) break;
+      }
+      if (Math.abs(gd) > 3) continue;
+      const l = Math.hypot(gx, gy) || 1;
+      const nx = gx / l, ny = gy / l;
+      // A fixed size: it only fades in and out as the edge comes near and moves on.
+      const fade = Math.min(1, (1 - Math.abs(d) / band) / 0.35);
+      const k = h / 0.32;
+      const len = 10 + k * 22;
+      const a = Math.atan2(ny, nx) + Math.sin(time * (0.6 + k * 0.7) + k * 9) * 0.7;
+      const ex = x + len * Math.cos(a), ey = y + len * Math.sin(a);
+      g.globalAlpha = fade * zoomFade;
+      g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
+      g.beginPath();
+      g.moveTo(X(x - nx * 2), Y(y - ny * 2));
+      g.quadraticCurveTo(X(x + nx * len * 0.5), Y(y + ny * len * 0.5), X(ex), Y(ey));
+      g.stroke();
+      g.fillStyle = 'rgba(240, 140, 215, 0.8)';
+      g.beginPath();
+      g.arc(X(ex), Y(ey), 1.6 * u, 0, Math.PI * 2);
+      g.fill();
+    }
   }
+  g.globalAlpha = 1;
 }
 
 // ---- the Bloom's shape ------------------------------------------------------------
@@ -541,41 +592,61 @@ export class BloomField {
     for (let j = 0; j <= this.ny; j++) for (let i = 0; i <= this.nx; i++) this.vals[j * (this.nx + 1) + i] = gap((this.gx0 + i) * c, (this.gy0 + j) * c);
   }
 
-  /** Trace the zero contour into `seg`. */
+  /** The sampled gap at (x, y), bilinear; far outside the samples, +Infinity. */
+  at(x: number, y: number): number {
+    const fx = x / this.cell - this.gx0, fy = y / this.cell - this.gy0;
+    if (fx < 0 || fy < 0 || fx >= this.nx || fy >= this.ny) return Infinity;
+    const i = Math.floor(fx), j = Math.floor(fy), tx = fx - i, ty = fy - j, W = this.nx + 1, v = this.vals;
+    const a = v[j * W + i], b = v[j * W + i + 1], c = v[(j + 1) * W + i], d = v[(j + 1) * W + i + 1];
+    return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+  }
+
+  /** Trace the zero contour into `seg`. Allocation-free: this runs every frame. */
   trace(): void {
     this.nseg = 0;
     const W = this.nx + 1, c = this.cell, v = this.vals;
-    const push = (ax: number, ay: number, bx: number, by: number, gx: number, gy: number) => {
-      if ((this.nseg + 1) * SEG > this.seg.length) {
-        const grown = new Float32Array(this.seg.length * 2);
-        grown.set(this.seg);
-        this.seg = grown;
-      }
-      const l = Math.hypot(gx, gy) || 1;
-      this.seg.set([ax, ay, bx, by, gx / l, gy / l], this.nseg * SEG);
-      this.nseg++;
-    };
     for (let j = 0; j < this.ny; j++) {
       for (let i = 0; i < this.nx; i++) {
         const a = v[j * W + i], b = v[j * W + i + 1], d = v[(j + 1) * W + i], e = v[(j + 1) * W + i + 1];
         const k = (a < 0 ? 1 : 0) | (b < 0 ? 2 : 0) | (e < 0 ? 4 : 0) | (d < 0 ? 8 : 0);
         if (k === 0 || k === 15) continue;
         const x = (this.gx0 + i) * c, y = (this.gy0 + j) * c;
-        const t = (p: number, q: number) => p / (p - q);
         // Edge crossings: top (a-b), right (b-e), bottom (d-e), left (a-d).
-        const top = [x + c * t(a, b), y], right = [x + c, y + c * t(b, e)], bottom = [x + c * t(d, e), y + c], left = [x, y + c * t(a, d)];
+        const tx = x + (c * a) / (a - b), ry = y + (c * b) / (b - e), bx = x + (c * d) / (d - e), ly = y + (c * a) / (a - d);
         const gx = (b + e - a - d) / 2, gy = (d + e - a - b) / 2;
-        const lines: number[][][] =
-          k === 1 || k === 14 ? [[left, top]] :
-          k === 2 || k === 13 ? [[top, right]] :
-          k === 3 || k === 12 ? [[left, right]] :
-          k === 4 || k === 11 ? [[right, bottom]] :
-          k === 6 || k === 9 ? [[top, bottom]] :
-          k === 7 || k === 8 ? [[left, bottom]] :
-          k === 5 ? [[left, top], [right, bottom]] : [[top, right], [left, bottom]];
-        for (const [p, q] of lines) push(p[0], p[1], q[0], q[1], gx, gy);
+        switch (k) {
+          case 1: case 14: this.push(x, ly, tx, y, gx, gy); break;
+          case 2: case 13: this.push(tx, y, x + c, ry, gx, gy); break;
+          case 3: case 12: this.push(x, ly, x + c, ry, gx, gy); break;
+          case 4: case 11: this.push(x + c, ry, bx, y + c, gx, gy); break;
+          case 6: case 9: this.push(tx, y, bx, y + c, gx, gy); break;
+          case 7: case 8: this.push(x, ly, bx, y + c, gx, gy); break;
+          case 5:
+            this.push(x, ly, tx, y, gx, gy);
+            this.push(x + c, ry, bx, y + c, gx, gy);
+            break;
+          default:
+            this.push(tx, y, x + c, ry, gx, gy);
+            this.push(x, ly, bx, y + c, gx, gy);
+        }
       }
     }
+  }
+
+  private push(ax: number, ay: number, bx: number, by: number, gx: number, gy: number): void {
+    if ((this.nseg + 1) * SEG > this.seg.length) {
+      const grown = new Float32Array(this.seg.length * 2);
+      grown.set(this.seg);
+      this.seg = grown;
+    }
+    const l = Math.hypot(gx, gy) || 1;
+    const o = this.nseg++ * SEG;
+    this.seg[o] = ax;
+    this.seg[o + 1] = ay;
+    this.seg[o + 2] = bx;
+    this.seg[o + 3] = by;
+    this.seg[o + 4] = gx / l;
+    this.seg[o + 5] = gy / l;
   }
 
   /** Paint the inside, darker the deeper, softened over a cell at the edge, then scale it onto the view. */
@@ -615,7 +686,13 @@ export class BloomField {
 }
 
 /** The Bloom's gap for drawing: the band (its bulge capped past the map, so it looks endless) and the seeds' circles. */
-export const bloomGapView = (b: Bloom, x: number, y: number, t: number): number => bloomGapWith(b, x, y, t, (yy) => bloomShape(b, yy));
+export function bloomGapView(b: Bloom, x: number, y: number, t: number): number {
+  // One shape function per Bloom, not one per call: this runs thousands of times a frame.
+  let shape = SHAPES.get(b);
+  if (!shape) SHAPES.set(b, (shape = (yy: number) => bloomShape(b, yy)));
+  return bloomGapWith(b, x, y, t, shape);
+}
+const SHAPES = new WeakMap<Bloom, (y: number) => number>();
 
 /** A slow organic wobble on the drawn edge, in map units. */
 export const wobble = (x: number, y: number, time: number): number =>
@@ -657,14 +734,18 @@ export class SwarmDots {
     this.march = null;
   }
 
-  draw(g: CanvasRenderingContext2D, at: RunNode, time: number, X: (x: number) => number, Y: (y: number) => number, u: number, color: string): void {
+  /** `zoom` is the map's zoom against the default view: the orbit scales with it, but never shrinks inside the node's disc. */
+  draw(g: CanvasRenderingContext2D, at: RunNode, time: number, X: (x: number) => number, Y: (y: number) => number, u: number, color: string, zoom = 1): void {
+    const ru = u * zoom;
+    const inner = (nodeRadius(at, DEFAULT_ICONS) + 4) * u;
+    const dot = u * Math.max(0.55, Math.min(1.6, Math.sqrt(zoom)));
     g.save();
     g.globalCompositeOperation = 'lighter';
     g.fillStyle = color;
     const m = this.march;
     for (let i = 0; i < this.n; i++) {
       const a = this.ang[i] + time * this.spd[i];
-      const r = (this.rad[i] + 3 * Math.sin(time * 1.3 + this.wob[i])) * u;
+      const r = Math.max(inner + (this.rad[i] - 24) * u * 0.4, (this.rad[i] + 3 * Math.sin(time * 1.3 + this.wob[i])) * ru);
       const ox = Math.cos(a) * r, oy = Math.sin(a) * r * 0.85;
       let x = X(at.x) + ox, y = Y(at.y) + oy;
       if (m) {
@@ -675,17 +756,17 @@ export class SwarmDots {
         const tx = X(m.to.x) + ox, ty = Y(m.to.y) + oy;
         const dx = tx - fx, dy = ty - fy;
         const len = Math.hypot(dx, dy) || 1;
-        const bow = Math.sin(e * Math.PI) * 10 * u * Math.sin(this.wob[i] * 3);
+        const bow = Math.sin(e * Math.PI) * 10 * ru * Math.sin(this.wob[i] * 3);
         x = fx + dx * e - (dy / len) * bow;
         y = fy + dy * e + (dx / len) * bow;
       }
       g.globalAlpha = 0.22;
       g.beginPath();
-      g.arc(x, y, 4.5 * u, 0, Math.PI * 2);
+      g.arc(x, y, 4.5 * dot, 0, Math.PI * 2);
       g.fill();
       g.globalAlpha = 0.95;
       g.beginPath();
-      g.arc(x, y, 2 * u, 0, Math.PI * 2);
+      g.arc(x, y, 2 * dot, 0, Math.PI * 2);
       g.fill();
     }
     g.restore();

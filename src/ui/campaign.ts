@@ -269,7 +269,7 @@ function drawMap(
           g.fill();
         }
     // The edge is alive: tendrils feel out, spores shed off and drift.
-    tendrils(g, field, opts.time, X, Y, u);
+    tendrils(g, (x, y) => bloomGapView(b, x, y, opts.bloomT) + wob(x, y), field, { x0: mx0, y0: my0, x1: mx1, y1: my1 }, opts.time, X, Y, u);
     fx.spores.shed(fx.dt, Math.min(60, field.nseg * 0.25), field);
     fx.spores.step(fx.dt, opts.time);
     fx.spores.draw(g, X, Y, u);
@@ -409,7 +409,8 @@ function drawMap(
     }
   }
   // Your swarm: its dots orbit your node, over the nodes' glow.
-  if (fx && run.status === 'active') fx.swarm.draw(g, run.nodes[run.at], opts.time, X, Y, u, me);
+  // Unlike the node icons, the swarm lives in the map: it shrinks as you zoom out (1 at the default zoom).
+  if (fx && run.status === 'active') fx.swarm.draw(g, run.nodes[run.at], opts.time, X, Y, u, me, (v.s * VIEW_SPAN) / cw);
   return v;
 }
 
