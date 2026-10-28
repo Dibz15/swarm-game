@@ -2,12 +2,18 @@ import { PERSONALITIES } from '../sim/ai/bot';
 import type { EventLevel } from '../sim/mapgen';
 import { Rng } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
-import { MILITIA, fighters, veteran } from './broods';
+import { TICK_HZ } from '../sim/constants';
+import type { World } from '../sim/world';
+import { MILITIA, fighters, veteran, type BattleReport } from './broods';
 import { modsFor } from './rewards';
 import { maxFielded, pressure, type RunState } from './run';
 
-/** Conquest only ends by elimination: a share no team can reach turns domination off. */
-const NO_DOMINATION = 2;
+/**
+ * Conquest is won by wiping out every rival, or by holding this share of the
+ * nests for the usual 30 s: without it, two rivals can turtle and stall the
+ * battle (the run probe saw 11-15% of Normal × 2 battles hit its 15-minute cap).
+ */
+export const CONQUEST_SHARE = 0.8;
 /** Domination nodes: hold half the nests (the usual share is 0.6-0.7). */
 const DOMINATION_SHARE = 0.5;
 
@@ -39,7 +45,7 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     layout: 'random',
     events,
     portrait,
-    domShare: n.kind === 'domination' ? DOMINATION_SHARE : n.kind === 'finale' ? undefined : NO_DOMINATION,
+    domShare: n.kind === 'domination' ? DOMINATION_SHARE : n.kind === 'finale' ? undefined : CONQUEST_SHARE,
     players: [
       {
         faction: run.color,
@@ -63,4 +69,12 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
 export function bloomLabel(run: RunState, id: number): string {
   const p = run.nodes[id].kind === 'finale' ? 1 : pressure(run, id);
   return p > 0.66 ? 'Bloom close: wild swarms' : p > 0.2 ? 'Bloom nearing' : 'Bloom far';
+}
+
+/** How a battle ended for the run: the human's survivors by kind, nests fully held, time. */
+export function battleReport(w: World, human: number, won: boolean): BattleReport {
+  const survivors = [0, 0, 0, 0];
+  for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === human && w.kind[i] < survivors.length) survivors[w.kind[i]]++;
+  const nests = w.nests.filter((n) => n.owner === human && n.control >= 1).length;
+  return { won, survivors, nests, seconds: w.tick / TICK_HZ };
 }

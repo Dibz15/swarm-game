@@ -209,10 +209,13 @@ function battle(node: RunNode, t: number, rng: Rng): void {
     Object.assign(node, { size: 'large', rivals: 3, difficulty: 2, caves: rng.pick<CaveLevel>(['off', 'belt']), terrain: 'standard', reward: 0 });
     return;
   }
-  node.difficulty = t < 0.3 ? 0 : t < 0.7 ? 1 : 2;
-  node.rivals = t < 0.35 ? 1 : t < 0.7 ? 2 : 2 + rng.int(2);
-  // Domination maps run one rival busier: a race for nests rather than a purge.
-  if (node.kind === 'domination') node.rivals = Math.min(3, node.rivals + 1);
+  // One step at a time: a second rival first (still Easy), then Normal bots, then Hard.
+  // Raising both together made depth 3-4 a wall in the run probe (#68).
+  node.difficulty = t < 0.4 ? 0 : t < 0.7 ? 1 : 2;
+  node.rivals = t < 0.2 ? 1 : t < 0.7 ? 2 : 2 + rng.int(2);
+  // Domination maps run one rival busier (a race for nests rather than a purge),
+  // but only once the bots are Normal: three Easy racers early were their own wall.
+  if (node.kind === 'domination' && node.difficulty >= 1) node.rivals = Math.min(3, node.rivals + 1);
   node.size = node.rivals <= 1 ? 'small' : 'medium';
   node.caves = rng.pick<CaveLevel>(['off', 'off', 'off', 'belt', 'belt', 'full']);
   node.terrain = rng.pick<TerrainLevel>(['light', 'standard', 'standard', 'heavy']);

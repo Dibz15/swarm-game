@@ -19,7 +19,7 @@
  * plays any setup: 1v1, FFA, domination, and campaign battles.
  */
 
-import { barrageLaunch, feedNeed, hasPower, type Command } from '../sim/commands';
+import { barrageLaunch, feedNeed, hasPower, surgeCost, type Command } from '../sim/commands';
 import { LEVEL, MAX_LEVEL, NEUTRAL, NestType, POWER, TICK_HZ, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, bastionTurret } from '../sim/constants';
 import { queryRadius } from '../sim/spatial';
 import { UNIT_FEEDING, type Nest, type World } from '../sim/world';
@@ -423,6 +423,6 @@ export class Proxy {
     if (!this.novaLocked && most >= 20 && own.length >= 15 && e >= POWER.novaCost && this.ready(w, 'nova')) cast({ t: 'nova', p: me, units: own });
     else if (ne >= 12 && e >= POWER.barrageCost && this.ready(w, 'barrage') && hasPower(w, me, 'barrage') && barrageLaunch(w, me, ex / ne, ey / ne)) cast({ t: 'barrage', p: me, x: ex / ne, y: ey / ne });
     else if (this.mode === 'punish' && own.length >= 10 && e >= POWER.fortifyCost && this.ready(w, 'fortify') && hasPower(w, me, 'fortify')) cast({ t: 'fortify', p: me, units: own });
-    else if (own.length >= (flush ? 3 : 6) && e >= POWER.surgeCost && (flush || this.ready(w, 'surge'))) cast({ t: 'surge', p: me, units: own });
+    else if (own.length >= (flush ? 3 : 6) && e >= surgeCost(w, me) && (flush || this.ready(w, 'surge'))) cast({ t: 'surge', p: me, units: own });
   }
 }

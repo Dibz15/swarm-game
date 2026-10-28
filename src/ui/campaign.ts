@@ -54,7 +54,7 @@ export const KIND_LABEL: Record<RunNode['kind'], string> = {
 };
 const KIND_TEXT: Record<RunNode['kind'], string> = {
   start: 'Where the run began.',
-  conquest: 'Wipe out every rival.',
+  conquest: 'Wipe out every rival, or hold 80% of the nests for 30 seconds.',
   domination: 'Hold half the nests for 30 seconds, or wipe out every rival.',
   finale: 'The final battle: a large map against three Hard rivals. Win it to end the run.',
 };

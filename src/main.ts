@@ -17,7 +17,7 @@ import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
 import { needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
 import type { BattleReport } from './campaign/broods';
-import { nodeSetup } from './campaign/battle';
+import { battleReport, nodeSetup } from './campaign/battle';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
 import { rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
 import { DemoOverlay } from './ui/demo';
@@ -279,15 +279,7 @@ class App {
   /** How the battle ended for the run: survivors by kind, nests held, time. */
   private battleReport(won: boolean): BattleReport {
     const g = this.game;
-    const survivors = [0, 0, 0, 0];
-    let nests = 0, seconds = 0;
-    if (g) {
-      const w = g.world;
-      for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === g.human && w.kind[i] < survivors.length) survivors[w.kind[i]]++;
-      nests = w.nests.filter((n) => n.owner === g.human && n.control >= 1).length;
-      seconds = w.tick / TICK_HZ;
-    }
-    return { won, survivors, nests, seconds };
+    return g ? battleReport(g.world, g.human, won) : { won, survivors: [0, 0, 0, 0], nests: 0, seconds: 0 };
   }
 
   /** The map's Bloom animation for a turn; none after a checkpoint restore, which rewinds the Bloom. */

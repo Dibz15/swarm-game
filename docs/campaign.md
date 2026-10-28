@@ -58,7 +58,7 @@ They are deliberately separate, and each has one job.
 ## Battles
 Each node turns into a `MatchSetup` (`src/sim/setup.ts`) plus an objective. Objectives are checked inside the sim, so battles stay deterministic and testable headless.
 
-- **Conquest:** eliminate the rivals (today's win condition).
+- **Conquest:** eliminate the rivals, or hold 80% of the nests for 30 seconds, so two turtling rivals can't stall it.
 - **Domination:** hold the share of nests (`domShare`) for the countdown. Shorter and racier.
 - **Hold the line (new):**
   - You start dug in on a sector of a few nests.
