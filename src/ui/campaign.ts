@@ -178,12 +178,14 @@ function drawFog(g: CanvasRenderingContext2D, run: RunState, known: Set<number>,
     fg.fillStyle = grad;
     fg.fillRect(px - r, py - r, r * 2, r * 2);
   }
-  // Faint stars, twinkling, drifting a little with the camera.
+  // Faint stars, twinkling: fixed in the sky around the map, just behind it (the far cloud layer's depth).
   fg.fillStyle = '#dfe4ff';
-  for (let k = 0; k < 70; k++) {
+  const par = 0.85;
+  for (let k = 0; k < 90; k++) {
     const h = (m: number) => Math.abs(Math.sin((k + 1) * m + run.seed) * 43758.5453) % 1;
-    const sx = (((h(12.9) * cw + v.ox * 0.15) % cw) + cw) % cw;
-    const sy = (((h(78.2) * ch + v.oy * 0.15) % ch) + ch) % ch;
+    const sx = cw / 2 + (v.ox - cw / 2) * par + (h(12.9) * 1600 - 300) * v.s;
+    const sy = ch / 2 + (v.oy - ch / 2) * par + (h(78.2) * 1100 - 240) * v.s;
+    if (sx < 0 || sy < 0 || sx > cw || sy > ch) continue;
     const tw = Math.max(0, Math.sin(time * (0.4 + h(3.7)) + h(9.1) * 20));
     fg.globalAlpha = 0.12 + 0.5 * tw * tw * tw;
     fg.fillRect(sx, sy, (0.8 + h(5.3)) * u, (0.8 + h(5.3)) * u);
