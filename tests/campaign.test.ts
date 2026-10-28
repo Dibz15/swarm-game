@@ -24,6 +24,24 @@ function rush(run: RunState): RunState {
 const brood = (o: Partial<Brood>): Brood => ({ id: 0, name: 'Test', kind: Kind.Dot, size: 12, cap: 16, wins: 0, wounded: 0, grows: 0, strains: [], ...o });
 
 describe('the following Bloom (#88)', () => {
+  it('fuses into one body: the band swells near your trail and fades with distance', () => {
+    const run = newRun('swell', 0, 'swarm', 0);
+    run.bloom.seeds = [{ x: run.bloom.front + 150, y: 300, born: 0 }];
+    run.bloom.time = 3;
+    // How far right the Bloom reaches at height y.
+    const reach = (y: number) => {
+      let x = -200;
+      while (bloomGap(run.bloom, x, y) < 0) x += 2;
+      return x;
+    };
+    expect(reach(300)).toBeGreaterThan(reach(300 + 500) + 50);
+    // Far from the trail, the band barely moves.
+    run.bloom.time = 6;
+    const far = reach(300 + 900);
+    run.bloom.time = 3;
+    expect(Math.abs(far - reach(300 + 900))).toBeLessThan(20);
+  });
+
   it('starts with nothing swallowed, and grows from each node you leave after a turn', () => {
     for (const seed of SEEDS.slice(0, 10)) {
       const run = newRun(seed, 0, 'swarm', 0);
@@ -44,9 +62,11 @@ describe('the following Bloom (#88)', () => {
     run.bloom.seeds = [{ x: 500, y: 310, born: 0 }];
     run.bloom.time = 3;
     const r = seedRadius(run.bloom, run.bloom.seeds[0]);
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      expect(bloomGap(run.bloom, 500 + dx * (r + 20), 310 + dy * (r + 20))).toBeCloseTo(20);
-    }
+    const gaps = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => bloomGap(run.bloom, 500 + dx * (r + 80), 310 + dy * (r + 80)));
+    for (const g of gaps) expect(g).toBeCloseTo(gaps[0]);
+    // The edge swells past the circle itself, less the further out.
+    expect(gaps[0]).toBeLessThan(80);
+    expect(gaps[0]).toBeGreaterThan(0);
   });
 
   it('a lost battle lets it close in; Hunger speeds it up without jumping', () => {

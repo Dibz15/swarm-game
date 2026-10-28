@@ -25,6 +25,7 @@ One seed generates everything: map, battles and reward offers. The run is determ
   2. The Bloom advances.
 - **The Bloom follows you** (#88):
   - It waits in a band off the edge behind your start. Every node you leave starts it growing there, a turn later and a set distance each turn. So it spreads from where you came, whichever direction you went: an up-or-down route is as safe as one heading straight for the heart.
+  - It's one body, not a cluster of circles: its parts fuse together, and its whole edge swells toward your trail, less the further away it is.
   - It swallows every node it reaches, so in time it eats the nodes you skipped.
   - Winning keeps you ahead. A lost battle leaves you in place while it closes in.
   - The map shows a dashed outline of where it will reach next turn.

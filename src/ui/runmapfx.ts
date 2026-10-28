@@ -7,7 +7,7 @@
  */
 
 import { nodeSetup } from '../campaign/battle';
-import { MAP_H, seedRadius, type Bloom, type RunNode, type RunState } from '../campaign/run';
+import { MAP_H, bloomGapWith, type Bloom, type RunNode, type RunState } from '../campaign/run';
 import { FACTION_HEX } from '../content/factions';
 import { generateMap, type MapSpec } from '../sim/mapgen';
 
@@ -615,11 +615,7 @@ export class BloomField {
 }
 
 /** The Bloom's gap for drawing: the band (its bulge capped past the map, so it looks endless) and the seeds' circles. */
-export function bloomGapView(b: Bloom, x: number, y: number, t: number): number {
-  let g = x - (b.front + bloomShape(b, y));
-  for (const s of b.seeds) g = Math.min(g, Math.hypot(x - s.x, y - s.y) - seedRadius(b, s, t));
-  return g;
-}
+export const bloomGapView = (b: Bloom, x: number, y: number, t: number): number => bloomGapWith(b, x, y, t, (yy) => bloomShape(b, yy));
 
 /** A slow organic wobble on the drawn edge, in map units. */
 export const wobble = (x: number, y: number, time: number): number =>

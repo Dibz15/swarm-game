@@ -125,12 +125,39 @@ export const BLOOM_LAG = 1;
 /** A seed's radius at Bloom time `time`. */
 export const seedRadius = (b: Bloom, s: BloomSeed, time = b.time): number => b.step * Math.max(0, time - s.born - BLOOM_LAG);
 
-/** Signed distance from (x, y) to the Bloom's edge at Bloom time `time`: negative inside it. */
-export function bloomGap(b: Bloom, x: number, y: number, time = b.time): number {
-  let g = x - (b.front + frontShape(b, y));
-  for (const s of b.seeds) g = Math.min(g, Math.hypot(x - s.x, y - s.y) - seedRadius(b, s, time));
-  return g;
+/** How the Bloom's parts fuse: circles and the band melt together within this distance (a smooth union). */
+export const BLOOM_FUSE = 60;
+/** Its whole edge also grows near where it's growing from: by this share of each seed's radius... */
+export const BLOOM_SWELL = 0.3;
+/** ...fading with distance from that seed over this length. */
+export const BLOOM_REACH = 220;
+
+/** A smooth minimum: like min(a, b), but rounded where they're within k of each other. */
+function smin(a: number, b: number, k: number): number {
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.min(a, b) - (h * h * k) / 4;
 }
+
+/**
+ * Signed distance from (x, y) to the Bloom's edge at Bloom time `time`
+ * (negative inside), with the band's shape given by `shape`. The band and
+ * the circles fuse into one body, and its whole edge swells near the seeds,
+ * less the further away it is.
+ */
+export function bloomGapWith(b: Bloom, x: number, y: number, time: number, shape: (y: number) => number): number {
+  let g = x - (b.front + shape(y));
+  let swell = 0;
+  for (const s of b.seeds) {
+    const r = seedRadius(b, s, time);
+    const d = Math.hypot(x - s.x, y - s.y);
+    g = smin(g, d - r, BLOOM_FUSE);
+    swell += BLOOM_SWELL * r * Math.exp(-d / BLOOM_REACH);
+  }
+  return g - swell;
+}
+
+/** Signed distance from (x, y) to the Bloom's edge at Bloom time `time`: negative inside it. */
+export const bloomGap = (b: Bloom, x: number, y: number, time = b.time): number => bloomGapWith(b, x, y, time, (yy) => frontShape(b, yy));
 
 export type RunStatus = 'active' | 'won' | 'lost';
 
