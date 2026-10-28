@@ -5,9 +5,10 @@
  * always gives the same map, and nothing here touches the DOM.
  *
  * Map space is MAP_W x MAP_H. You start at the left; the Bloom's heart (the
- * finale) is the rightmost node; the Bloom rolls in from behind you and its
- * front bulges ahead along the top and bottom, so it closes off nodes behind
- * you and to the sides.
+ * finale) is the rightmost node. The Bloom follows you (#88): it waits in a
+ * band off the left edge, and every node you leave starts it growing, so it
+ * spreads from where you came whichever way you went, and in time eats the
+ * nodes you skipped.
  */
 
 import { Rng, hashString } from '../sim/rng';
@@ -92,15 +93,43 @@ export interface RunNode {
   checkpoint?: boolean;
 }
 
-/** The Bloom's front: x of the boundary at height y is `front + shape(y)`. */
+/** Where the Bloom grows from: a node you left, and the Bloom time you left it. */
+export interface BloomSeed {
+  x: number;
+  y: number;
+  born: number;
+}
+
+/**
+ * The Bloom (#88): a band it waits in, off the left edge (x of its edge at
+ * height y is `front + frontShape(y)`; it stays put), plus a circle around
+ * every node you've left, growing by `step` a turn after a turn's lag.
+ */
 export interface Bloom {
-  /** where the front stands now (advances by `step` each turn) */
+  /** the band's edge (older saves: where their left-to-right front stopped) */
   front: number;
+  /** how far a circle grows each turn */
   step: number;
-  /** how far ahead the front runs at the top and bottom edges */
+  /** how far ahead the band runs at the top and bottom edges */
   bulge: number;
-  /** [amplitude, frequency, phase] ripples along the front */
+  /** [amplitude, frequency, phase] ripples along the band */
   waves: [number, number, number][];
+  /** turns it has grown (it pauses after a loss on Gentle) */
+  time: number;
+  seeds: BloomSeed[];
+}
+
+/** Turns before the Bloom starts growing from a node you left. */
+export const BLOOM_LAG = 1;
+
+/** A seed's radius at Bloom time `time`. */
+export const seedRadius = (b: Bloom, s: BloomSeed, time = b.time): number => b.step * Math.max(0, time - s.born - BLOOM_LAG);
+
+/** Signed distance from (x, y) to the Bloom's edge at Bloom time `time`: negative inside it. */
+export function bloomGap(b: Bloom, x: number, y: number, time = b.time): number {
+  let g = x - (b.front + frontShape(b, y));
+  for (const s of b.seeds) g = Math.min(g, Math.hypot(x - s.x, y - s.y) - seedRadius(b, s, time));
+  return g;
 }
 
 export type RunStatus = 'active' | 'won' | 'lost';
@@ -222,9 +251,9 @@ export function frontShape(b: Bloom, y: number): number {
   return s;
 }
 
-/** Is (x, y) behind the front, i.e. in the Bloom? */
-export function inBloom(b: Bloom, x: number, y: number, front = b.front): boolean {
-  return x < front + frontShape(b, y);
+/** Is (x, y) in the Bloom? */
+export function inBloom(b: Bloom, x: number, y: number, time = b.time): boolean {
+  return bloomGap(b, x, y, time) < 0;
 }
 
 /** Battle settings for a node, harder the further it is from the start. */
@@ -299,6 +328,8 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
   const bloom: Bloom = {
     front: 0,
     step: 0,
+    time: 0,
+    seeds: [],
     bulge: rng.range(90, 150),
     waves: [
       [rng.range(14, 26), rng.range(0.008, 0.014), rng.range(0, Math.PI * 2)],
@@ -306,7 +337,7 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
     ],
   };
   bloom.front = Math.min(...nodes.map((n) => n.x - frontShape(bloom, n.y))) - 40;
-  bloom.step = paceFor(nodes, start, heart, bloom) * rules.pace;
+  bloom.step = paceFor(nodes, start, heart, bloom, 1 / rules.pace);
 
   return {
     v: RUN_VERSION,
@@ -335,27 +366,40 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
 }
 
 /**
- * The fastest front the shortest route survives: after turn t the front has
- * moved t steps, and the route's next node must still be clear when you step
- * onto it.
+ * The fastest Bloom the shortest route survives when every hop takes
+ * `turnsPerHop` turns: 1 / pace, so the easier the run, the more room for
+ * lost battles at each node. Found by bisection on a simulated walk.
  */
-function paceFor(nodes: RunNode[], start: number, heart: number, b: Bloom): number {
+function paceFor(nodes: RunNode[], start: number, heart: number, b: Bloom, turnsPerHop: number): number {
   const back = hops(nodes, heart);
   const route = [start];
   while (route[route.length - 1] !== heart) {
     const a = route[route.length - 1];
     route.push(nodes[a].links.reduce((best, n) => (back[n] < back[best] ? n : best)));
   }
-  let pace = Infinity;
-  for (let t = 1; t < route.length - 1; t++) {
-    const n = nodes[route[t + 1] ?? heart];
-    if (n.id === heart) break;
-    const room = n.x - frontShape(b, n.y) - b.front;
-    pace = Math.min(pace, room / t);
+  const survives = (step: number): boolean => {
+    const t: Bloom = { ...b, step, time: 0, seeds: [] };
+    for (let i = 0; i + 1 < route.length; i++) {
+      const next = nodes[route[i + 1]];
+      if (next.id === heart) return true;
+      if (inBloom(t, next.x, next.y)) return false;
+      t.seeds.push({ x: nodes[route[i]].x, y: nodes[route[i]].y, born: t.time });
+      t.time += turnsPerHop;
+    }
+    return true;
+  };
+  let lo = 1, hi = MAX_STEP;
+  if (survives(hi)) return hi;
+  for (let k = 0; k < 30; k++) {
+    const mid = (lo + hi) / 2;
+    if (survives(mid)) lo = mid;
+    else hi = mid;
   }
-  // Short routes: never faster than a fifth of the map a turn.
-  return Math.min(Number.isFinite(pace) ? pace : MAP_W / 5, MAP_W / 5);
+  return lo;
 }
+
+/** The Bloom never grows faster than this a turn. */
+const MAX_STEP = MAP_W / 3;
 
 // ---- turns ----------------------------------------------------------------
 
@@ -370,9 +414,9 @@ export function needsBattle(run: RunState, id: number): boolean {
   return !run.visited.includes(id);
 }
 
-/** Every node the front would swallow at `front` (the heart never falls). */
-function swallowedAt(run: RunState, front: number): number[] {
-  return run.nodes.filter((n) => n.id !== run.heart && inBloom(run.bloom, n.x, n.y, front)).map((n) => n.id);
+/** Every node in the Bloom now (the heart never falls). */
+function swallowedNow(run: RunState): number[] {
+  return run.nodes.filter((n) => n.id !== run.heart && inBloom(run.bloom, n.x, n.y)).map((n) => n.id);
 }
 
 function startBroods(seed: number, pack: PackId): Pick<RunState, 'broods' | 'nextBrood' | 'fielded' | 'unlocks'> {
@@ -419,6 +463,9 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
       res.events.push({ name: b.name, kind: b.kind, what: 'rescued', size: b.size });
     }
     if (!run.visited.includes(id)) run.visited.push(id);
+    // The Bloom will grow from where you came.
+    const from = run.nodes[run.at];
+    if (id !== run.at) run.bloom.seeds.push({ x: from.x, y: from.y, born: run.bloom.time });
     run.at = id;
     if (id === run.heart) {
       run.status = 'won';
@@ -427,8 +474,8 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
   }
 
   // Gentle: the Bloom waits while you recover from a lost battle.
-  if (!(report && !report.won && RUN_DIFFICULTY[difficultyOf(run)].holdOnLoss)) run.bloom.front += run.bloom.step;
-  res.fresh = swallowedAt(run, run.bloom.front).filter((n) => !run.swallowed.includes(n));
+  if (!(report && !report.won && RUN_DIFFICULTY[difficultyOf(run)].holdOnLoss)) run.bloom.time++;
+  res.fresh = swallowedNow(run).filter((n) => !run.swallowed.includes(n));
   run.swallowed.push(...res.fresh);
 
   const lost: RunState['lostTo'] = run.broods.length === 0 ? 'broods' : moves(run).length === 0 ? 'bloom' : undefined;
@@ -533,7 +580,7 @@ export function takeReward(run: RunState, id: string, broodId?: number, replace?
     if (run.perks.includes(id)) return false;
     if (r.power) run.perks = run.perks.filter((p) => REWARD[p]?.power !== r.power);
     run.perks.push(id);
-    if (id === 'hunger') run.bloom.step *= HUNGER_BLOOM;
+    if (id === 'hunger') speedBloom(run.bloom, HUNGER_BLOOM);
     if (id === 'lone-wolf') run.fielded = run.fielded.slice(0, 1);
   }
   run.offer = undefined;
@@ -553,9 +600,18 @@ export function revealed(run: RunState): Set<number> {
   return out;
 }
 
-/** 0..1: how close the front is to a node (1 = it falls next turn). Drives battle events. */
+/** 0..1: how close the Bloom is to a node (1 = it falls next turn). Drives battle events. */
 export function pressure(run: RunState, id: number): number {
   const n = run.nodes[id];
-  const gap = n.x - (run.bloom.front + frontShape(run.bloom, n.y));
-  return Math.max(0, Math.min(1, 1 - gap / (run.bloom.step * 3)));
+  return Math.max(0, Math.min(1, 1 - bloomGap(run.bloom, n.x, n.y) / (run.bloom.step * 3)));
+}
+
+/** Speed the Bloom up from now on, keeping how far it has already grown. */
+export function speedBloom(b: Bloom, factor: number): void {
+  const step = b.step * factor;
+  for (const s of b.seeds) {
+    const r = seedRadius(b, s);
+    if (r > 0) s.born = b.time - BLOOM_LAG - r / step;
+  }
+  b.step = step;
 }

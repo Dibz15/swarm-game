@@ -265,7 +265,7 @@ class App {
   /** Move to a node: fight for it, or march through a node already taken. */
   private runMove(run: RunState, id: number, fielded: number[]): void {
     if (!needsBattle(run, id)) {
-      const from = run.bloom.front;
+      const from = run.bloom.time;
       const res = resolveTurn(run, id, null);
       this.saveRunState(run);
       this.runSounds(res);
@@ -305,7 +305,7 @@ class App {
     const r = this.run;
     if (!r) return;
     this.run = null;
-    const from = r.state.bloom.front;
+    const from = r.state.bloom.time;
     const res = resolveTurn(r.state, r.node, report, r.fielded);
     this.saveRunState(r.state);
     this.runSounds(res);

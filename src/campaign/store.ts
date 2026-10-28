@@ -33,6 +33,9 @@ export function loadRun(id: string): RunState | null {
     if (!run || run.v !== RUN_VERSION) return null;
     // Saves from before rewards (#64) have no perks or strains.
     run.perks ??= [];
+    // Saves from before the following Bloom (#88): their front stays where it stopped, and the Bloom follows from here.
+    run.bloom.time ??= 0;
+    run.bloom.seeds ??= [];
     for (const b of run.broods) b.strains ??= [];
     return run;
   } catch {
