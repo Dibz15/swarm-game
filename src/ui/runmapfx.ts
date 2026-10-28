@@ -484,8 +484,8 @@ export class Spores {
 /**
  * Tendrils rooted at fixed spots in the map (a hashed lattice), not on the
  * traced edge, so they never blink as the edge redraws. A spot near the edge
- * sends one out from the nearest point of the edge; it grows in as the edge
- * nears and withdraws as the edge passes, so tendrils ride the moving wall.
+ * sends one out from the edge's surface (its root found by Newton steps), at a
+ * fixed size; it fades in as the edge nears and out as the edge moves on.
  * `gap` is the drawn Bloom (negative inside); the lattice coarsens as you zoom out.
  */
 export function tendrils(
@@ -509,21 +509,29 @@ export function tendrils(
       const px = (cx + ((h * 7.13) % 1) - 0.5) * step, py = (cy + ((h * 3.71) % 1) - 0.5) * step;
       const d = gap(px, py);
       if (Math.abs(d) > band) continue;
-      // Root it on the edge: step back along the gradient by the gap.
-      const e = 2;
-      let nx = gap(px + e, py) - gap(px - e, py), ny = gap(px, py + e) - gap(px, py - e);
-      const l = Math.hypot(nx, ny) || 1;
-      nx /= l;
-      ny /= l;
-      const x = px - nx * d, y = py - ny * d;
-      // Full grown when the edge sits on the spot, gone a band away.
-      const grow = 1 - Math.abs(d) / band;
+      // Root it on the edge itself: a few Newton steps along the gradient.
+      // (The gap isn't a true distance, so one step back by it lands off the surface.)
+      const e = 1.5;
+      let x = px, y = py, gx = 1, gy = 0, gd = d;
+      for (let it = 0; it < 4; it++) {
+        gx = (gap(x + e, y) - gap(x - e, y)) / (2 * e);
+        gy = (gap(x, y + e) - gap(x, y - e)) / (2 * e);
+        const g2 = gx * gx + gy * gy || 1;
+        x -= (gd * gx) / g2;
+        y -= (gd * gy) / g2;
+        gd = gap(x, y);
+        if (Math.abs(gd) < 0.5) break;
+      }
+      if (Math.abs(gd) > 3) continue;
+      const l = Math.hypot(gx, gy) || 1;
+      const nx = gx / l, ny = gy / l;
+      // A fixed size: it only fades in and out as the edge comes near and moves on.
+      const fade = Math.min(1, (1 - Math.abs(d) / band) / 0.35);
       const k = h / 0.32;
-      const len = (10 + k * 22) * grow * grow * (3 - 2 * grow);
-      if (len < 1) continue;
+      const len = 10 + k * 22;
       const a = Math.atan2(ny, nx) + Math.sin(time * (0.6 + k * 0.7) + k * 9) * 0.7;
       const ex = x + len * Math.cos(a), ey = y + len * Math.sin(a);
-      g.globalAlpha = Math.min(1, grow * 1.5);
+      g.globalAlpha = fade;
       g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
       g.beginPath();
       g.moveTo(X(x - nx * 2), Y(y - ny * 2));
