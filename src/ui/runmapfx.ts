@@ -481,33 +481,61 @@ export class Spores {
   }
 }
 
-const TENDRIL_SPOTS = new Set<number>();
-
-/** Tendrils feeling out from the edge at stable spots (hashed by grid cell), swaying. */
-export function tendrils(g: CanvasRenderingContext2D, f: BloomField, time: number, X: (x: number) => number, Y: (y: number) => number, u: number): void {
-  g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
-  g.fillStyle = 'rgba(240, 140, 215, 0.8)';
+/**
+ * Tendrils rooted at fixed spots in the map (a hashed lattice), not on the
+ * traced edge, so they never blink as the edge redraws. A spot near the edge
+ * sends one out from the nearest point of the edge; it grows in as the edge
+ * nears and withdraws as the edge passes, so tendrils ride the moving wall.
+ * `gap` is the drawn Bloom (negative inside); the lattice coarsens as you zoom out.
+ */
+export function tendrils(
+  g: CanvasRenderingContext2D,
+  gap: (x: number, y: number) => number,
+  view: { x0: number; y0: number; x1: number; y1: number },
+  time: number,
+  X: (x: number) => number,
+  Y: (y: number) => number,
+  u: number,
+): void {
+  const span = Math.max(view.x1 - view.x0, view.y1 - view.y0);
+  const step = 24 * 2 ** Math.max(0, Math.ceil(Math.log2(span / (24 * 45))));
+  const band = step * 1.2;
   g.lineWidth = 1.4 * u;
-  // One tendril at most per 24-unit spot: zoomed in, several edge segments share a spot.
-  TENDRIL_SPOTS.clear();
-  for (let i = 0; i < f.nseg * SEG && TENDRIL_SPOTS.size < 70; i += SEG) {
-    const x = (f.seg[i] + f.seg[i + 2]) / 2, y = (f.seg[i + 1] + f.seg[i + 3]) / 2;
-    const cx = Math.round(x / 24), cy = Math.round(y / 24);
-    const h = Math.abs(Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453) % 1;
-    if (h > 0.25 || TENDRIL_SPOTS.has(cx * 100003 + cy)) continue;
-    TENDRIL_SPOTS.add(cx * 100003 + cy);
-    const k = h / 0.25;
-    const len = 10 + k * 22;
-    const a = Math.atan2(f.seg[i + 5], f.seg[i + 4]) + Math.sin(time * (0.6 + k * 0.7) + k * 9) * 0.7;
-    const ex = x + len * Math.cos(a), ey = y + len * Math.sin(a);
-    g.beginPath();
-    g.moveTo(X(x), Y(y));
-    g.quadraticCurveTo(X(x + f.seg[i + 4] * len * 0.5), Y(y + f.seg[i + 5] * len * 0.5), X(ex), Y(ey));
-    g.stroke();
-    g.beginPath();
-    g.arc(X(ex), Y(ey), 1.6 * u, 0, Math.PI * 2);
-    g.fill();
+  for (let cx = Math.floor(view.x0 / step); cx <= Math.ceil(view.x1 / step); cx++) {
+    for (let cy = Math.floor(view.y0 / step); cy <= Math.ceil(view.y1 / step); cy++) {
+      const h = Math.abs(Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453) % 1;
+      if (h > 0.32) continue;
+      // The spot itself, jittered inside its cell.
+      const px = (cx + ((h * 7.13) % 1) - 0.5) * step, py = (cy + ((h * 3.71) % 1) - 0.5) * step;
+      const d = gap(px, py);
+      if (Math.abs(d) > band) continue;
+      // Root it on the edge: step back along the gradient by the gap.
+      const e = 2;
+      let nx = gap(px + e, py) - gap(px - e, py), ny = gap(px, py + e) - gap(px, py - e);
+      const l = Math.hypot(nx, ny) || 1;
+      nx /= l;
+      ny /= l;
+      const x = px - nx * d, y = py - ny * d;
+      // Full grown when the edge sits on the spot, gone a band away.
+      const grow = 1 - Math.abs(d) / band;
+      const k = h / 0.32;
+      const len = (10 + k * 22) * grow * grow * (3 - 2 * grow);
+      if (len < 1) continue;
+      const a = Math.atan2(ny, nx) + Math.sin(time * (0.6 + k * 0.7) + k * 9) * 0.7;
+      const ex = x + len * Math.cos(a), ey = y + len * Math.sin(a);
+      g.globalAlpha = Math.min(1, grow * 1.5);
+      g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
+      g.beginPath();
+      g.moveTo(X(x - nx * 2), Y(y - ny * 2));
+      g.quadraticCurveTo(X(x + nx * len * 0.5), Y(y + ny * len * 0.5), X(ex), Y(ey));
+      g.stroke();
+      g.fillStyle = 'rgba(240, 140, 215, 0.8)';
+      g.beginPath();
+      g.arc(X(ex), Y(ey), 1.6 * u, 0, Math.PI * 2);
+      g.fill();
+    }
   }
+  g.globalAlpha = 1;
 }
 
 // ---- the Bloom's shape ------------------------------------------------------------
