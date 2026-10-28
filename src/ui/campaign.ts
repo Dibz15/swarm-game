@@ -5,8 +5,29 @@
 
 import type { AudioEngine } from '../audio/engine';
 import { bloomLabel, nodeSetup } from '../campaign/battle';
-import { MAP_H, MAP_W, frontShape, grow, heal, moves, needsBattle, revealed, unlock, unlockCost, unlocked, type RunNode, type RunState, type TurnResult } from '../campaign/run';
-import { COST, KIND_NAME, MAX_FIELDED, MAX_ROSTER, PACKS, UNLOCKS, UNLOCK_TEXT, fit, veteran, type Brood, type BroodEvent, type PackId } from '../campaign/broods';
+import {
+  MAP_H,
+  MAP_W,
+  frontShape,
+  grow,
+  heal,
+  maxFielded,
+  moves,
+  needsBattle,
+  rerollCost,
+  rerollOffer,
+  revealed,
+  skipReward,
+  takeReward,
+  unlock,
+  unlockCost,
+  unlocked,
+  type RunNode,
+  type RunState,
+  type TurnResult,
+} from '../campaign/run';
+import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, type Reward } from '../campaign/rewards';
+import { COST, KIND_NAME, MAX_ROSTER, PACKS, UNLOCKS, UNLOCK_TEXT, fit, veteran, type Brood, type BroodEvent, type PackId } from '../campaign/broods';
 import { Kind } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
@@ -42,8 +63,13 @@ const KIND_TEXT: Record<RunNode['kind'], string> = {
 const KIND_GLYPH: Record<number, string> = { [Kind.Dot]: '●', [Kind.Tank]: '■', [Kind.Lancer]: '▲', [Kind.Swift]: '◆' };
 
 function broodChip(b: Brood): string {
-  const tags = `${veteran(b) ? '★' : ''}${b.wounded ? ' ✚' : ''}`;
-  return `<span class="brood-chip${b.wounded ? ' hurt' : ''}" title="${esc(b.name)}: ${KIND_NAME[b.kind]} ${b.size}/${b.cap}${b.wounded ? ', wounded' : ''}">${KIND_GLYPH[b.kind]} ${b.size}${tags}</span>`;
+  const tags = `${veteran(b) ? '★' : ''}${b.strains.length ? '✦'.repeat(b.strains.length) : ''}${b.wounded ? ' ✚' : ''}`;
+  return `<span class="brood-chip${b.wounded ? ' hurt' : ''}" title="${esc(b.name)}: ${KIND_NAME[b.kind]} ${b.size}/${b.cap}${strainText(b, ', ')}${b.wounded ? ', wounded' : ''}">${KIND_GLYPH[b.kind]} ${b.size}${tags}</span>`;
+}
+
+/** A brood's strains as text ("" if none), after `sep`. */
+function strainText(b: Brood, sep: string): string {
+  return b.strains.length ? sep + b.strains.map((s) => REWARD[s]?.name ?? s).join(' + ') : '';
 }
 
 function broods(run: RunState): string {
@@ -548,14 +574,15 @@ export function runMap(
   /** Before a battle: pick up to three fit broods (last time's pick by default). */
   const choose = (n: RunNode) => {
     const fitOnes = run.broods.filter(fit);
-    const picked = new Set(run.fielded.filter((id) => fitOnes.some((b) => b.id === id)).slice(0, MAX_FIELDED));
-    for (const b of fitOnes) if (picked.size < MAX_FIELDED) picked.add(b.id);
+    const max = maxFielded(run);
+    const picked = new Set(run.fielded.filter((id) => fitOnes.some((b) => b.id === id)).slice(0, max));
+    for (const b of fitOnes) if (picked.size < max) picked.add(b.id);
     const draw = () => {
       const rows = run.broods
         .map(
           (b) => `<button class="brood-pick${picked.has(b.id) ? ' on' : ''}" data-b="${b.id}" ${fit(b) ? '' : 'disabled'}>
             <span class="glyph">${KIND_GLYPH[b.kind]}</span>
-            <span class="who"><b>${esc(b.name)}</b><small>${KIND_NAME[b.kind]} · ${b.size}/${b.cap}${veteran(b) ? ' · ★ veteran' : ''}${b.wounded ? ' · wounded' : ''}</small></span>
+            <span class="who"><b>${esc(b.name)}</b><small>${KIND_NAME[b.kind]} · ${b.size}/${b.cap}${veteran(b) ? ' · ★ veteran' : ''}${strainText(b, ' · ✦ ')}${b.wounded ? ' · wounded' : ''}</small></span>
           </button>`,
         )
         .join('');
@@ -563,7 +590,7 @@ export function runMap(
       panel.innerHTML = `
         <button class="icon close" data-a="close" aria-label="Close">✕</button>
         <h3>Field your broods</h3>
-        <p class="hint">Up to ${MAX_FIELDED}. They are your starting army: win and they take the survivors of their kind; lose and they're wounded and halved.</p>
+        <p class="hint">${max === 1 ? 'One only (Lone wolf), at double size' : `Up to ${max}`}. They are your starting army: win and they take the survivors of their kind; lose and they're wounded and halved.</p>
         <div class="brood-list">${rows}</div>
         ${fitOnes.length ? '' : '<p class="hint">Every brood is wounded. A militia of 10 Swarmers fights this one, and no brood is at risk.</p>'}
         <div class="row">
@@ -576,7 +603,7 @@ export function runMap(
         btn.addEventListener('click', () => {
           const id = Number(btn.dataset.b);
           if (picked.has(id)) picked.delete(id);
-          else if (picked.size < MAX_FIELDED) picked.add(id);
+          else if (picked.size < max) picked.add(id);
           sfx.mapHover();
           draw();
         }),
@@ -598,7 +625,7 @@ export function runMap(
       .map(
         (b) => `<div class="camp-row">
           <span class="glyph">${KIND_GLYPH[b.kind]}</span>
-          <span class="who"><b>${esc(b.name)}</b><small>${KIND_NAME[b.kind]} · ${b.size}/${b.cap}${veteran(b) ? ' · ★' : ''}${b.wounded ? ' · wounded' : ''}</small></span>
+          <span class="who"><b>${esc(b.name)}</b><small>${KIND_NAME[b.kind]} · ${b.size}/${b.cap}${veteran(b) ? ' · ★' : ''}${strainText(b, ' · ✦ ')}${b.wounded ? ' · wounded' : ''}</small></span>
           ${b.wounded ? price(COST.heal, 'Heal', `heal:${b.id}`) : ''}
           ${price(COST.grow(b), `Cap +${COST.growBy}`, `grow:${b.id}`)}
         </div>`,
@@ -614,6 +641,7 @@ export function runMap(
       <button class="icon close" data-a="close" aria-label="Close">✕</button>
       <h3>Camp · ${run.biomass} biomass</h3>
       <div class="camp-list">${rows}</div>
+      ${run.perks.length ? `<h3 class="sub">Rewards</h3><div class="camp-list">${run.perks.map((p) => `<div class="camp-row"><span class="who"><b>${REWARD[p]?.name ?? p}</b><small>${REWARD[p]?.text ?? ''}</small></span></div>`).join('')}</div>` : ''}
       <h3 class="sub">Unlocks</h3>
       <p class="hint">Until a nest type is unlocked, it spawns Swarmers for you and gives no power.</p>
       <div class="camp-list">${unlocks}</div>`;
@@ -844,5 +872,120 @@ export function starterPick(seed: string, h: { pick: (p: PackId) => void; back: 
     </div>`);
   m.querySelectorAll<HTMLButtonElement>('[data-p]').forEach((b) => b.addEventListener('click', () => h.pick(b.dataset.p as PackId)));
   m.querySelector('[data-a=back]')!.addEventListener('click', h.back);
+  return m;
+}
+
+// ---- reward pick ------------------------------------------------------------
+
+const TIER_LABEL = { common: 'Common', uncommon: 'Uncommon', rare: 'Rare' } as const;
+
+/** What a reward card says beyond its text: whose it is, and what it replaces. */
+function rewardNote(run: RunState, r: Reward): string {
+  if (r.kind !== undefined) return `${KIND_GLYPH[r.kind]} ${KIND_NAME[r.kind]} strain: goes to one brood`;
+  if (r.power) {
+    const held = run.perks.find((p) => REWARD[p]?.power === r.power);
+    return held ? `Replaces ${REWARD[held].name}` : POWER_LABEL[r.power];
+  }
+  return r.family === 'pact' ? 'A pact: it has a cost' : 'For the rest of the run';
+}
+
+/** After a won battle: pick 1 of 3 rewards, reroll for biomass, or skip. */
+export function rewardPick(run: RunState, sfx: AudioEngine, h: { done: () => void; save: () => void }): HTMLDivElement {
+  const m = el(`<div class="screen modal dim"><div class="card hub reward-card"></div></div>`);
+  const card = m.firstElementChild as HTMLElement;
+  const finish = (r: Reward) => {
+    if (r.family === 'pact') sfx.pactTaken();
+    else sfx.rewardPick(r.tier);
+    h.save();
+    h.done();
+  };
+
+  const offer = () => {
+    const ids = run.offer?.ids ?? [];
+    const cost = rerollCost(run);
+    card.innerHTML = `
+      <div class="eyebrow">${esc(run.seedText)} · turn ${run.turn}</div>
+      <h2>Choose a reward</h2>
+      <p class="hint">${run.biomass} biomass</p>
+      <div class="rewards">${ids
+        .map((id) => {
+          const r = REWARD[id];
+          return `<button class="reward ${r.tier}${r.family === 'pact' ? ' pact' : ''}" data-r="${id}">
+            <span class="tag">${FAMILY_LABEL[r.family]} · ${TIER_LABEL[r.tier]}</span>
+            <b>${r.name}</b>
+            <span>${r.text}</span>
+            <small>${rewardNote(run, r)}</small>
+          </button>`;
+        })
+        .join('')}</div>
+      <div class="row">
+        <button data-a="skip">Skip</button>
+        <button class="grow1" data-a="reroll" ${run.biomass >= cost ? '' : 'disabled'}>Reroll · ${cost} biomass</button>
+      </div>`;
+    card.querySelectorAll<HTMLButtonElement>('[data-r]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const r = REWARD[b.dataset.r!];
+        if (r.family === 'strain') return pickBrood(r);
+        if (takeReward(run, r.id)) finish(r);
+      }),
+    );
+    card.querySelector('[data-a=skip]')!.addEventListener('click', () => {
+      skipReward(run);
+      sfx.mapSelect();
+      h.save();
+      h.done();
+    });
+    card.querySelector('[data-a=reroll]')!.addEventListener('click', () => {
+      if (!rerollOffer(run)) return;
+      sfx.rerollOffer();
+      h.save();
+      offer();
+    });
+  };
+
+  /** A strain: which brood of its kind gets it (and, if that brood is full, what it replaces). */
+  const pickBrood = (r: Reward, full: Brood | null = null) => {
+    sfx.mapHover();
+    const mine = run.broods.filter((b) => b.kind === r.kind);
+    const rows = full
+      ? full.strains
+          .map(
+            (s) => `<button class="brood-pick" data-replace="${s}">
+              <span class="glyph">✦</span>
+              <span class="who"><b>Replace ${REWARD[s]?.name ?? s}</b><small>${REWARD[s]?.text ?? ''}</small></span>
+            </button>`,
+          )
+          .join('')
+      : mine
+          .map(
+            (b) => `<button class="brood-pick" data-b="${b.id}" ${b.strains.includes(r.id) ? 'disabled' : ''}>
+              <span class="glyph">${KIND_GLYPH[b.kind]}</span>
+              <span class="who"><b>${esc(b.name)}</b><small>${b.size}/${b.cap}${strainText(b, ' · ✦ ') || ' · no strains yet'}${b.strains.length >= STRAIN_SLOTS ? ' · full' : ''}</small></span>
+            </button>`,
+          )
+          .join('');
+    card.innerHTML = `
+      <div class="eyebrow">${r.name} · ${KIND_NAME[r.kind!]} strain</div>
+      <h2>${full ? `${esc(full.name)} has no room` : 'Which brood?'}</h2>
+      <p class="hint">${full ? `A brood carries ${STRAIN_SLOTS} strains. Pick one to give up for ${r.name}.` : `${r.text}. It changes all the ${KIND_NAME[r.kind!]} you spawn in battles this brood fights.`}</p>
+      <div class="brood-list">${rows}</div>
+      <div class="row end"><button data-a="back">Back</button></div>`;
+    card.querySelector('[data-a=back]')!.addEventListener('click', () => (full ? pickBrood(r) : offer()));
+    card.querySelectorAll<HTMLButtonElement>('[data-b]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const b = run.broods.find((o) => o.id === Number(btn.dataset.b))!;
+        if (b.strains.length >= STRAIN_SLOTS) return pickBrood(r, b);
+        if (takeReward(run, r.id, b.id)) finish(r);
+      }),
+    );
+    card.querySelectorAll<HTMLButtonElement>('[data-replace]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        if (takeReward(run, r.id, full!.id, btn.dataset.replace)) finish(r);
+      }),
+    );
+  };
+
+  offer();
+  sfx.cardsRevealed();
   return m;
 }

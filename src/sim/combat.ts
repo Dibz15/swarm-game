@@ -41,7 +41,7 @@ function scanTarget(w: World, i: number, radius: number, walls: boolean): number
         const dx = w.x[j] - x, dy = w.y[j] - y;
         const raw = dx * dx + dy * dy;
         if (raw > radius * radius) continue;
-        const d = w.kind[j] === Kind.Tank ? raw * TAUNT2 : raw;
+        const d = w.kind[j] === Kind.Tank ? raw * TAUNT2 * w.factions[w.owner[j]].mods.kind[Kind.Tank].taunt : raw;
         if (d < bestD && (!walls || w.terrain.los(x, y, w.x[j], w.y[j]))) {
           bestD = d;
           best = j;
@@ -60,7 +60,9 @@ export function updateCombat(w: World): void {
     w.engaged[i] = 0;
     if (!w.alive[i]) continue;
     const st = UNIT_STATS[w.kind[i]];
-    const aggro = st.range + AGGRO_EXTRA;
+    const km = w.factions[w.owner[i]].mods.kind[w.kind[i]];
+    const range = st.range * km.range;
+    const aggro = range + AGGRO_EXTRA;
 
     // Targets stay valid a little past notice range, so a unit can keep
     // answering an attacker that outranges it.
@@ -93,17 +95,17 @@ export function updateCombat(w: World): void {
       d2 = dx * dx + dy * dy;
     }
 
-    if (d2 <= st.range * st.range) {
+    if (d2 <= range * range) {
       const k = w.kind[i];
       let mult = (w.surge[i] > w.tick ? POWER.surgeDmg : 1) * DAMAGE_VS[k][w.kind[t]];
-      if (k === Kind.Dot) mult *= 1 + Math.min(TRAITS.pack.max, w.pack[i] * TRAITS.pack.perAlly);
-      const dmg = st.dps * mult * DT;
+      if (k === Kind.Dot) mult *= 1 + Math.min(TRAITS.pack.max * km.pack, w.pack[i] * TRAITS.pack.perAlly * km.pack);
+      const dmg = st.dps * km.dps * mult * DT;
       w.dmg[t] += dmg;
       w.lastHit[t] = w.owner[i];
       w.attacker[t] = i;
       w.attackerUid[t] = w.uid[i];
       if (w.tick - w.alertTick[t] >= ALERT_EVERY) alert(w, t, i);
-      if (k === Kind.Lancer) pierce(w, i, t, st.dps * DT);
+      if (k === Kind.Lancer) pierce(w, i, t, st.dps * km.dps * DT, km.splash);
       w.engaged[i] = 1;
       const b = w.beamCount++ * 2;
       w.beams[b] = i;
@@ -127,8 +129,8 @@ function alert(w: World, t: number, a: number): void {
 }
 
 /** Lancer shots splash onto a few enemies packed around the target. */
-function pierce(w: World, i: number, t: number, base: number): void {
-  queryRadius(w, w.x[t], w.y[t], TRAITS.pierce.radius, pierceScratch);
+function pierce(w: World, i: number, t: number, base: number, splash: number): void {
+  queryRadius(w, w.x[t], w.y[t], TRAITS.pierce.radius * splash, pierceScratch);
   let hit = 0;
   const owner = w.owner[i];
   for (const j of pierceScratch) {
@@ -145,7 +147,7 @@ export function resolveDamage(w: World): void {
   for (let i = 0; i < n; i++) {
     if (!w.alive[i] || w.dmg[i] === 0) continue;
     const surged = w.surge[i] > w.tick ? POWER.surgeArmor : 1;
-    const fortified = w.fortify[i] > w.tick ? POWER.fortifyArmor : 1;
+    const fortified = w.fortify[i] > w.tick ? POWER.fortifyArmor * w.factions[w.owner[i]].mods.fortifyArmor : 1;
     w.hp[i] -= w.dmg[i] * w.armor[i] * surged * fortified;
     w.dmg[i] = 0;
     if (w.hp[i] > 0) continue;

@@ -84,10 +84,13 @@ function centroid(w: World, slots: number[]): [number, number] {
   return [sx / slots.length, sy / slots.length];
 }
 
-/** How far a Nova reaches from the middle of the `n` dots casting it. */
-export function novaRadius(n: number): number {
-  return Math.min(140, 70 + Math.sqrt(n) * 5);
+/** How far a Nova reaches from the middle of the `n` dots casting it (`mult`: the caster's mods). */
+export function novaRadius(n: number, mult = 1): number {
+  return Math.min(140, 70 + Math.sqrt(n) * 5) * mult;
 }
+
+/** What a Surge costs p. */
+export const surgeCost = (w: World, p: number): number => POWER.surgeCost * w.factions[p].mods.surgeCost;
 
 export function groupArrive(n: number): number {
   return 6 + Math.sqrt(n) * 4.2;
@@ -156,11 +159,12 @@ export function applyCommand(w: World, c: Command): void {
     }
 
     case 'surge': {
-      if (f.energy < POWER.surgeCost) return;
+      const cost = surgeCost(w, c.p);
+      if (f.energy < cost) return;
       const slots = resolve(w, c.p, c.units);
       if (slots.length === 0) return;
-      f.energy -= POWER.surgeCost;
-      const until = w.tick + POWER.surgeTicks;
+      f.energy -= cost;
+      const until = w.tick + Math.round(POWER.surgeTicks * f.mods.surgeTicks);
       for (const s of slots) w.surge[s] = until;
       const [cx, cy] = centroid(w, slots);
       pushFx(w, 'surge', cx, cy, c.p, groupArrive(slots.length) + 20);
@@ -180,7 +184,7 @@ export function applyCommand(w: World, c: Command): void {
       if (slots.length < 4) return;
       f.energy -= POWER.novaCost;
       const [cx, cy] = centroid(w, slots);
-      const R = novaRadius(slots.length);
+      const R = novaRadius(slots.length, f.mods.novaRadius);
 
       // Sacrifice the units closest to the center.
       const d2 = (s: number) => (w.x[s] - cx) ** 2 + (w.y[s] - cy) ** 2;
@@ -199,7 +203,7 @@ export function applyCommand(w: World, c: Command): void {
         const dx = w.x[j] - cx, dy = w.y[j] - cy;
         const d = Math.sqrt(dx * dx + dy * dy) || 1;
         const fall = 1 - 0.5 * (d / R);
-        w.dmg[j] += POWER.novaDamage * fall * (UNIT_STATS[w.kind[j]].hp > 20 ? 1.6 : 1);
+        w.dmg[j] += POWER.novaDamage * f.mods.novaDamage * fall * (UNIT_STATS[w.kind[j]].hp > 20 ? 1.6 : 1);
         w.lastHit[j] = c.p;
         w.vx[j] += (dx / d) * POWER.novaKnock * fall;
         w.vy[j] += (dy / d) * POWER.novaKnock * fall;
@@ -241,7 +245,7 @@ export function applyCommand(w: World, c: Command): void {
       const [cx, cy] = centroid(w, slots);
       let dx = c.x - cx, dy = c.y - cy;
       const d = Math.sqrt(dx * dx + dy * dy);
-      const range = POWER.blinkRange * powerBoost(w, c.p, 'blink');
+      const range = POWER.blinkRange * powerBoost(w, c.p, 'blink') * f.mods.blinkRange;
       if (d > range) {
         dx *= range / d;
         dy *= range / d;
@@ -269,7 +273,7 @@ export function applyCommand(w: World, c: Command): void {
       const n = w.nests[c.nest];
       if (!n || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, c.p)) return;
       f.energy -= POWER.lockdownCost;
-      n.lockedUntil = w.tick + Math.round(POWER.lockdownTicks * powerBoost(w, c.p, 'lockdown'));
+      n.lockedUntil = w.tick + Math.round(POWER.lockdownTicks * powerBoost(w, c.p, 'lockdown') * f.mods.lockdownTicks);
       pushFx(w, 'lockdown', n.x, n.y, c.p, n.r, n.id, n.owner);
       return;
     }

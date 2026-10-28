@@ -1,4 +1,5 @@
-import { DOMINATION, Kind, LEVEL, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
+import { DOMINATION, Kind, LEVEL, MAX_LEVEL, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
+import { defaultMods, type FactionMods } from './mods';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
 import { generateMap, type MapSpec, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapLayout, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
 import { initEvents } from './events';
@@ -21,6 +22,8 @@ export interface PlayerSetup {
   army?: { kind: number; count: number; vet?: boolean }[];
   /** bitmask of usable nest types (default: all); locked ones spawn Swarmers and grant no power */
   nestTypes?: number;
+  /** stat modifiers (campaign rewards); default: none */
+  mods?: FactionMods;
 }
 
 export interface MatchSetup {
@@ -71,6 +74,7 @@ export function createWorld(setup: MatchSetup): World {
     f.energy = p.energy ?? 0;
     f.unitCap = p.unitCap ?? 0;
     if (p.nestTypes !== undefined) f.nestTypes = p.nestTypes;
+    f.mods = p.mods ?? defaultMods();
     w.setTeam(p.faction, p.team);
     if (!p.human) {
       const cfg = p.bot ?? { difficulty: 1, personality: 'expander' };
@@ -89,7 +93,7 @@ export function createWorld(setup: MatchSetup): World {
       r,
       type: s.type,
       owner,
-      level: s.level,
+      level: s.player >= 0 && s.capital !== false ? Math.min(MAX_LEVEL, s.level + (setup.players[s.player].mods?.capitalLevel ?? 0)) : s.level,
       control: 1,
       controller: owner,
       spawnAcc: 0,

@@ -3,17 +3,19 @@ import type { EventLevel } from '../sim/mapgen';
 import { Rng } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import { MILITIA, fighters, veteran } from './broods';
-import { pressure, type RunState } from './run';
+import { modsFor } from './rewards';
+import { maxFielded, pressure, type RunState } from './run';
 
 /** Conquest only ends by elimination: a share no team can reach turns domination off. */
 const NO_DOMINATION = 2;
 /** Domination nodes: hold half the nests (the usual share is 0.6-0.7). */
 const DOMINATION_SHARE = 0.5;
 
-/** The fielded broods (fit ones only, at most three) as a starting army; the militia if none. */
+/** The fielded broods (fit ones only, at most three) as a starting army; the militia if none. Lone wolf doubles it. */
 export function armyFor(run: RunState, fielded: number[]): { kind: number; count: number; vet?: boolean }[] {
-  const out = fighters(run.broods, fielded);
-  return out.length ? out.map((b) => ({ kind: b.kind, count: b.size, vet: veteran(b) })) : [MILITIA];
+  const out = fighters(run.broods, fielded, maxFielded(run));
+  const scale = run.perks.includes('lone-wolf') ? 2 : 1;
+  return out.length ? out.map((b) => ({ kind: b.kind, count: b.size * scale, vet: veteran(b) })) : [MILITIA];
 }
 
 /** The match for a run node. Same node, same battle (its seed is fixed). */
@@ -39,7 +41,14 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     portrait,
     domShare: n.kind === 'domination' ? DOMINATION_SHARE : n.kind === 'finale' ? undefined : NO_DOMINATION,
     players: [
-      { faction: run.color, team: 0, human: true, army: armyFor(run, fielded), nestTypes: run.unlocks.nests },
+      {
+        faction: run.color,
+        team: 0,
+        human: true,
+        army: armyFor(run, fielded),
+        nestTypes: run.unlocks.nests,
+        mods: modsFor(run.perks, fighters(run.broods, fielded, maxFielded(run))),
+      },
       ...others.slice(0, n.rivals).map((faction, i) => ({
         faction,
         team: i + 1,

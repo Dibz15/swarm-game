@@ -727,3 +727,22 @@ button.danger, button.danger:hover:not(:disabled) { border-color: var(--hot); co
 .pack .glyphs { color: var(--accent); font-size: 14px; }
 .pack small { color: var(--muted); font-size: 13px; }
 .card .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+
+/* Campaign rewards (#64) */
+.reward-card { max-width: 560px; }
+.rewards { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 6px; }
+.reward { display: flex; flex-direction: column; justify-content: flex-start; gap: 3px; text-align: left; padding: 12px 14px; border-left-width: 4px; }
+.reward .tag { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.reward b { font-size: 16px; }
+.reward small { color: var(--muted); font-size: 12px; }
+.reward.common { border-left-color: #8fa0c8; }
+.reward.uncommon { border-left-color: #2de2e6; }
+.reward.rare { border-left-color: #ffd166; background: rgba(255, 209, 102, 0.06); }
+.reward.rare .tag { color: #ffd166; }
+.reward.pact { border-left-color: #c04a9a; background: rgba(192, 74, 154, 0.08); }
+.reward.pact .tag { color: #e07ac0; }
+@media (min-width: 640px) {
+  .rewards { flex-direction: row; }
+  .reward { flex: 1; min-width: 0; }
+}
+.reward-card .row button.grow1 { flex: 1; }

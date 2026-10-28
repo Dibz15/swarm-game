@@ -6,7 +6,7 @@ import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
-import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost } from '../sim/commands';
+import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, surgeCost } from '../sim/commands';
 import type { Nest, World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
@@ -285,7 +285,7 @@ export class GameView {
       if (!from) return;
       let dx = cur[0] - from[0], dy = cur[1] - from[1];
       const d = Math.hypot(dx, dy);
-      const range = POWER.blinkRange * boost;
+      const range = POWER.blinkRange * boost * this.world.factions[this.human].mods.blinkRange;
       if (d > range) {
         dx *= range / d;
         dy *= range / d;
@@ -745,7 +745,7 @@ export class GameView {
   surge(): void {
     if (this.blocked('surge')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Surge', '#9aa4c7');
-    if (this.world.factions[this.human].energy < POWER.surgeCost) return this.s.sfx.fail();
+    if (this.world.factions[this.human].energy < surgeCost(this.world, this.human)) return this.s.sfx.fail();
     this.session.issue({ t: 'surge', p: this.human, units: [...this.selection.units] });
   }
 
@@ -773,7 +773,7 @@ export class GameView {
     if (!n) return false;
     cx /= n;
     cy /= n;
-    const r = novaRadius(n);
+    const r = novaRadius(n, w.factions[this.human].mods.novaRadius);
     for (let i = 0; i < w.n; i++) {
       if (w.alive[i] && w.hostile(w.owner[i], this.human) && (w.x[i] - cx) ** 2 + (w.y[i] - cy) ** 2 < r * r) return true;
     }

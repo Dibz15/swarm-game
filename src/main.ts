@@ -19,7 +19,7 @@ import { needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from
 import type { BattleReport } from './campaign/broods';
 import { nodeSetup } from './campaign/battle';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
-import { runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
+import { rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
@@ -250,6 +250,11 @@ class App {
 
   private showRunMap(run: RunState, intro: MapIntro | null = null): void {
     if (this.game) this.showMenu();
+    // A reward waiting to be picked comes first (also when resuming a run).
+    if (run.offer && run.status === 'active') {
+      this.setModal(rewardPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro) }));
+      return;
+    }
     this.setModal(
       runMap(run, this.sfx, { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.showRunHub(), save: () => saveRun(run) }, intro),
     );
