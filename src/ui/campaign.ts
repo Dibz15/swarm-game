@@ -5,6 +5,7 @@
 
 import type { AudioEngine } from '../audio/engine';
 import { mountCreatures } from '../art/creature';
+import { BLOOM, MapFx, battleMapCanvas, bloomShape, sigilCanvas, drawIcon, glyph, nodeRadius, ripple, tendrils } from './runmapfx';
 import { bloomLabel, rivals, type Rival } from '../campaign/battle';
 import { broodCreature, broodTemper } from '../campaign/character';
 import {
@@ -50,7 +51,6 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const SIZE_LABEL = { small: 'Small', medium: 'Medium', large: 'Large' } as const;
 const CAVE_LABEL = { off: 'Open', belt: 'Cave belt', full: 'Caves' } as const;
 const TERRAIN_LABEL = { none: 'No terrain', light: 'Light terrain', standard: 'Terrain', heavy: 'Heavy terrain' } as const;
-const BLOOM = '#c04a9a';
 
 export const KIND_LABEL: Record<RunNode['kind'], string> = {
   start: 'Your camp',
@@ -163,12 +163,14 @@ function drawFog(g: CanvasRenderingContext2D, run: RunState, known: Set<number>,
   fg.clearRect(0, 0, cw, ch);
   fg.fillStyle = 'rgba(9, 10, 24, 0.94)';
   fg.fillRect(0, 0, cw, ch);
-  // Slow-drifting clouds of colour in the nebula.
+  // Clouds of colour in three layers: the far ones drift slower and follow the camera less.
   for (let k = 0; k < 18; k++) {
-    const x = ((k * 7907 + run.seed) % 1100) - 50 + Math.sin(time * 0.05 + k) * 30;
+    const layer = k % 3;
+    const par = 0.55 + 0.2 * layer;
+    const x = (((k * 7907 + run.seed) % 1100) + time * (2 + 2.5 * layer)) % 1200 - 100 + Math.sin(time * 0.05 + k) * 30;
     const y = ((k * 3571 + run.seed * 7) % 720) - 50 + Math.cos(time * 0.04 + k * 2) * 20;
     const r = (140 + (k % 5) * 40) * v.s;
-    const px = v.ox + x * v.s, py = v.oy + y * v.s;
+    const px = cw / 2 + (v.ox - cw / 2) * par + x * v.s, py = ch / 2 + (v.oy - ch / 2) * par + y * v.s;
     const grad = fg.createRadialGradient(px, py, 0, px, py, r);
     const hue = k % 3 === 0 ? '90, 60, 170' : k % 3 === 1 ? '40, 90, 150' : '120, 40, 120';
     grad.addColorStop(0, `rgba(${hue}, 0.22)`);
@@ -176,12 +178,33 @@ function drawFog(g: CanvasRenderingContext2D, run: RunState, known: Set<number>,
     fg.fillStyle = grad;
     fg.fillRect(px - r, py - r, r * 2, r * 2);
   }
-  // Clear windows around every known node.
+  // Faint stars, twinkling: fixed in the sky around the map, just behind it (the far cloud layer's depth).
+  fg.fillStyle = '#dfe4ff';
+  const par = 0.85;
+  for (let k = 0; k < 90; k++) {
+    const h = (m: number) => Math.abs(Math.sin((k + 1) * m + run.seed) * 43758.5453) % 1;
+    const sx = cw / 2 + (v.ox - cw / 2) * par + (h(12.9) * 1600 - 300) * v.s;
+    const sy = ch / 2 + (v.oy - ch / 2) * par + (h(78.2) * 1100 - 240) * v.s;
+    if (sx < 0 || sy < 0 || sx > cw || sy > ch) continue;
+    const tw = Math.max(0, Math.sin(time * (0.4 + h(3.7)) + h(9.1) * 20));
+    fg.globalAlpha = 0.12 + 0.5 * tw * tw * tw;
+    fg.fillRect(sx, sy, (0.8 + h(5.3)) * u, (0.8 + h(5.3)) * u);
+  }
+  fg.globalAlpha = 1;
+  // A soft wave of brightness sweeping across.
+  const wx = ((time * 0.04) % 1.6 - 0.3) * cw;
+  const wave = fg.createLinearGradient(wx - cw * 0.3, 0, wx + cw * 0.3, ch * 0.4);
+  wave.addColorStop(0, 'rgba(120, 110, 220, 0)');
+  wave.addColorStop(0.5, 'rgba(120, 110, 220, 0.06)');
+  wave.addColorStop(1, 'rgba(120, 110, 220, 0)');
+  fg.fillStyle = wave;
+  fg.fillRect(0, 0, cw, ch);
+  // Clear windows around every known node, breathing softly as the fog moves.
   fg.globalCompositeOperation = 'destination-out';
   for (const id of known) {
     const n = run.nodes[id];
     const px = v.ox + n.x * v.s, py = v.oy + n.y * v.s;
-    const r = Math.max(110 * v.s, 40 * u);
+    const r = Math.max(110 * v.s, 40 * u) * (1 + 0.06 * Math.sin(time * 0.45 + id * 1.3));
     const grad = fg.createRadialGradient(px, py, r * 0.35, px, py, r);
     grad.addColorStop(0, 'rgba(0, 0, 0, 1)');
     grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
@@ -205,7 +228,7 @@ function star(g: CanvasRenderingContext2D, x: number, y: number, r: number): voi
 function drawMap(
   c: HTMLCanvasElement,
   run: RunState,
-  opts: { front: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam },
+  opts: { front: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam; fx?: MapFx },
 ): View {
   const dpr = window.devicePixelRatio || 1;
   const cw = c.clientWidth * dpr, ch = c.clientHeight * dpr;
@@ -221,12 +244,20 @@ function drawMap(
   g.clearRect(0, 0, cw, ch);
   if (!opts.thumb) drawFog(g, run, known, v, cw, ch, opts.time, u);
 
-  // The Bloom: everything left of the front.
+  // The Bloom: everything left of the front, out past the map's edges so it looks endless.
   const b = run.bloom;
+  const fx = opts.fx;
+  const y0 = Math.min(-60, -v.oy / v.s - 40), y1 = Math.max(MAP_H + 60, (ch - v.oy) / v.s + 40);
+  const x0 = Math.min(-60, -v.ox / v.s - 40);
+  const edge = (y: number) => Math.min(MAP_W + 80, opts.front + bloomShape(b, y)) + (fx ? ripple(y, opts.time) : 0);
+  const step = Math.max(8, (y1 - y0) / 160);
+  const frontPath = () => {
+    for (let y = y0; y <= y1 + step; y += step) g.lineTo(X(edge(y)), Y(y));
+  };
   g.beginPath();
-  g.moveTo(X(-60), Y(-60));
-  for (let y = -60; y <= MAP_H + 60; y += 8) g.lineTo(X(Math.min(MAP_W + 80, opts.front + frontShape(b, y))), Y(y));
-  g.lineTo(X(-60), Y(MAP_H + 60));
+  g.moveTo(X(x0), Y(y0));
+  frontPath();
+  g.lineTo(X(x0), Y(y1 + step));
   g.closePath();
   const grad = g.createLinearGradient(X(opts.front - 200), 0, X(opts.front + 60), 0);
   grad.addColorStop(0, 'rgba(70, 14, 60, 0.85)');
@@ -236,26 +267,47 @@ function drawMap(
   if (!opts.thumb) {
     g.save();
     g.clip();
-    // Spores drifting inside the Bloom.
-    for (let k = 0; k < 140; k++) {
-      const sx = ((k * 7919 + run.seed) % 1000) * 1.0;
-      const sy = ((k * 104729 + run.seed * 3) % 620) * 1.0;
-      const wob = Math.sin(opts.time * 0.6 + k) * 4;
-      g.fillStyle = `rgba(230, 120, 200, ${0.15 + 0.15 * Math.sin(opts.time * 1.3 + k * 1.7)})`;
-      g.beginPath();
-      g.arc(X(sx + wob), Y(sy), (1.5 + (k % 3)) * u, 0, Math.PI * 2);
-      g.fill();
-    }
+    // Spores drifting inside the Bloom, tiled over whatever is in view.
+    const tx0 = Math.floor(x0 / 1000), tx1 = Math.floor((opts.front + b.bulge + 80) / 1000);
+    const ty0 = Math.floor(y0 / 620), ty1 = Math.floor(y1 / 620);
+    const tiles = (tx1 - tx0 + 1) * (ty1 - ty0 + 1);
+    const per = Math.max(30, Math.floor(280 / tiles));
+    for (let tx = tx0; tx <= tx1; tx++)
+      for (let ty = ty0; ty <= ty1; ty++)
+        for (let k = 0; k < Math.min(140, per); k++) {
+          const sx = ((k * 7919 + run.seed) % 1000) + tx * 1000;
+          const sy = ((k * 104729 + run.seed * 3) % 620) + ty * 620;
+          const wob = Math.sin(opts.time * 0.6 + k) * 4;
+          g.fillStyle = `rgba(230, 120, 200, ${0.15 + 0.15 * Math.sin(opts.time * 1.3 + k * 1.7)})`;
+          g.beginPath();
+          g.arc(X(sx + wob), Y(sy), (1.5 + (k % 3)) * u, 0, Math.PI * 2);
+          g.fill();
+        }
     g.restore();
-    // The glowing front.
+    if (fx) {
+      // The edge is alive: tendrils feel ahead, spores shed off and drift.
+      tendrils(g, y0, y1, opts.time, edge, X, Y, u);
+      fx.spores.shed(fx.dt, 14 * Math.min(4, (y1 - y0) / MAP_H), y0, y1, edge);
+      fx.spores.step(fx.dt, opts.time);
+      fx.spores.draw(g, X, Y, u);
+    }
+    // The glowing front, with a pulse running along it.
     g.beginPath();
-    for (let y = -60; y <= MAP_H + 60; y += 8) g.lineTo(X(Math.min(MAP_W + 80, opts.front + frontShape(b, y))), Y(y));
+    frontPath();
     g.strokeStyle = BLOOM;
     g.lineWidth = 2.5 * u;
     g.shadowColor = BLOOM;
     g.shadowBlur = 14 * u;
     g.stroke();
     g.shadowBlur = 0;
+    if (fx) {
+      g.strokeStyle = 'rgba(255, 190, 240, 0.7)';
+      g.lineWidth = 2 * u;
+      g.setLineDash([30 * u, 220 * u]);
+      g.lineDashOffset = -opts.time * 70 * u;
+      g.stroke();
+      g.setLineDash([]);
+    }
   }
 
   const me = FACTION_HEX[run.color];
@@ -285,7 +337,7 @@ function drawMap(
   for (const n of run.nodes) {
     if (!known.has(n.id) && n.id !== run.heart) continue;
     const x = X(n.x), y = Y(n.y);
-    const r = (n.kind === 'finale' ? 17 : 12) * u;
+    const r = nodeRadius(n, fx?.style ?? 'glyph') * u;
     const taken = run.visited.includes(n.id);
     const dead = isSwallowed(n.id);
     const here = n.id === run.at;
@@ -328,38 +380,11 @@ function drawMap(
     g.strokeStyle = here ? '#ffffff' : canGo ? me : n.kind === 'finale' ? BLOOM : dead ? 'rgba(192, 74, 154, 0.5)' : 'rgba(150, 170, 255, 0.5)';
     g.stroke();
 
-    // Glyph: crossed blades for conquest, a ring for domination, a roof for camp.
+    // The icon: the camp's roof, or the battle in the chosen style (?runicons=).
     if (opts.thumb || n.kind === 'finale') continue;
-    g.strokeStyle = taken || here ? '#06070f' : dead ? 'rgba(220, 140, 200, 0.4)' : 'rgba(230, 234, 255, 0.85)';
-    g.lineWidth = 1.8 * u;
-    g.beginPath();
-    const k = r * 0.45;
-    if (n.kind === 'conquest') {
-      g.moveTo(x - k, y - k);
-      g.lineTo(x + k, y + k);
-      g.moveTo(x + k, y - k);
-      g.lineTo(x - k, y + k);
-    } else if (n.kind === 'domination') {
-      g.arc(x, y, k, 0, Math.PI * 2);
-      g.moveTo(x + k * 0.3, y);
-      g.arc(x, y, k * 0.3, 0, Math.PI * 2);
-    } else {
-      g.moveTo(x - k, y + k * 0.6);
-      g.lineTo(x - k, y - k * 0.1);
-      g.lineTo(x, y - k);
-      g.lineTo(x + k, y - k * 0.1);
-      g.lineTo(x + k, y + k * 0.6);
-    }
-    g.stroke();
-    // Difficulty pips under untaken battles.
-    if (!taken && !dead && n.kind !== 'start') {
-      g.fillStyle = ['#b4ff39', '#ffb627', '#ff6b4a', '#ff3cac'][n.difficulty];
-      for (let p = 0; p <= n.difficulty; p++) {
-        g.beginPath();
-        g.arc(x + (p - n.difficulty / 2) * 6 * u, y + r + 6 * u, 2 * u, 0, Math.PI * 2);
-        g.fill();
-      }
-    }
+    const ink = taken || here ? '#06070f' : dead ? 'rgba(220, 140, 200, 0.4)' : 'rgba(230, 234, 255, 0.85)';
+    if (n.kind === 'start') glyph(g, n.kind, x, y, r, u, ink);
+    else drawIcon(g, run, n, fx?.style ?? 'glyph', x, y, r, u, { taken, dead, here, me });
     // A flag on the checkpoint, while it can still save you.
     if (n.checkpoint && !dead && !run.checkpointUsed) {
       const fx = x + r * 0.7, fy = y - r * 0.7;
@@ -396,6 +421,8 @@ function drawMap(
       g.fillText(KIND_GLYPH[n.rescue], bx, by + 0.5 * u);
     }
   }
+  // Your swarm: its dots orbit your node, over the nodes' glow.
+  if (fx && run.status === 'active') fx.swarm.draw(g, run.nodes[run.at], opts.time, X, Y, u, me);
   return v;
 }
 
@@ -774,6 +801,26 @@ export function runMap(
   let hover: number | null = null;
   let view: View = { s: 1, ox: 0, oy: 0 };
   const fresh = new Set(intro?.fresh ?? []);
+  const fx = new MapFx(run);
+  let moving = false;
+  /** Your dots stream along the link to the new node, then the move happens. */
+  const march = (n: RunNode, fielded: number[]) => {
+    if (moving) return;
+    moving = true;
+    close();
+    sfx.march();
+    const wait = fx.swarm.go(run.nodes[run.at], n, (performance.now() - t0) / 1000);
+    setTimeout(() => {
+      try {
+        h.go(n.id, fielded);
+      } catch (err) {
+        // Never strand the map mid-march: put the swarm back and let the player try again.
+        console.error('run move failed', err);
+        fx.swarm.stop();
+        moving = false;
+      }
+    }, wait * 1000);
+  };
   const t0 = performance.now();
   let swallowSounded = false;
 
@@ -789,7 +836,7 @@ export function runMap(
     if (n.kind !== 'start' && !taken && !dead) {
       foes = rivals(run, n.id);
       rows.push(`<dt>Enemies</dt><dd>${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}${rivalStrip(foes, true, 'small')}</dd>`);
-      rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}</dd>`);
+      rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}<div class="battle-map-slot"></div></dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
       if (n.reward) {
         const rescue =
@@ -802,19 +849,21 @@ export function runMap(
     const verb = !canGo ? null : needsBattle(run, n.id) ? 'Fight' : 'March';
     panel.innerHTML = `
       <button class="icon close" data-a="close" aria-label="Close">✕</button>
-      <h3>${KIND_LABEL[n.kind]}</h3>
+      <h3 class="with-sigil"><span class="sigil-slot"></span>${KIND_LABEL[n.kind]}</h3>
       <p>${KIND_TEXT[n.kind]}</p>
       ${rows.length ? `<dl>${rows.join('')}</dl>` : ''}
       ${status ? `<p class="hint">${status}</p>` : ''}
       ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}
       ${n.id === run.at ? '<button class="primary" data-a="camp">Open camp</button>' : ''}`;
     mountCreatures(panel, foes.map((r) => r.creature), 40);
+    panel.querySelector('.sigil-slot')?.append(sigilCanvas(run, n, 36, FACTION_HEX[run.color]));
+    // The battle's actual map: you in your colour, the rivals in theirs.
+    panel.querySelector('.battle-map-slot')?.append(battleMapCanvas(run, n, 210, FACTION_HEX[run.color]));
     panel.querySelector('[data-a=close]')!.addEventListener('click', close);
     panel.querySelector('[data-a=camp]')?.addEventListener('click', camp);
     panel.querySelector('[data-a=go]')?.addEventListener('click', () => {
       if (verb === 'Fight') return choose(n);
-      sfx.march();
-      h.go(n.id, []);
+      march(n, []);
     });
   };
   preview();
@@ -860,8 +909,7 @@ export function runMap(
         }),
       );
       panel.querySelector('[data-a=fight]')!.addEventListener('click', () => {
-        sfx.march();
-        h.go(n.id, [...picked]);
+        march(n, [...picked]);
       });
     };
     draw();
@@ -951,6 +999,7 @@ export function runMap(
     c.style.cursor = '';
     pinch = 0;
     if (dragged) return;
+    if (moving) return;
     const n = pick(e);
     if (n !== null && n === run.at && run.status === 'active') return camp();
     if (n === null || n === selected) return;
@@ -992,7 +1041,13 @@ export function runMap(
       [...fresh].forEach((_, i) => sfx.swallow(i));
     }
     if (!cam && c.clientWidth > 0) cam = homeCam(run, c.clientWidth * dpr(), c.clientHeight * dpr());
-    view = drawMap(c, run, { front, selected, hover, time, fresh, freshT, cam: cam ?? undefined });
+    fx.tick(time);
+    // A burst of spores as each swallowed node goes under.
+    if (!fx.burstDone && freshT >= 1 && fresh.size) {
+      fx.burstDone = true;
+      for (const id of fresh) fx.spores.burst(run.nodes[id].x, run.nodes[id].y, 36);
+    }
+    view = drawMap(c, run, { front, selected, hover, time, fresh, freshT, cam: cam ?? undefined, fx });
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
