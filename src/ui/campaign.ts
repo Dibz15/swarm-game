@@ -5,7 +5,7 @@
 
 import type { AudioEngine } from '../audio/engine';
 import { mountCreatures } from '../art/creature';
-import { BLOOM, MapFx, bloomShape, drawIcon, glyph, nodeRadius, ripple, tendrils } from './runmapfx';
+import { BLOOM, MapFx, battleMapCanvas, bloomShape, drawIcon, glyph, nodeRadius, ripple, tendrils } from './runmapfx';
 import { bloomLabel, rivals, type Rival } from '../campaign/battle';
 import { broodCreature, broodTemper } from '../campaign/character';
 import {
@@ -808,7 +808,16 @@ export function runMap(
     close();
     sfx.march();
     const wait = fx.swarm.go(run.nodes[run.at], n, (performance.now() - t0) / 1000);
-    setTimeout(() => h.go(n.id, fielded), wait * 1000);
+    setTimeout(() => {
+      try {
+        h.go(n.id, fielded);
+      } catch (err) {
+        // Never strand the map mid-march: put the swarm back and let the player try again.
+        console.error('run move failed', err);
+        fx.swarm.stop();
+        moving = false;
+      }
+    }, wait * 1000);
   };
   const t0 = performance.now();
   let swallowSounded = false;
@@ -825,7 +834,7 @@ export function runMap(
     if (n.kind !== 'start' && !taken && !dead) {
       foes = rivals(run, n.id);
       rows.push(`<dt>Enemies</dt><dd>${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}${rivalStrip(foes, true, 'small')}</dd>`);
-      rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}</dd>`);
+      rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}<div class="battle-map-slot"></div></dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
       if (n.reward) {
         const rescue =
@@ -845,6 +854,8 @@ export function runMap(
       ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}
       ${n.id === run.at ? '<button class="primary" data-a="camp">Open camp</button>' : ''}`;
     mountCreatures(panel, foes.map((r) => r.creature), 40);
+    // The battle's actual map: you in your colour, the rivals in theirs.
+    panel.querySelector('.battle-map-slot')?.append(battleMapCanvas(run, n, 210, FACTION_HEX[run.color]));
     panel.querySelector('[data-a=close]')!.addEventListener('click', close);
     panel.querySelector('[data-a=camp]')?.addEventListener('click', camp);
     panel.querySelector('[data-a=go]')?.addEventListener('click', () => {

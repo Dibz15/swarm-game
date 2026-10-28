@@ -109,21 +109,7 @@ function mapSprite(run: RunState, n: RunNode, style: 'constellation' | 'minimap'
   g.clip();
   g.lineCap = 'round';
   if (style === 'minimap') {
-    g.strokeStyle = 'rgba(150, 170, 255, 0.45)';
-    for (const w of m.terrain.walls) {
-      g.lineWidth = Math.max(1, w.r * 2 * s);
-      g.beginPath();
-      g.moveTo(X(w.x1), Y(w.y1));
-      g.lineTo(X(w.x2), Y(w.y2));
-      g.stroke();
-    }
-    for (const nest of m.nests) {
-      g.fillStyle = colorOf(nest.player);
-      g.globalAlpha = nest.player < 0 ? 0.6 : 1;
-      g.beginPath();
-      g.arc(X(nest.x), Y(nest.y), Math.max(1.2, d * (nest.player < 0 ? 0.03 : 0.05)), 0, Math.PI * 2);
-      g.fill();
-    }
+    drawBattleMap(g, m, colorOf, ox, oy, s, false);
   } else {
     // Each nest linked to its two nearest: the map's shape as a constellation.
     g.strokeStyle = 'rgba(200, 210, 255, 0.35)';
@@ -169,6 +155,101 @@ function mapSprite(run: RunState, n: RunNode, style: 'constellation' | 'minimap'
     }
   }
   sprites.set(key, cv);
+  return cv;
+}
+
+/**
+ * A top-down picture of a battle map at scale `s` from (ox, oy): cave rock,
+ * walls, nebula and rift fields (with `detail`), crystals, and the nests in
+ * their owners' colours (your start in yours, rivals' in theirs).
+ */
+function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: (player: number) => string, ox: number, oy: number, s: number, detail: boolean): void {
+  const X = (x: number) => ox + x * s, Y = (y: number) => oy + y * s;
+  const capsule = (c: { x1: number; y1: number; x2: number; y2: number; r: number }, ctx: CanvasRenderingContext2D) => {
+    ctx.lineWidth = Math.max(1, c.r * 2 * s);
+    ctx.beginPath();
+    ctx.moveTo(X(c.x1), Y(c.y1));
+    ctx.lineTo(X(c.x2), Y(c.y2));
+    ctx.stroke();
+  };
+  g.lineCap = 'round';
+  const cave = m.terrain.cave;
+  if (cave) {
+    // Rock everywhere in the zone, with the chambers and tunnels carved out.
+    const rock = document.createElement('canvas');
+    rock.width = g.canvas.width;
+    rock.height = g.canvas.height;
+    const r = rock.getContext('2d')!;
+    r.lineCap = 'round';
+    r.fillStyle = r.strokeStyle = 'rgba(70, 85, 150, 0.55)';
+    if (cave.zone) for (const z of cave.zone) capsule(z, r);
+    else r.fillRect(X(0), Y(0), m.width * s, m.height * s);
+    r.globalCompositeOperation = 'destination-out';
+    r.strokeStyle = '#000';
+    for (const c of cave.carves) capsule(c, r);
+    g.drawImage(rock, 0, 0);
+  }
+  if (detail) {
+    for (const f of m.terrain.fields) {
+      g.strokeStyle = f.kind === 'rift' ? 'rgba(255, 70, 70, 0.35)' : 'rgba(150, 90, 220, 0.35)';
+      capsule(f, g);
+    }
+    g.fillStyle = 'rgba(120, 230, 255, 0.7)';
+    for (const c of m.terrain.crystals) {
+      g.beginPath();
+      g.arc(X(c.x), Y(c.y), Math.max(1, c.r * s), 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+  g.strokeStyle = 'rgba(150, 170, 255, 0.5)';
+  for (const w of m.terrain.walls) capsule(w, g);
+  const unit = Math.max(m.width, m.height) * s;
+  for (const nest of m.nests) {
+    g.fillStyle = colorOf(nest.player);
+    g.globalAlpha = nest.player < 0 ? 0.65 : 1;
+    g.beginPath();
+    g.arc(X(nest.x), Y(nest.y), Math.max(1.2, unit * (nest.player < 0 ? 0.012 + 0.003 * nest.level : 0.022)), 0, Math.PI * 2);
+    g.fill();
+    if (nest.player >= 0 && detail) {
+      g.strokeStyle = colorOf(nest.player);
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.arc(X(nest.x), Y(nest.y), unit * 0.04, 0, Math.PI * 2);
+      g.stroke();
+    }
+  }
+  g.globalAlpha = 1;
+}
+
+const CARD_MAPS = new Map<string, MapSpec>();
+
+/** A larger picture of a node's battle map for its card, `px` CSS pixels on its long side. */
+export function battleMapCanvas(run: RunState, n: RunNode, px: number, me: string): HTMLCanvasElement {
+  // The same orientation the battle will use: tall on a portrait screen.
+  const portrait = window.innerHeight > window.innerWidth * 1.15;
+  const key = `${n.seed}:${portrait}`;
+  let m = CARD_MAPS.get(key);
+  if (!m) {
+    const st = nodeSetup(run, n.id, portrait);
+    m = generateMap({ seed: st.seed, size: st.size, players: st.players.length, portrait, terrain: st.terrain, caves: st.caves, layout: st.layout });
+    CARD_MAPS.set(key, m);
+  }
+  const rivals = artFor(run, n).rivals;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const long = Math.max(m.width, m.height);
+  const w = Math.round((px * m.width) / long), h = Math.round((px * m.height) / long);
+  const cv = document.createElement('canvas');
+  cv.className = 'battle-map';
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  cv.style.width = `${w}px`;
+  cv.style.height = `${h}px`;
+  const g = cv.getContext('2d');
+  if (g) {
+    g.fillStyle = '#0a0d1c';
+    g.fillRect(0, 0, cv.width, cv.height);
+    drawBattleMap(g, m, (p) => (p === 0 ? me : p > 0 ? FACTION_HEX[rivals[p - 1]] ?? '#e6eaff' : '#e6eaff'), 0, 0, cv.width / m.width, true);
+  }
   return cv;
 }
 
@@ -420,6 +501,10 @@ export class SwarmDots {
   go(from: RunNode, to: RunNode, time: number): number {
     this.march = { from, to, t0: time };
     return 1.15;
+  }
+
+  stop(): void {
+    this.march = null;
   }
 
   draw(g: CanvasRenderingContext2D, at: RunNode, time: number, X: (x: number) => number, Y: (y: number) => number, u: number, color: string): void {

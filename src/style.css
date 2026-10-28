@@ -696,6 +696,8 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .node-card dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 10px 0; font-size: 14px; }
 .node-card dt { color: var(--muted); }
 .node-card dd { margin: 0; }
+.battle-map-slot { margin-top: 6px; }
+.battle-map-slot canvas { display: block; border: 1px solid var(--line); border-radius: 6px; max-width: 100%; height: auto !important; }
 .node-card button.primary { width: 100%; margin-top: 10px; padding: 12px; font-size: 16px; }
 @media (max-width: 520px) {
   .runmap header { gap: 10px; padding: 8px 12px; }
