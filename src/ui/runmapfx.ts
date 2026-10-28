@@ -486,20 +486,29 @@ export class Spores {
  * traced edge, so they never blink as the edge redraws. A spot near the edge
  * sends one out from the edge's surface (its root found by Newton steps), at a
  * fixed size; it fades in as the edge nears and out as the edge moves on.
- * `gap` is the drawn Bloom (negative inside); the lattice coarsens as you zoom out.
+ * The lattice is the same at every zoom (spots are culled cheaply against the
+ * sampled field), so zooming never swaps one set of tendrils for another.
+ * `gap` is the drawn Bloom (negative inside), and `field` its samples over the view.
  */
+/** Spacing of the spots tendrils grow from, in map units. */
+const TENDRIL_STEP = 24;
+
 export function tendrils(
   g: CanvasRenderingContext2D,
   gap: (x: number, y: number) => number,
+  field: BloomField,
   view: { x0: number; y0: number; x1: number; y1: number },
   time: number,
   X: (x: number) => number,
   Y: (y: number) => number,
   u: number,
 ): void {
-  const span = Math.max(view.x1 - view.x0, view.y1 - view.y0);
-  const step = 24 * 2 ** Math.max(0, Math.ceil(Math.log2(span / (24 * 45))));
+  const step = TENDRIL_STEP;
   const band = step * 1.2;
+  // Zoomed far out they fade smoothly as they get too small to read, rather than vanishing at once.
+  const zoomFade = Math.max(0, Math.min(1, (Math.abs(X(10) - X(0)) / u - 1.5) / 2));
+  if (zoomFade === 0) return;
+  let drawn = 0;
   g.lineWidth = 1.4 * u;
   for (let cx = Math.floor(view.x0 / step); cx <= Math.ceil(view.x1 / step); cx++) {
     for (let cy = Math.floor(view.y0 / step); cy <= Math.ceil(view.y1 / step); cy++) {
@@ -507,8 +516,10 @@ export function tendrils(
       if (h > 0.32) continue;
       // The spot itself, jittered inside its cell.
       const px = (cx + ((h * 7.13) % 1) - 0.5) * step, py = (cy + ((h * 3.71) % 1) - 0.5) * step;
+      // Cull against the samples (slack for their coarseness), then measure exactly.
+      if (Math.abs(field.at(px, py)) > band + field.cell) continue;
       const d = gap(px, py);
-      if (Math.abs(d) > band) continue;
+      if (Math.abs(d) > band || ++drawn > 400) continue;
       // Root it on the edge itself: a few Newton steps along the gradient.
       // (The gap isn't a true distance, so one step back by it lands off the surface.)
       const e = 1.5;
@@ -531,7 +542,7 @@ export function tendrils(
       const len = 10 + k * 22;
       const a = Math.atan2(ny, nx) + Math.sin(time * (0.6 + k * 0.7) + k * 9) * 0.7;
       const ex = x + len * Math.cos(a), ey = y + len * Math.sin(a);
-      g.globalAlpha = fade;
+      g.globalAlpha = fade * zoomFade;
       g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
       g.beginPath();
       g.moveTo(X(x - nx * 2), Y(y - ny * 2));
@@ -579,6 +590,15 @@ export class BloomField {
     const n = (this.nx + 1) * (this.ny + 1);
     if (this.vals.length < n) this.vals = new Float32Array(n * 1.5);
     for (let j = 0; j <= this.ny; j++) for (let i = 0; i <= this.nx; i++) this.vals[j * (this.nx + 1) + i] = gap((this.gx0 + i) * c, (this.gy0 + j) * c);
+  }
+
+  /** The sampled gap at (x, y), bilinear; far outside the samples, +Infinity. */
+  at(x: number, y: number): number {
+    const fx = x / this.cell - this.gx0, fy = y / this.cell - this.gy0;
+    if (fx < 0 || fy < 0 || fx >= this.nx || fy >= this.ny) return Infinity;
+    const i = Math.floor(fx), j = Math.floor(fy), tx = fx - i, ty = fy - j, W = this.nx + 1, v = this.vals;
+    const a = v[j * W + i], b = v[j * W + i + 1], c = v[(j + 1) * W + i], d = v[(j + 1) * W + i + 1];
+    return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
   }
 
   /** Trace the zero contour into `seg`. */

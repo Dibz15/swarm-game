@@ -269,7 +269,7 @@ function drawMap(
           g.fill();
         }
     // The edge is alive: tendrils feel out, spores shed off and drift.
-    tendrils(g, (x, y) => bloomGapView(b, x, y, opts.bloomT) + wob(x, y), { x0: mx0, y0: my0, x1: mx1, y1: my1 }, opts.time, X, Y, u);
+    tendrils(g, (x, y) => bloomGapView(b, x, y, opts.bloomT) + wob(x, y), field, { x0: mx0, y0: my0, x1: mx1, y1: my1 }, opts.time, X, Y, u);
     fx.spores.shed(fx.dt, Math.min(60, field.nseg * 0.25), field);
     fx.spores.step(fx.dt, opts.time);
     fx.spores.draw(g, X, Y, u);
