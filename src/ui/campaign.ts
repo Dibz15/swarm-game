@@ -767,7 +767,8 @@ export function runMap(
     veil.hidden = true;
   };
   const stats = m.querySelector('.run-stats') as HTMLElement;
-  const showStats = () => (stats.innerHTML = `${broods(run)}<span class="biomass">${run.biomass} biomass</span>`);
+  // Only biomass up here: your broods live in the camp (tap your swarm).
+  const showStats = () => (stats.innerHTML = `<span class="biomass" title="Biomass: spend it at the camp"><b>${run.biomass}</b> biomass</span>`);
   showStats();
   m.querySelector('[data-a=leave]')!.addEventListener('click', h.leave);
   let campEl: HTMLElement | null = null;
