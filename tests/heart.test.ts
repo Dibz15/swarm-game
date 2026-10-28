@@ -65,6 +65,10 @@ describe("the Bloom's heart", () => {
     expect(hp - w.hp[s]).toBeCloseTo(100 * (1 - 2 * HEART.ward));
     w.nests[0].owner = 0;
     expect(heartWard(w)).toBeCloseTo(1 - HEART.ward);
+    // A nest the players took stays lost to the Bloom, even if it goes wild again.
+    step(w, []);
+    w.nests[0].owner = NEUTRAL;
+    expect(standingNests(w)).toBe(1);
   });
 
   it('telegraphs its pulse, which hits what is inside its ring and nothing else', () => {
@@ -172,13 +176,11 @@ describe('the finale', () => {
     expect(play()).toEqual(a);
   });
 
-  // A sanity check, not tuning (#68): the human proxy, alone with the Bloom
-  // (the rivals were there before the heart), can kill the heart at low and
-  // high strength on some seed.
+  // A sanity check, not tuning (#68): the human proxy, in the real finale
+  // (rivals and all), can kill the heart at low and high strength on some seed.
   it.each([0, 10])('the heart can be beaten at strength %i', (strength) => {
     const wins = [0, 1, 2].filter((seed) => {
       const { run, setup } = finale(seed, strength);
-      setup.players = setup.players.filter((p) => p.human);
       const w = createWorld(setup);
       const proxy = new Proxy(run.color, { skill: 1 });
       while (!w.over && w.tick < 15 * 60 * TICK_HZ) {

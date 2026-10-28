@@ -149,7 +149,12 @@ export function resolveDamage(w: World): void {
     if (!w.alive[i] || w.dmg[i] === 0) continue;
     const surged = w.surge[i] > w.tick ? POWER.surgeArmor : 1;
     const fortified = w.fortify[i] > w.tick ? POWER.fortifyArmor * w.factions[w.owner[i]].mods.fortifyArmor : 1;
-    const ward = w.wild[i] === WILD_HEART ? heartWard(w) : 1;
+    let ward = 1;
+    if (w.wild[i] === WILD_HEART) {
+      ward = heartWard(w);
+      // Any hit, from any range, keeps it from regrowing.
+      w.heart!.threat = w.tick;
+    }
     w.hp[i] -= w.dmg[i] * w.armor[i] * surged * fortified * ward;
     w.dmg[i] = 0;
     if (w.hp[i] > 0) continue;

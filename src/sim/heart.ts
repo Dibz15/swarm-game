@@ -1,5 +1,5 @@
-import { ENERGY, EVENTS, Kind, NEUTRAL, TICK_HZ, UNIT_STATS } from './constants';
-import { grantUpgrade, releaseSwarm } from './events';
+import { EVENTS, Kind, NEUTRAL, TICK_HZ, UNIT_STATS } from './constants';
+import { giantReward, releaseSwarm } from './events';
 import { TAU, dcos, dsin } from './mathx';
 import { queryRadius } from './spatial';
 import { pushFx, spawnUnit, WILD_HEART, WILD_SWARM, type HeartRule, type World } from './world';
@@ -54,6 +54,9 @@ export const HEART = {
 };
 
 const scratch: number[] = [];
+/** Spore-lob targeting: hostile count per grid cell in reach, and one hostile unit in each. */
+const crowd = new Map<number, number>();
+const pick = new Map<number, number>();
 
 /** Root the heart near the centre, away from the nests, and wake the Bloom nests around it. */
 export function initHeart(w: World, strength: number, rule: HeartRule): void {
@@ -144,19 +147,19 @@ export function updateHeart(w: World): void {
   const s = heartSlot(w);
   if (s < 0) return;
   const t = w.tick;
-  // Rooted: nothing moves it.
-  w.x[s] = h.x;
-  w.y[s] = h.y;
-  w.vx[s] = w.vy[s] = 0;
-  w.ox[s] = h.x;
-  w.oy[s] = h.y;
+  // (Rooted: updateMovement skips it.)
 
-  // Bloom nests release swarms while the Bloom holds them.
-  for (let k = 0; k < h.nests.length; k++) {
+  // Bloom nests release swarms while the Bloom holds them. One the players
+  // take is lost to the Bloom for good, even if it later goes wild again.
+  for (let k = h.nests.length - 1; k >= 0; k--) {
+    if (w.nests[h.nests[k]].owner !== NEUTRAL) {
+      h.nests.splice(k, 1);
+      h.nestNext.splice(k, 1);
+      continue;
+    }
     if (t < h.nestNext[k]) continue;
     h.nestNext[k] = t + Math.round(HEART.nestEvery * TICK_HZ);
-    const n = w.nests[h.nests[k]];
-    if (n.owner === NEUTRAL) nestSwarm(w, h.nests[k]);
+    nestSwarm(w, h.nests[k]);
   }
 
   const frac = w.hp[s] / h.maxHp;
@@ -188,6 +191,7 @@ export function updateHeart(w: World): void {
       weight += UNIT_STATS[w.kind[j]].weight;
       if (!close && (w.x[j] - h.x) ** 2 + (w.y[j] - h.y) ** 2 < HEART.threatR * HEART.threatR) close = true;
     }
+    // (Hits from any range also set threat, in resolveDamage.)
     if (close) h.threat = t;
     if (weight >= HEART.callWeight && t >= h.nextCall) {
       h.nextCall = t + HEART.callEvery[h.phase] * TICK_HZ;
@@ -223,26 +227,21 @@ function lob(w: World, volley: number): void {
   const h = w.heart!;
   const ev = w.events!;
   queryRadius(w, h.x, h.y, HEART.lobRange, scratch);
-  const cand: number[] = [];
-  for (let k = 0; k < scratch.length; k += 3) {
-    const j = scratch[k];
-    if (w.hostile(w.owner[j], NEUTRAL) && w.kind[j] !== Kind.Colossus) cand.push(j);
-  }
-  if (cand.length === 0) return;
-  const crowd: number[] = [];
-  const near: number[] = [];
-  for (const j of cand) {
-    queryRadius(w, w.x[j], w.y[j], 60, near);
-    let n = 0;
-    for (const q of near) if (w.hostile(w.owner[q], NEUTRAL)) n++;
-    crowd.push(n);
+  const g = w.grid;
+  crowd.clear();
+  pick.clear();
+  for (const j of scratch) {
+    if (!w.hostile(w.owner[j], NEUTRAL) || w.kind[j] === Kind.Colossus) continue;
+    const c = g.cy(w.y[j]) * g.cols + g.cx(w.x[j]);
+    crowd.set(c, (crowd.get(c) ?? 0) + 1);
+    if (!pick.has(c)) pick.set(c, j);
   }
   for (let v = 0; v < volley; v++) {
-    let best = 0;
-    for (let k = 1; k < cand.length; k++) if (crowd[k] > crowd[best] || (crowd[k] === crowd[best] && cand[k] < cand[best])) best = k;
-    if (crowd[best] < 0) break;
-    const j = cand[best];
-    crowd[best] = -1;
+    let best = -1, most = 0;
+    for (const [c, n] of crowd) if (n > most || (n === most && c < best)) [best, most] = [c, n];
+    if (best < 0) break;
+    crowd.delete(best);
+    const j = pick.get(best)!;
     const a = ev.rng.next() * TAU, r = ev.rng.next() * 20;
     const x = w.x[j] + dcos(a) * r, y = w.y[j] + dsin(a) * r;
     w.barrages.push({ x, y, owner: NEUTRAL, impact: w.tick + HEART.lobFlight + v * 4, r: HEART.lobR, x0: h.x, y0: h.y, t0: w.tick });
@@ -290,11 +289,7 @@ function rally(w: World): void {
 export function heartSlain(w: World, killer: number): void {
   const h = w.heart!;
   h.slain = true;
-  const player = killer >= 0 && killer !== NEUTRAL;
-  if (player) {
-    w.factions[killer].energy = ENERGY.max;
-    grantUpgrade(w, killer);
-  }
+  const player = giantReward(w, killer);
   pushFx(w, 'heartDown', h.x, h.y, player ? killer : -1, 120);
   if (h.rule !== 'heart' || !player || !w.factions.some((f) => f.active && f.human && w.teamOf[f.id] === w.teamOf[killer])) return;
   w.over = true;

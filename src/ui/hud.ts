@@ -343,7 +343,7 @@ export class Hud {
     // The Bloom's heart (campaign finale): its health, and what wards it.
     const hs = heartSlot(w);
     this.heartBar.style.display = hs >= 0 ? 'block' : 'none';
-    this.nestShare.style.visibility = hs >= 0 ? 'hidden' : '';
+    this.nestShare.parentElement!.style.visibility = hs >= 0 ? 'hidden' : '';
     if (hs >= 0) {
       const h = w.heart!;
       const ward = standingNests(w);

@@ -319,11 +319,16 @@ function stomp(w: World, s: number): void {
 
 /** Whoever lands the killing blow on a Colossus: full energy and a free upgrade. */
 export function colossusSlain(w: World, x: number, y: number, killer: number): void {
-  if (killer >= 0 && killer !== NEUTRAL) {
-    w.factions[killer].energy = ENERGY.max;
-    grantUpgrade(w, killer);
-  }
+  giantReward(w, killer);
   pushFx(w, 'colossusDown', x, y, killer, 80);
+}
+
+/** Whoever fells a giant (a Colossus or the Bloom's heart) gets full energy and an upgrade. Returns whether a player did. */
+export function giantReward(w: World, killer: number): boolean {
+  if (killer < 0 || killer === NEUTRAL) return false;
+  w.factions[killer].energy = ENERGY.max;
+  grantUpgrade(w, killer);
+  return true;
 }
 
 // ---- garrison regrowth --------------------------------------------------------
