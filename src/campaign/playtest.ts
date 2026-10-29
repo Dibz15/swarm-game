@@ -77,14 +77,19 @@ function standBy(r: RunState, target: number, avoid: number[] = []): void {
  * without earning it.
  */
 function armed(seed: string, color: number, broods: [number, string[]][], perks: string[] = []): Scene {
-  const r = run(seed, color);
-  r.broods = broods.map(([kind, strains], id) => ({ ...newBrood(id, kind, r.seed, []), size: 16, cap: 16, strains }));
-  r.nextBrood = r.broods.length;
-  r.fielded = r.broods.map((b) => b.id);
-  r.unlocks = { nests: 0xff, nova: true };
-  r.perks.push(...perks);
-  const node = r.nodes[r.start].links.find((l) => r.nodes[l].kind === 'conquest' && !r.nodes[l].domain) ?? r.nodes[r.start].links[0];
-  return fight(r, node);
+  // The first seeded run with a plain conquest node (no warlord) next to the start.
+  for (let k = 0; k < 400; k++) {
+    const r = run(`${seed}-${k}`, color);
+    const node = r.nodes[r.start].links.find((l) => r.nodes[l].kind === 'conquest' && r.nodes[l].domain === undefined);
+    if (node === undefined) continue;
+    r.broods = broods.map(([kind, strains], id) => ({ ...newBrood(id, kind, r.seed, []), size: 16, cap: 16, strains }));
+    r.nextBrood = r.broods.length;
+    r.fielded = r.broods.map((b) => b.id);
+    r.unlocks = { nests: 0xff, nova: true };
+    r.perks.push(...perks);
+    return fight(r, node);
+  }
+  throw new Error('no run with a plain battle next to the start');
 }
 
 const TRAIT_NAMES: Record<TraitId, string> = {
