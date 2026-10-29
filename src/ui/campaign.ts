@@ -417,9 +417,36 @@ function drawMap(
       g.closePath();
       g.fill();
     }
-    // A crown on a warlord's stronghold while it stands.
+    // A living warlord's ground (#66): its domain ringed in its colour; its
+    // stronghold walled, crowned and named, so you can read it at a glance.
     const lord = n.domain === undefined ? undefined : run.warlords?.[n.domain];
-    if (lord && lord.stronghold === n.id && !lord.broken && !dead) crown(g, x, y - r - 7 * u, u, FACTION_HEX[lord.faction]);
+    if (lord && !lord.broken && !dead && !run.swallowed.includes(lord.stronghold)) {
+      const col = FACTION_HEX[lord.faction];
+      if (lord.stronghold === n.id) {
+        walls(g, x, y, r * 1.6, u, col);
+        crown(g, x, y - r * 1.6 - 6 * u, u * 1.5, col);
+        g.font = `600 ${11 * u}px sans-serif`;
+        g.textAlign = 'center';
+        g.textBaseline = 'top';
+        g.lineWidth = 3 * u;
+        g.strokeStyle = 'rgba(6, 7, 15, 0.85)';
+        const label = `${lord.name.split(' ')[0]}'s stronghold`;
+        g.strokeText(label, x, y + r * 1.6 + 8 * u);
+        g.fillStyle = col;
+        g.fillText(label, x, y + r * 1.6 + 8 * u);
+      } else {
+        g.strokeStyle = col;
+        g.globalAlpha = 0.8;
+        g.lineWidth = 2 * u;
+        g.setLineDash([4 * u, 3 * u]);
+        g.beginPath();
+        g.arc(x, y, r * 1.45, 0, Math.PI * 2);
+        g.stroke();
+        g.setLineDash([]);
+        g.globalAlpha = 1;
+        crown(g, x, y - r * 1.45 - 3 * u, u * 0.8, col);
+      }
+    }
     // A small brood badge where one waits to be rescued.
     // The camp beside your swarm: tap it (or your node) to open the camp.
     if (here && !opts.thumb) campSymbol(g, x + r * CAMP_AT, y - r * CAMP_AT, u, me, pulse);
@@ -443,6 +470,24 @@ function drawMap(
   // Unlike the node icons, the swarm lives in the map: it shrinks as you zoom out (1 at the default zoom).
   if (fx && run.status === 'active') fx.swarm.draw(g, run.nodes[run.at], opts.time, X, Y, u, me, (v.s * VIEW_SPAN) / cw);
   return v;
+}
+
+/** A stronghold's wall: a crenellated ring in the warlord's colour. */
+function walls(g: CanvasRenderingContext2D, x: number, y: number, R: number, u: number, color: string): void {
+  const n = 12, h = 4 * u;
+  g.beginPath();
+  for (let k = 0; k < n * 2; k++) {
+    // Each merlon and gap is half a step: out, across, in, across.
+    const a0 = (k / (n * 2)) * Math.PI * 2, a1 = ((k + 1) / (n * 2)) * Math.PI * 2;
+    const rr = k % 2 ? R : R + h;
+    if (k === 0) g.moveTo(x + Math.cos(a0) * rr, y + Math.sin(a0) * rr);
+    else g.lineTo(x + Math.cos(a0) * rr, y + Math.sin(a0) * rr);
+    g.lineTo(x + Math.cos(a1) * rr, y + Math.sin(a1) * rr);
+  }
+  g.closePath();
+  g.strokeStyle = color;
+  g.lineWidth = 2.5 * u;
+  g.stroke();
 }
 
 /** A warlord's crown: three points over a band. */
