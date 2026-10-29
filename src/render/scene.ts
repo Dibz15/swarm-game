@@ -1,5 +1,5 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_RETREAT, UNIT_STATS, UPGRADE_COST } from '../sim/index';
+import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_RETREAT, UNIT_STATS, UPGRADE_COST, VARIANTS } from '../sim/index';
 import { HEART, heartSlot, standingNests } from '../sim/heart';
 import { WILD_HEART, type World } from '../sim/world';
 import type { Renderer } from './renderer';
@@ -33,6 +33,7 @@ export function drawWorld(r: Renderer, w: World, o: SceneOpts): void {
   drawNests(r, w, o);
   drawBeams(r, w, o);
   drawUnits(r, w, o);
+  drawBurns(r, w, o);
   drawBarrages(r, w, o);
   drawEvents(r, w, o);
 }
@@ -243,12 +244,15 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
     }
     let alpha = owner === NEUTRAL ? 200 : 255;
     if (w.surge[i] > w.tick) {
-      c = mixRgb(c, WHITE, 0.25 * surgeGlow);
+      // Mend's Surge glows green.
+      c = mixRgb(c, w.factions[owner]?.mods.mend ? MEND_RGB : WHITE, 0.25 * surgeGlow);
       size *= 1.15;
     }
     if (w.state[i] === UNIT_FEEDING) alpha = 190;
     // Skirmish: falling back, faded.
     else if (w.state[i] === UNIT_RETREAT) alpha = 150;
+    // Echo's ghosts: see-through.
+    if (w.ghost[i]) alpha = 90;
     // Veterans from level-3 nests: a touch bigger and brighter.
     if (w.vet[i]) {
       size *= 1.15;
@@ -372,6 +376,19 @@ function drawHeart(r: Renderer, w: World, o: SceneOpts): void {
 }
 
 const SHADOW: RGB = [0, 0, 0];
+const MEND_RGB: RGB = [120, 255, 150];
+const EMBER: RGB = [255, 120, 40];
+
+/** Scorch (#60): smouldering ground left by a Barrage, flickering and fading as it burns out. */
+function drawBurns(r: Renderer, w: World, o: SceneOpts): void {
+  for (const b of w.burns) {
+    const left = Math.max(0, (b.until - w.tick - o.alpha) / VARIANTS.scorch.ticks);
+    const flick = 0.85 + 0.15 * Math.sin(o.time * 9 + b.x);
+    const c = mixRgb(EMBER, FACTION_RGB[b.owner] ?? WHITE, 0.3);
+    r.shape(true, b.x, b.y, b.r, 0, 1, 0, 0, c, Math.round(55 * left * flick));
+    r.shape(true, b.x, b.y, b.r, 0, 1, 0, 0.05, EMBER, Math.round(170 * left * flick));
+  }
+}
 
 /**
  * Pending Barrage strikes: a shell arcs from the nest that launched it, its

@@ -43,7 +43,8 @@ function scanTarget(w: World, i: number, radius: number, walls: boolean): number
         const dx = w.x[j] - x, dy = w.y[j] - y;
         const raw = dx * dx + dy * dy;
         if (raw > radius * radius) continue;
-        const d = w.kind[j] === Kind.Tank ? raw * TAUNT2 * w.factions[w.owner[j]].mods.kind[Kind.Tank].taunt : raw;
+        // Echo's ghosts draw fire like Shields.
+        const d = w.kind[j] === Kind.Tank ? raw * TAUNT2 * w.factions[w.owner[j]].mods.kind[Kind.Tank].taunt : w.ghost[j] ? raw * TAUNT2 : raw;
         if (d < bestD && (!walls || w.terrain.los(x, y, w.x[j], w.y[j]))) {
           bestD = d;
           best = j;
@@ -60,8 +61,8 @@ export function updateCombat(w: World): void {
   const phase = w.tick % RETARGET;
   for (let i = 0; i < n; i++) {
     w.engaged[i] = 0;
-    // Retreating Raiders (Skirmish) don't stop to fight.
-    if (!w.alive[i] || w.state[i] === UNIT_RETREAT) continue;
+    // Retreating Raiders (Skirmish) don't stop to fight; Echo's ghosts never do.
+    if (!w.alive[i] || w.state[i] === UNIT_RETREAT || w.ghost[i]) continue;
     const st = UNIT_STATS[w.kind[i]];
     const km = w.factions[w.owner[i]].mods.kind[w.kind[i]];
     const range = st.range * km.range;
@@ -105,10 +106,11 @@ export function updateCombat(w: World): void {
       if (w.called[i] > w.tick) mult *= 1 + km.call;
       const dmg = st.dps * km.dps * mult * DT;
       w.dmg[t] += dmg;
-      // Spikes: some of the damage it takes comes back at whoever struck it.
-      const spikes = w.factions[w.owner[t]].mods.kind[w.kind[t]].spikes;
-      if (spikes > 0) {
-        w.dmg[i] += dmg * taken(w, t) * spikes;
+      // Spikes, and Thorns while fortified: some of the damage it takes comes back at whoever struck it.
+      const tm = w.factions[w.owner[t]].mods;
+      const back = tm.kind[w.kind[t]].spikes + (w.fortify[t] > w.tick ? tm.thorns : 0);
+      if (back > 0) {
+        w.dmg[i] += dmg * taken(w, t) * back;
         w.lastHit[i] = w.owner[t];
       }
       w.lastHit[t] = w.owner[i];
@@ -211,6 +213,12 @@ export function resolveDamage(w: World): void {
     w.hp[i] -= w.dmg[i] * taken(w, i) * ward;
     w.dmg[i] = 0;
     if (w.hp[i] > 0) continue;
+    if (w.ghost[i]) {
+      // A ghost just vanishes: nobody lost a unit, nobody earned a kill.
+      w.deaths.push(w.x[i], w.y[i], w.owner[i]);
+      removeUnit(w, i);
+      continue;
+    }
     const killer = w.lastHit[i];
     if (killer >= 0 && killer !== NEUTRAL) {
       const kf = w.factions[killer];

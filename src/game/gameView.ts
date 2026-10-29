@@ -611,7 +611,7 @@ export class GameView {
     const w = this.world;
     const out: number[] = [];
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.owner[i] !== this.human || w.state[i] === UNIT_FEEDING) continue;
+      if (!w.alive[i] || w.owner[i] !== this.human || w.state[i] === UNIT_FEEDING || w.ghost[i]) continue;
       if (test(w.x[i], w.y[i])) out.push(w.uid[i]);
     }
     return out;
@@ -733,7 +733,7 @@ export class GameView {
     const w = this.world;
     const units: number[] = [];
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.owner[i] !== this.human || w.kind[i] !== kind || w.state[i] === UNIT_FEEDING) continue;
+      if (!w.alive[i] || w.owner[i] !== this.human || w.kind[i] !== kind || w.state[i] === UNIT_FEEDING || w.ghost[i]) continue;
       if (w.x[i] >= x0 && w.x[i] <= x1 && w.y[i] >= y0 && w.y[i] <= y1) units.push(w.uid[i]);
     }
     if (!units.length) return;

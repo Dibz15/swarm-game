@@ -58,6 +58,21 @@ export interface FactionMods {
   energyRate: number;
   /** capture speed at every nest */
   captureRate: number;
+  // Power variants with a rule of their own (#60); one per power, kept so by the campaign.
+  /** Barrage Cluster: three small shells */
+  cluster: boolean;
+  /** Barrage Scorch: the impact burns on */
+  scorch: boolean;
+  /** Nova Implode: pulls enemies in */
+  implode: boolean;
+  /** Surge Mend: heals instead of the speed boost */
+  mend: boolean;
+  /** Blink Echo: ghosts left where the group was */
+  echo: boolean;
+  /** Fortify Thorns: share of each blow a fortified unit sends back */
+  thorns: number;
+  /** Lockdown Siphon: energy/s drained from a locked nest's owner */
+  siphon: number;
 }
 
 export const defaultKindMods = (): KindMods => ({
@@ -95,5 +110,12 @@ export function defaultMods(): FactionMods {
     crystalRate: 1,
     energyRate: 1,
     captureRate: 1,
+    cluster: false,
+    scorch: false,
+    implode: false,
+    mend: false,
+    echo: false,
+    thorns: 0,
+    siphon: 0,
   };
 }

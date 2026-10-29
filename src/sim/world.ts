@@ -29,6 +29,8 @@ export interface Nest {
   contested: boolean;
   /** tick until which a Lockdown stops spawning and control recovery */
   lockedUntil: number;
+  /** who cast the Lockdown (Siphon), or -1 */
+  lockedBy?: number;
   /** a player's starting nest: built-in turret + stronger home armor */
   capital: boolean;
   /** neutral guards this nest regrows toward (living-map events) */
@@ -129,6 +131,17 @@ export interface Barrage {
   x0: number;
   y0: number;
   t0: number;
+  /** share of the usual damage budget (Cluster, Scorch) */
+  budget?: number;
+}
+
+/** Scorch (#60): ground still burning after a Barrage. */
+export interface Burn {
+  x: number;
+  y: number;
+  r: number;
+  owner: number;
+  until: number;
 }
 
 /** An energy crystal; `holder` is the faction charging from it, or -1. */
@@ -315,6 +328,8 @@ export class World {
   readonly pack = new Uint8Array(MAX_UNITS);
   /** Swarm-call (#60): tick until which the unit is roused */
   readonly called = new Int32Array(MAX_UNITS);
+  /** Echo (#60): a ghost's expiry tick, or 0 for a real unit */
+  readonly ghost = new Int32Array(MAX_UNITS);
   /** Phalanx (#60): nearby friendly Shields last tick */
   readonly guard = new Uint8Array(MAX_UNITS);
   /** spawned by a level-3 nest: extra HP */
@@ -350,6 +365,8 @@ export class World {
   fx: FxEvent[] = [];
   /** pending Barrage strikes */
   barrages: Barrage[] = [];
+  /** Scorch burns on the ground */
+  burns: Burn[] = [];
 
   /** share of nests a team must hold for DOMINATION.ticks to win */
   domShare = 0.7;
@@ -440,6 +457,7 @@ export function spawnUnit(
   w.pack[i] = 0;
   w.called[i] = 0;
   w.guard[i] = 0;
+  w.ghost[i] = 0;
   w.wild[i] = 0;
   w.vet[i] = 0;
   w.attacker[i] = -1;
@@ -470,7 +488,8 @@ export function removeUnit(w: World, i: number): void {
   w.uidToSlot.delete(w.uid[i]);
   w.free.push(i);
   w.count--;
-  w.unitCount[w.owner[i]]--;
+  // Ghosts never counted toward the army (supply, elimination).
+  if (!w.ghost[i]) w.unitCount[w.owner[i]]--;
 }
 
 export function pushFx(

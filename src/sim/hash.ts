@@ -18,6 +18,7 @@ export function worldHash(w: World): number {
     mix(Math.round(w.hp[i] * 64));
     mix(w.owner[i]);
     mix(w.state[i]);
+    mix(w.ghost[i]);
   }
   for (const n of w.nests) {
     mix(n.owner);
@@ -48,6 +49,7 @@ export function worldHash(w: World): number {
     mix(w.heart.nextCall);
     mix(w.heart.recall);
   }
+  for (const b of w.burns) mix(b.until ^ Math.round(b.x * 64));
   for (const b of w.barrages) {
     mix(Math.round(b.x * 64));
     mix(Math.round(b.y * 64));

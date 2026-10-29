@@ -238,6 +238,104 @@ const PROBES: Record<string, [string, (w: World) => number, 'more' | 'less'][]> 
       'more',
     ],
   ],
+  cluster: [
+    [
+      'shells',
+      (w) => {
+        w.nests.push(fakeNest({ type: NestType.Spire, x: 600, y: 800 }));
+        w.factions[0].energy = 100;
+        applyCommand(w, { t: 'barrage', p: 0, x: 800, y: 800 } as never);
+        return w.barrages.length;
+      },
+      'more',
+    ],
+  ],
+  scorch: [
+    [
+      'damage after the blast',
+      (w) => {
+        const t = put(w, 1, Kind.Tank, 800, 800, true);
+        w.barrages.push({ x: 800, y: 800, owner: 0, impact: w.tick + 1, r: POWER.barrageRadius, x0: 600, y0: 600, t0: w.tick });
+        run(w, 3);
+        const after = w.hp[t];
+        run(w, 60);
+        return after - w.hp[t];
+      },
+      'more',
+    ],
+  ],
+  implode: [
+    ['knockback outward', (w) => novaPush(w), 'less'],
+    ['Nova damage', (w) => nova(w, 0.2), 'less'],
+  ],
+  mend: [
+    [
+      'healing',
+      (w) => {
+        const s = surge(w);
+        w.hp[s] = 2;
+        run(w, 30);
+        return w.hp[s];
+      },
+      'more',
+    ],
+    [
+      'surged speed',
+      (w) => {
+        const s = surge(w);
+        w.ox[s] = 1400;
+        run(w, 20);
+        return w.x[s] - 800;
+      },
+      'less',
+    ],
+  ],
+  echo: [
+    [
+      'decoys left behind',
+      (w) => {
+        w.nests.push(fakeNest({ type: NestType.Swift }));
+        w.factions[0].energy = 100;
+        const us = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => put(w, 0, Kind.Dot, 200 + k * 3, 800));
+        w.grid.build(w);
+        applyCommand(w, { t: 'blink', p: 0, units: us.map((i) => w.uid[i]), x: 600, y: 800 } as never);
+        let near = 0;
+        for (let i = 0; i < w.n; i++) if (w.alive[i] && w.x[i] < 260) near++;
+        return near;
+      },
+      'more',
+    ],
+  ],
+  thorns: [
+    [
+      'damage back at the attacker',
+      (w) => {
+        freeze(w);
+        const a = put(w, 1, Kind.Dot, 800, 800, true);
+        const s = put(w, 0, Kind.Tank, 815, 800, true);
+        w.fortify[s] = 1e9;
+        run(w, 20);
+        return 1e6 - w.hp[a];
+      },
+      'more',
+    ],
+  ],
+  siphon: [
+    [
+      'the locked owner\'s energy',
+      (w) => {
+        const mine = w.nests.find((n) => n.owner === 0)!;
+        mine.type = NestType.Bastion;
+        const theirs = w.nests.find((n) => n.owner === 1)!;
+        w.factions[0].energy = w.factions[1].energy = 100;
+        applyCommand(w, { t: 'lockdown', p: 0, nest: theirs.id } as never);
+        w.factions[1].energy = 50;
+        run(w, 30);
+        return w.factions[1].energy;
+      },
+      'less',
+    ],
+  ],
   wide: [
     ['Nova reach', (w) => nova(w, 1.1), 'more'],
     ['Nova damage', (w) => nova(w, 0.2), 'less'],
@@ -355,7 +453,7 @@ const PROBES: Record<string, [string, (w: World) => number, 'more' | 'less'][]> 
 };
 
 /** Probes that need a real map (nests). */
-const NEEDS_MAP = new Set(['saboteur', 'capture', 'supply', 'skirmish', 'arsonist']);
+const NEEDS_MAP = new Set(['saboteur', 'capture', 'supply', 'skirmish', 'arsonist', 'siphon']);
 
 function clearUnits(w: World): void {
   for (let i = 0; i < w.n; i++) w.alive[i] = 0;
@@ -390,6 +488,16 @@ function nova(w: World, at: number): number {
   return w.dmg[t];
 }
 
+/** How hard a Nova throws a nearby enemy outward (negative: pulled in). */
+function novaPush(w: World): number {
+  w.factions[0].energy = 100;
+  const us = [0, 1, 2, 3, 4, 5].map((k) => put(w, 0, Kind.Dot, 800 + k, 800));
+  const t = put(w, 1, Kind.Tank, 800 + novaRadius(6) * 0.5, 800, true);
+  w.grid.build(w);
+  applyCommand(w, { t: 'nova', p: 0, units: us.map((i) => w.uid[i]) } as never);
+  return w.vx[t];
+}
+
 function surge(w: World): number {
   w.factions[0].energy = 100;
   const i = put(w, 0, Kind.Dot, 800, 800);
@@ -401,7 +509,7 @@ function surge(w: World): number {
 describe('rewards change the sim (#64)', () => {
   it('every reward with a sim effect has a probe', () => {
     const runLevel = ['hunger', 'lone-wolf'];
-    expect(REWARDS.length).toBe(31);
+    expect(REWARDS.length).toBe(38);
     expect(REWARDS.map((r) => r.id).filter((id) => !runLevel.includes(id)).sort()).toEqual(Object.keys(PROBES).sort());
   });
 
@@ -433,9 +541,9 @@ describe('rewards change the sim (#64)', () => {
     expect(worldHash(a)).toBe(worldHash(b));
   });
 
-  it('a match with the behaviour strains is deterministic', () => {
+  it('a match with the behaviour strains and power variants is deterministic', () => {
     const mods = modsOf('swarm-call');
-    for (const id of ['spikes', 'phalanx', 'piercing', 'skirmish', 'arsonist']) REWARD[id].apply(mods);
+    for (const id of ['spikes', 'phalanx', 'piercing', 'skirmish', 'arsonist', 'scorch', 'implode', 'mend', 'echo', 'thorns', 'siphon']) REWARD[id].apply(mods);
     const setup = (): MatchSetup => ({
       seed: 34,
       size: 'small',

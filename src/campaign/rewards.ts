@@ -82,11 +82,18 @@ export const REWARDS: Reward[] = [
   strain('arsonist', 'Arsonist', Kind.Swift, 'rare', 'Enemy nests with your Raiders on them lose control 60% faster', (k) => (k.arson = 1.6)),
   // Power variants
   variant('heavy-shell', 'Heavy shell', 'barrage', 'uncommon', 'Barrage: +50% damage budget', (m) => (m.barrageBudget *= 1.5)),
+  variant('cluster', 'Cluster', 'barrage', 'uncommon', 'Barrage: three smaller shells land one after another round the target', (m) => (m.cluster = true)),
+  variant('scorch', 'Scorch', 'barrage', 'uncommon', 'Barrage: a weaker blast, but the ground burns for 6 s', (m) => (m.scorch = true)),
   variant('wide', 'Wide', 'nova', 'common', 'Nova: +35% radius, −25% damage', (m) => ((m.novaRadius *= 1.35), (m.novaDamage *= 0.75))),
+  variant('implode', 'Implode', 'nova', 'common', 'Nova: pulls enemies in instead of throwing them out, −25% damage', (m) => (m.implode = true)),
   variant('overdrive', 'Overdrive', 'surge', 'uncommon', 'Surge: lasts 50% longer and costs 30% less', (m) => ((m.surgeTicks *= 1.5), (m.surgeCost *= 0.7))),
+  variant('mend', 'Mend', 'surge', 'uncommon', 'Surge: heals 35% of HP over its length instead of the speed boost', (m) => (m.mend = true)),
   variant('long-jump', 'Long jump', 'blink', 'common', 'Blink: +50% range', (m) => (m.blinkRange *= 1.5)),
+  variant('echo', 'Echo', 'blink', 'rare', 'Blink: ghosts stay behind for 4 s and draw enemy fire', (m) => (m.echo = true)),
   variant('root', 'Root', 'fortify', 'uncommon', "Fortify: units can't move, but take 40% less damage again", (m) => ((m.fortifyArmor *= 0.6), (m.fortifyRoot = true))),
+  variant('thorns', 'Thorns', 'fortify', 'common', 'Fortify: fortified units send 30% of each blow back at the attacker', (m) => (m.thorns = 0.3)),
   variant('long', 'Long', 'lockdown', 'common', 'Lockdown: lasts 50% longer', (m) => (m.lockdownTicks *= 1.5)),
+  variant('siphon', 'Siphon', 'lockdown', 'uncommon', 'Lockdown: 20% shorter, but drains 1.2 energy/s from its owner to you', (m) => ((m.lockdownTicks *= 0.8), (m.siphon = 1.2))),
   // Nest and economy perks
   { id: 'capital', name: 'Seasoned capital', text: 'Your capital starts at level 2', family: 'perk', tier: 'rare', apply: (m) => (m.capitalLevel += 1) },
   { id: 'bastion-range', name: 'Long watch', text: 'Bastion turrets reach 30% further', family: 'perk', tier: 'common', apply: (m) => (m.bastionRange *= 1.3) },

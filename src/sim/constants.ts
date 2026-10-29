@@ -84,6 +84,20 @@ export const STRAINS = {
   skirmish: { flee: 0.35, back: 0.9, heal: 6 },
 };
 
+/** Power variants with a rule of their own (#60). PROVISIONAL numbers (#68). */
+export const VARIANTS = {
+  /** Cluster: three shells this far from the aim point, each this much of the radius and budget, landing `stagger` ticks apart */
+  cluster: { spread: 55, r: 0.6, budget: 0.75, stagger: 5 },
+  /** Scorch: the impact's budget share, and a burn of `dps` that lasts `ticks` */
+  scorch: { budget: 0.6, dps: 5, ticks: 6 * 30 },
+  /** Implode: damage share (the knockback pulls in instead) */
+  implode: { damage: 0.75 },
+  /** Mend: share of full HP healed over the Surge */
+  mend: { heal: 0.35 },
+  /** Echo: ghosts per unit blinked (at most `max`), their HP and how long they last */
+  echo: { per: 0.25, max: 6, hp: 20, ticks: 4 * 30 },
+};
+
 /** units notice enemies this far beyond their attack range */
 export const AGGRO_EXTRA = 26;
 /** a unit shot from beyond its notice range turns on its attacker if it's within this much extra */
