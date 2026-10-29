@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { nodeSetup } from '../src/campaign/battle';
 import { PLAYTEST, PLAYTESTS } from '../src/campaign/playtest';
 import { newRun, type RunState } from '../src/campaign/run';
-import { MAX_LEVEL, TICK_HZ } from '../src/sim/constants';
+import { TICK_HZ } from '../src/sim/constants';
+import { FORTIFY } from '../src/sim/fortify';
 import { resolveDamage } from '../src/sim/combat';
 import { worldHash } from '../src/sim/hash';
 import { generateMap, type MapSize } from '../src/sim/mapgen';
@@ -14,14 +15,18 @@ import { Proxy } from '../src/proxy/proxy';
 const SIZES: MapSize[] = ['small', 'medium', 'large'];
 
 describe('a fortified map', () => {
-  it('walls the warlord in: a max-level citadel, two inner works, and gates every capital can walk through', () => {
+  it('walls the warlord in: a citadel, two guarded neutral nests inside, and gates every capital can walk through', () => {
     for (const size of SIZES)
       for (let seed = 0; seed < 8; seed++) {
         const base = generateMap({ seed, size, players: 3, terrain: 'standard' });
         const m = generateMap({ seed, size, players: 3, terrain: 'standard', stronghold: 1 });
         const citadel = m.nests.find((n) => n.player === 1 && n.capital !== false)!;
-        expect(citadel.level).toBe(MAX_LEVEL);
-        expect(m.nests.filter((n) => n.player === 1 && n.capital === false)).toHaveLength(2);
+        expect(citadel.level).toBe(FORTIFY.citadelLevel);
+        expect(citadel.garrison).toBe(FORTIFY.citadelGarrison);
+        // The inside: two guarded neutral nests (owned ones snowballed the warlord).
+        const inside = m.nests.filter((n) => n.player < 0 && (n.x - citadel.x) ** 2 + (n.y - citadel.y) ** 2 < FORTIFY.ringR[size] ** 2);
+        expect(inside.length).toBeGreaterThanOrEqual(2);
+        expect(m.nests.filter((n) => n.player === 1)).toHaveLength(1);
         expect(m.terrain.walls.length).toBeGreaterThan(0);
         const t = new Terrain(m.terrain, m.width, m.height);
         for (const c of m.nests.filter((n) => n.player >= 0 && n.player !== 1 && n.capital !== false)) {
@@ -29,7 +34,7 @@ describe('a fortified map', () => {
         }
         // The rest of the map is the map it would have been.
         for (const n of m.nests) {
-          if (n.player === 1) continue;
+          if (n.player === 1 || n.garrison === FORTIFY.worksGarrison) continue;
           expect(base.nests.some((b) => b.x === n.x && b.y === n.y && b.type === n.type)).toBe(true);
         }
       }

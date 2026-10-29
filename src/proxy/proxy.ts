@@ -27,6 +27,8 @@ import { UNIT_FEEDING, type Nest, type World } from '../sim/world';
 
 /** `goal` while assaulting the Bloom's heart (not a nest id) */
 const HEART_GOAL = -2;
+/** blob size at which the proxy goes for a stronghold's citadel */
+const CITADEL_BLOB = 60;
 
 export interface ProxyKnobs {
   /** seconds between strategic decisions */
@@ -273,6 +275,21 @@ export class Proxy {
           out.push({ t: 'move', p: me, units: units.map((s) => w.uid[s]), x: hx, y: hy, nest: -1 });
           if (mine.length && this.goal !== HEART_GOAL) out.push({ t: 'rally', p: me, nests: mine.map((n) => n.id), x: hx, y: hy });
           this.goal = HEART_GOAL;
+          this.lastOrder = w.tick;
+        }
+        this.mode = 'counter';
+        this.upgrade(w, mine, army, out);
+        return out;
+      }
+      // A stronghold (#100): taking the citadel wins, so once the blob is big
+      // enough it marches through the gates for it, like a human would.
+      const cit = w.citadel >= 0 ? w.nests[w.citadel] : null;
+      if (cit && cit.owner !== me && blob.length >= CITADEL_BLOB) {
+        if (this.goal !== cit.id || w.tick - this.lastOrder >= this.k.refresh * TICK_HZ) {
+          const units = this.straggle(w, blob, bx, by);
+          out.push({ t: 'move', p: me, units: units.map((s) => w.uid[s]), x: cit.x, y: cit.y, nest: cit.id });
+          if (mine.length && this.goal !== cit.id) out.push({ t: 'rally', p: me, nests: mine.map((n) => n.id), x: cit.x, y: cit.y });
+          this.goal = cit.id;
           this.lastOrder = w.tick;
         }
         this.mode = 'counter';

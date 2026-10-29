@@ -53,11 +53,12 @@ describe('warlord placement', () => {
     expect(newRun('lords-3', 3, 'swarm', 0).warlords).toEqual(runs[3].warlords);
   });
 
-  it('makes strongholds harder and domains richer', () => {
+  it('keeps strongholds to two rivals and makes domains richer', () => {
     for (const run of runs)
       for (const w of run.warlords!) {
         const s = run.nodes[w.stronghold];
-        expect(s.difficulty).toBeGreaterThanOrEqual(1);
+        // The fortress is the harder part (#100): at most the warlord and one rival.
+        expect(s.rivals).toBeLessThanOrEqual(2);
         expect(s.reward).toBeGreaterThanOrEqual(40);
       }
   });

@@ -11,7 +11,7 @@ export function playtestMenu(h: { play: (p: Playtest) => void; back: () => void 
   m.innerHTML = `
     <div class="card hub playtests">
       <h2>Playtests</h2>
-      <p class="hint">Each one starts a throwaway run set up to show one thing. Nothing here is saved. Come back with <b>?playtest</b> in the address.</p>
+      <p class="hint">Each one starts a throwaway run set up to show one thing. Battles are Normal bots with at most two rivals, and your army is about a mid-run size (32). Nothing here is saved. Come back with <b>?playtest</b> in the address.</p>
       ${groups
         .map(
           (g) => `<h3>${g}</h3><div class="playtest-list">${PLAYTESTS.filter((p) => p.group === g)

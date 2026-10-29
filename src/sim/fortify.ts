@@ -1,4 +1,4 @@
-import { MAX_LEVEL, NEST_RADIUS, NestType } from './constants';
+import { NEST_RADIUS, NestType } from './constants';
 import { TAU, dcos, dsin } from './mathx';
 import type { MapSize, MapSpec, NestSpec } from './mapgen';
 import type { Rng } from './rng';
@@ -6,9 +6,10 @@ import { Terrain, capsuleDist, type Capsule } from './terrain';
 
 /**
  * Stronghold battles (#100): a generated map turned into a warlord's
- * fortress. Its capital becomes a max-level citadel inside a ring of walls
- * with a few gates facing the middle, two more of its nests guard the inside,
- * and anything else in the way is cleared. Taking the citadel wins.
+ * fortress. Its capital becomes an upgraded citadel inside a ring of walls
+ * with a few gates facing the middle; two guarded neutral nests sit inside
+ * (owning them from the start snowballed the warlord's economy), and anything
+ * else in the way is cleared. Taking the citadel wins.
  * PROVISIONAL numbers (#68).
  */
 export const FORTIFY = {
@@ -21,7 +22,10 @@ export const FORTIFY = {
   gate: 84,
   /** gates either side of the one facing the middle, this far round (radians) */
   gateSpread: 0.9,
-  citadelGarrison: 22,
+  /** the citadel's level: a capital already has a turret, and higher levels' faster spawns snowballed the warlord */
+  citadelLevel: 1,
+  citadelGarrison: 18,
+  /** guards on each inner nest (neutral: the warlord, or you, takes them) */
   worksGarrison: 8,
   /** inner works: how many, and how far from the citadel */
   works: 2,
@@ -29,7 +33,8 @@ export const FORTIFY = {
 };
 
 /** Nest types the inside of a fortress is built from. */
-const WORKS = [NestType.Bastion, NestType.Forge, NestType.Spire];
+// (No Bastions: their turret and shield on top of the walls made the citadel near impossible.)
+const WORKS = [NestType.Forge, NestType.Spire, NestType.Hive];
 
 /** Fortify `player`'s capital on a generated map, in place. Its own seeded stream: the rest of the map is untouched. */
 export function fortify(spec: MapSpec, player: number, size: MapSize, rng: Rng): void {
@@ -37,7 +42,7 @@ export function fortify(spec: MapSpec, player: number, size: MapSize, rng: Rng):
   if (!citadel) return;
   const { width: W, height: H } = spec;
   const R = FORTIFY.ringR[size];
-  citadel.level = MAX_LEVEL;
+  citadel.level = FORTIFY.citadelLevel;
   citadel.garrison = FORTIFY.citadelGarrison;
   // The gates face the middle, where every rival comes from. Angles below are
   // relative to that direction (no atan2: the sim keeps to mathx's trig).
@@ -64,7 +69,7 @@ export function fortify(spec: MapSpec, player: number, size: MapSize, rng: Rng):
       const [x, y] = at(side * (0.55 + 0.12 * tries + rng.range(-0.1, 0.1)), R * FORTIFY.worksR);
       if (x < 50 || x > W - 50 || y < 50 || y > H - 50) continue;
       if (spec.nests.some((n) => (n.x - x) ** 2 + (n.y - y) ** 2 < 80 * 80)) continue;
-      const works: NestSpec = { x, y, type: rng.pick(WORKS), level: 2, player, garrison: FORTIFY.worksGarrison, capital: false };
+      const works: NestSpec = { x, y, type: rng.pick(WORKS), level: 1, player: -1, garrison: FORTIFY.worksGarrison };
       spec.nests.push(works);
       break;
     }

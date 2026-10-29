@@ -99,8 +99,8 @@ const NOVA_RESERVE = { minArmy: 30, energy: 25 };
 
 /** Breaking a rival's domination. */
 const DOM_BOT = { value: 3, margin: 1.05 };
-/** A warlord's citadel (#100): the share of its army kept there, how close counts as there, and extra defense. */
-const CITADEL_BOT = { reserve: 0.3, near: 150, defend: 1.6 };
+/** A warlord's citadel (#100): the share of its army kept there, how close counts as there, and how hard and from how far it's defended. */
+const CITADEL_BOT = { reserve: 0.15, near: 150, defend: 1.2, reach: 700 };
 
 /** At (near) the supply cap: reserve share, attack margin and nest value multipliers. */
 const SUPPLY_BOT = { near: 0.92, reserve: 0.4, margin: 0.85, value: 1.3 };
@@ -335,7 +335,7 @@ export class Bot {
       threatened = true;
       const need = h * 1.3 + 3 - friendly[n.id];
       if (need <= 0) continue;
-      const slots = n === cit ? take(n.x, n.y, need * CITADEL_BOT.defend, 1e9) : take(n.x, n.y, need * 1.3, 480);
+      const slots = n === cit ? take(n.x, n.y, need * CITADEL_BOT.defend, CITADEL_BOT.reach) : take(n.x, n.y, need * 1.3, 480);
       // Meet them at the mouth they're coming through, not on the nest.
       const m = mouths && CHOKE_BOT.defend && slots.length ? this.mouthUnderAttack(w, n, mouths[n.id]) : null;
       if (m) this.issue(w, { t: 'move', p: me, units: slots.map((s) => w.uid[s]), x: m.gx, y: m.gy, nest: -1 });

@@ -54,7 +54,8 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     layout: 'random',
     events,
     portrait,
-    domShare: n.kind === 'domination' ? DOMINATION_SHARE : finale ? undefined : CONQUEST_SHARE,
+    // A stronghold's warlord starts with three nests: half the map would be a head start.
+    domShare: n.kind === 'domination' && !hold ? DOMINATION_SHARE : finale ? undefined : CONQUEST_SHARE,
     // Brutal: after the heart, the rivals still have to be beaten.
     stronghold: hold ? { player: 1 } : undefined,
     heart: finale ? { strength: bloomStrength(run), rule: RUN_DIFFICULTY[difficultyOf(run)].bots > 0 ? 'heart+rivals' : 'heart' } : undefined,

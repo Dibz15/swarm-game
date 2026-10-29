@@ -69,7 +69,7 @@ They are deliberately separate, and each has one job.
   - Placement uses its own seeded stream, so the rest of the map is the same as without warlords.
 - **Domain battles:** the warlord takes the first rival slot and fights with its trait and a fixed personality. The other rivals stay plain bots.
 - **Strongholds and rewards:**
-  - Strongholds are one bot level harder, within the run difficulty's rules.
+  - Strongholds keep the node's bot level but have at most two rivals (the warlord and one more): the fortress is what makes them harder (#100).
   - Biomass: ×1.3 in a domain, ×2 at the stronghold.
   - Rescue odds rise to 50% in a domain.
   - Offers after a win weigh rares 20% in a domain and 40% at the stronghold (10% elsewhere).
@@ -92,13 +92,14 @@ They are deliberately separate, and each has one job.
 
 **Stronghold battles** (#100, `src/sim/fortify.ts`).
 - **The map:** the usual generated map, then fortified on its own seeded stream.
-  - The warlord's capital becomes a max-level **citadel** inside a ring of walls.
+  - The warlord's capital becomes the **citadel** (a normal level-1 capital with a bigger garrison) inside a ring of walls.
   - The ring has three gates that face the middle of the map.
-  - Two more of the warlord's nests (Bastion, Forge or Spire) sit inside.
+  - Two guarded neutral nests (Forge, Spire or Hive) sit inside. Owned ones, a higher-level citadel and Bastions all snowballed the warlord in the first playtest.
   - Anything else in the way is cleared, and there are no caves.
   - Every other capital must be able to walk in, or the gates widen.
 - **The win:** a human who takes the citadel wins, even with rivals left. A rival taking it wins nothing, and the usual win rules still apply too.
-- **The defence:** the warlord keeps 30% of its army at the citadel, and defends it first and from anywhere.
+- **The defence:** the warlord keeps 15% of its army at the citadel, and defends it first, from up to 700 px away.
+- **Shares:** a stronghold always uses the conquest share (80%), even on a domination node. The warlord starts beside its inner nests, so half the map would be a head start.
 - **Readability:**
   - The citadel is crowned, with an edge marker when it's off screen.
   - The HUD chip shows "Take the citadel" with a capture bar.

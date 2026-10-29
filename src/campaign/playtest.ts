@@ -25,7 +25,8 @@ export interface Playtest {
 function run(seed: string, color: number): RunState {
   const r = newRun(seed, color, 'swarm', Date.now());
   r.id = PLAYTEST + seed;
-  for (const b of r.broods) b.size = b.cap = 11;
+  // About a mid-run army, just under the starting supply cap.
+  for (const b of r.broods) b.size = b.cap = 16;
   return r;
 }
 
@@ -37,6 +38,14 @@ function withTrait(trait: TraitId, color: number, nodes = 1): [RunState, Warlord
     if (w) return [r, w];
   }
   throw new Error(`no run with a ${trait} warlord`);
+}
+
+/** A battle scene at a fixed, fair setting: Normal bots, at most two rivals. */
+function fight(r: RunState, node: number, extra?: 'gates' | 'fall'): Scene {
+  const n = r.nodes[node];
+  n.difficulty = 1;
+  n.rivals = Math.min(n.rivals, 2);
+  return { kind: 'battle', run: r, node, extra };
 }
 
 /** Stand next to `target` (off it), with only the start and that node taken. */
@@ -111,7 +120,7 @@ export const PLAYTESTS: Playtest[] = [
       make: (c) => {
         const [r, w] = withTrait(t, c);
         standBy(r, w.stronghold, w.nodes);
-        return { kind: 'battle', run: r, node: w.stronghold };
+        return fight(r, w.stronghold);
       },
     }),
   ),
@@ -123,7 +132,7 @@ export const PLAYTESTS: Playtest[] = [
     make: (c) => {
       const [r, w] = withTrait('ironhide', c);
       standBy(r, w.stronghold, w.nodes);
-      return { kind: 'battle', run: r, node: w.stronghold, extra: 'gates' };
+      return fight(r, w.stronghold, 'gates');
     },
   },
   {
@@ -134,7 +143,7 @@ export const PLAYTESTS: Playtest[] = [
     make: (c) => {
       const [r, w] = withTrait('stormcaller', c);
       standBy(r, w.stronghold, w.nodes);
-      return { kind: 'battle', run: r, node: w.stronghold, extra: 'fall' };
+      return fight(r, w.stronghold, 'fall');
     },
   },
   ...TRAIT_IDS.map(
@@ -147,7 +156,7 @@ export const PLAYTESTS: Playtest[] = [
         const [r, w] = withTrait(t, c, 2);
         const node = w.nodes[1];
         standBy(r, node, w.nodes);
-        return { kind: 'battle', run: r, node };
+        return fight(r, node);
       },
     }),
   ),
