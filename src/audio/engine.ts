@@ -76,6 +76,7 @@ export class AudioEngine {
   private music: Music | null = null;
   private listener: Listener | null = null;
   private last = new Map<string, number>();
+  private bloom = 0;
   private deathLimit = new RateLimit(16, 6);
   private spawnLimit = new RateLimit(3, 2);
   private nearLevel = 0;
@@ -553,6 +554,53 @@ export class AudioEngine {
     if (mine) [0, 7, 12, 19, 24].forEach((s, i) => this.tone(this.ui, this.note(s + 12), 0.7, 'triangle', 0.05, { delay: 0.4 + i * 0.08 }));
   }
 
+  // ---- the Bloom (campaign) ------------------------------------------------------
+
+  /** A Bloom swarm arrives: the wild-swarm horn, lower and wetter, a tritone apart. */
+  bloomSwarm(): void {
+    if (!this.ctx || !this.throttle('bloomSwarm', 4000)) return;
+    this.tone(this.ui, this.note(-29), 1.8, 'sawtooth', 0.05, { attack: 0.35, slide: 0.9 });
+    this.tone(this.ui, this.note(-23), 1.6, 'sawtooth', 0.035, { attack: 0.35, delay: 0.55, slide: 0.88 });
+    this.noise(this.reverbIn, 1.8, 0.09, 'lowpass', 500, 120);
+  }
+
+  /** The heart draws breath before a pulse: a rising, swelling hum. */
+  heartWindup(x: number, y: number): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, 1, 1.2, 0.08);
+    if (!out) return;
+    this.tone(out, this.note(-31), 1.4, 'sawtooth', 0.05, { attack: 1.1, slide: 1.25 });
+    this.noise(out, 1.4, 0.05, 'bandpass', 200, 900);
+  }
+
+  /** The heart's pulse lands: a deep double thump, like a heartbeat. */
+  heartPulse(x: number, y: number): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, 1.3, 1.6, 0.1);
+    if (!out) return;
+    this.tone(out, this.note(-33), 0.45, 'sine', 0.3, { slide: 0.55 });
+    this.tone(out, this.note(-31), 0.4, 'sine', 0.22, { slide: 0.55, delay: 0.22 });
+    this.noise(out, 0.4, 0.07, 'lowpass', 500, 60);
+  }
+
+  /** The heart weakens and rages: a falling roar with a growl under it. */
+  heartPhase(): void {
+    if (!this.ctx) return;
+    this.tone(this.reverbIn, this.note(-12), 1.8, 'sawtooth', 0.09, { attack: 0.08, slide: 0.6 });
+    this.tone(this.reverbIn, this.note(-18), 1.8, 'sawtooth', 0.07, { attack: 0.08, slide: 0.6 });
+    this.noise(this.reverbIn, 1.6, 0.16, 'lowpass', 2400, 120);
+  }
+
+  /** The heart dies: a long collapse, then (if it was you) a bright release. */
+  heartDown(x: number, y: number, mine: boolean): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, 1.6, 3, 0.0) ?? this.ui;
+    this.tone(this.reverbIn, this.note(-24), 3.2, 'sawtooth', 0.14, { slide: 0.35 });
+    this.tone(out, this.note(-36), 2.6, 'sine', 0.3, { slide: 0.5 });
+    this.noise(this.reverbIn, 2.8, 0.22, 'lowpass', 2200, 40);
+    if (mine) [0, 4, 7, 12, 16, 19, 24].forEach((s, i) => this.tone(this.ui, this.note(s + 12), 0.9, 'triangle', 0.05, { delay: 0.9 + i * 0.1 }));
+  }
+
   // ---- domination -------------------------------------------------------------
 
   /** Someone starts dominating: a rising fanfare if it's you, an alarm if not. */
@@ -787,6 +835,13 @@ export class AudioEngine {
     const musicOn = mode === 'ended' || this.muted ? 0 : Math.min(1, this.volumes.music * 1.5);
     this.ambience?.setRoot(this.theme.root);
     this.ambience?.update(dt, { tension: this.tension, danger, escalation: escal, inGame: human >= 0, music: musicOn, paused: mode === 'paused' });
-    this.music?.update(dt, { mode, tension: this.tension, danger, escalation: escal, domination: dom });
+    // The Bloom: set by the run map, or read from a campaign battle (its swarms, its heart).
+    const bloom = w && mode !== 'menu' ? (w.heart ? 1 : w.events?.spec.params.bloom ? 0.6 : 0) : this.bloom;
+    this.music?.update(dt, { mode, tension: this.tension, danger, escalation: escal, domination: dom, bloom });
+  }
+
+  /** How close the Bloom is on the run map (0..1); the menu score darkens with it. */
+  setBloom(v: number): void {
+    this.bloom = Math.max(0, Math.min(1, v));
   }
 }

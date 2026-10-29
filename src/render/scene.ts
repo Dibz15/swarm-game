@@ -1,6 +1,7 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
-import type { World } from '../sim/world';
+import { HEART, heartSlot, standingNests } from '../sim/heart';
+import { WILD_HEART, type World } from '../sim/world';
 import type { Renderer } from './renderer';
 
 export interface SceneOpts {
@@ -213,6 +214,12 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
     const kind = w.kind[i];
     let c = sel && sel[i] ? lit[owner] : w.wild[i] ? FERAL : FACTION_RGB[owner];
     let size = UNIT_STATS[kind].size;
+    // The Bloom's heart: bigger, and it throbs (faster as it weakens).
+    if (w.wild[i] === WILD_HEART) {
+      const beat = Math.pow(0.5 + 0.5 * Math.sin(o.time * (2.4 + 1.2 * (w.heart?.phase ?? 0))), 3);
+      size = HEART.size * (1 + 0.09 * beat);
+      c = mixRgb(HEART_RGB, WHITE, 0.15 * beat);
+    }
     let alpha = owner === NEUTRAL ? 200 : 255;
     if (w.surge[i] > w.tick) {
       c = mixRgb(c, WHITE, 0.25 * surgeGlow);
@@ -264,12 +271,48 @@ function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
     r.shape(true, d.x, d.y, R, 0, 1, 0, 0.02, DROP_RGB, Math.round(70 + 60 * pulse));
     if (d.progress > 0) r.shape(true, d.x, d.y, R + 6, 0, d.progress, 0, 0.07, hc, 235);
   }
+  drawHeart(r, w, o);
   for (const c of ev.colossi) {
     const s = w.uidToSlot.get(c.uid);
     if (s === undefined) continue;
     const x = w.px[s] + (w.x[s] - w.px[s]) * o.alpha, y = w.py[s] + (w.y[s] - w.py[s]) * o.alpha;
     r.shape(true, x, y, 30, 0, w.hp[s] / c.maxHp, 0, 0.06, FERAL, 220);
     r.shape(true, x, y, 30, 0, 1, 0, 0.03, FERAL, 50);
+  }
+}
+
+/** The Bloom's heart, a deeper red than the other wild units. */
+const HEART_RGB: RGB = [196, 54, 74];
+
+/**
+ * The heart's rings: health, a ward band (one notch per standing Bloom nest,
+ * each of which also wears a ring), and the pulse: a glow that swells through
+ * the wind-up toward the ring it will hit.
+ */
+function drawHeart(r: Renderer, w: World, o: SceneOpts): void {
+  const h = w.heart;
+  if (!h || h.slain) return;
+  const s = heartSlot(w);
+  if (s < 0) return;
+  const R = HEART.size + 16;
+  r.shape(true, h.x, h.y, R, 0, w.hp[s] / h.maxHp, 0, 0.07, HEART_RGB, 230);
+  r.shape(true, h.x, h.y, R, 0, 1, 0, 0.035, HEART_RGB, 50);
+  const ward = standingNests(w);
+  for (let k = 0; k < ward; k++) {
+    r.shape(true, h.x, h.y, R + 9 + k * 6, 0, 1, o.time * 0.3 + k, 0.02, FERAL, 120);
+  }
+  for (const id of h.nests) {
+    const n = w.nests[id];
+    if (n.owner !== NEUTRAL) continue;
+    const pulse = 0.5 + 0.5 * Math.sin(o.time * 2 + id);
+    r.shape(true, n.x, n.y, n.r + 10, 0, 1, o.time * 0.4, 0.04, FERAL, Math.round(90 + 80 * pulse));
+  }
+  if (h.pulseAt >= 0) {
+    const k = 1 - Math.max(0, (h.pulseAt - w.tick - o.alpha) / HEART.pulseWindup);
+    const pr = HEART.pulseR + HEART.pulseRPerPhase * h.phase;
+    r.shape(true, h.x, h.y, pr, 7, 1, 0, 0, HEART_RGB, Math.round(70 * k));
+    r.shape(true, h.x, h.y, pr, 0, 1, 0, 0.02, HEART_RGB, Math.round(120 + 120 * k));
+    r.shape(true, h.x, h.y, pr * k, 0, 1, 0, 0.05, WHITE, Math.round(160 * k));
   }
 }
 
@@ -281,7 +324,7 @@ const SHADOW: RGB = [0, 0, 0];
  */
 function drawBarrages(r: Renderer, w: World, o: SceneOpts): void {
   for (const b of w.barrages) {
-    const c = FACTION_RGB[b.owner] ?? WHITE;
+    const c = b.owner === NEUTRAL ? HEART_RGB : FACTION_RGB[b.owner] ?? WHITE;
     const left = Math.max(0, (b.impact - w.tick - o.alpha) / Math.max(1, b.impact - b.t0));
     const R = b.r;
     const k = 1 - left;

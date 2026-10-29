@@ -1,13 +1,13 @@
 import { creature, type Creature } from '../art/creature';
 import { PERSONALITIES, type Personality } from '../sim/ai/bot';
-import type { EventLevel } from '../sim/mapgen';
+import type { EventParams } from '../sim/mapgen';
 import { Rng, hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import { TICK_HZ } from '../sim/constants';
 import type { World } from '../sim/world';
 import { MILITIA, fighters, veteran, type BattleReport } from './broods';
 import { modsFor } from './rewards';
-import { maxFielded, pressure, type RunState } from './run';
+import { RUN_DIFFICULTY, bloomStrength, difficultyOf, maxFielded, pressure, type RunState } from './run';
 
 /**
  * Conquest is won by wiping out every rival, or by holding this share of the
@@ -35,9 +35,8 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     const j = rng.int(i + 1);
     [others[i], others[j]] = [others[j], others[i]];
   }
-  // The closer the Bloom, the wilder the map events (its swarms come in phase 4).
-  const p = n.kind === 'finale' ? 1 : pressure(run, id);
-  const events: EventLevel = p > 0.66 ? 'wild' : p > 0.2 ? 'normal' : 'calm';
+  const finale = n.kind === 'finale';
+  const events = bloomEvents(finale ? 1 : pressure(run, id), bloomStrength(run));
   return {
     seed: n.seed,
     size: n.size,
@@ -46,7 +45,9 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     layout: 'random',
     events,
     portrait,
-    domShare: n.kind === 'domination' ? DOMINATION_SHARE : n.kind === 'finale' ? undefined : CONQUEST_SHARE,
+    domShare: n.kind === 'domination' ? DOMINATION_SHARE : finale ? undefined : CONQUEST_SHARE,
+    // Brutal: after the heart, the rivals still have to be beaten.
+    heart: finale ? { strength: bloomStrength(run), rule: RUN_DIFFICULTY[difficultyOf(run)].bots > 0 ? 'heart+rivals' : 'heart' } : undefined,
     players: [
       {
         faction: run.color,
@@ -83,10 +84,35 @@ export function rivals(run: RunState, id: number): Rival[] {
     });
 }
 
-/** Events level the node's battle would get right now, for previews. */
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+/** How much bigger the Bloom's swarms are for each node it swallowed (at most double). */
+export const swarmScale = (strength: number) => Math.min(2, 1 + 0.06 * strength);
+
+/**
+ * A battle's map events from the Bloom: the closer it is (pressure 0..1), the
+ * sooner and more often its swarms come; the more it ate, the bigger they are.
+ * Far from the front, they're the calm preset's wild swarms.
+ */
+export function bloomEvents(p: number, strength: number): EventParams {
+  const size = Math.round(lerp(22, 40, p) * swarmScale(strength));
+  return {
+    swarm: { first: Math.round(lerp(200, 100, p)), every: Math.round(lerp(240, 90, p)), size },
+    drop: p > 0.66 ? { first: 75, every: 80 } : p > 0.2 ? { first: 105, every: 120 } : { first: 120, every: 150 },
+    colossus: p > 0.66 ? [200, 420] : p > 0.2 ? [240] : [],
+    regrow: Math.round(lerp(20, 7, p)),
+    bloom: p > 0.2,
+  };
+}
+
+/** The Bloom as a node's battle would meet it right now, for previews. */
 export function bloomLabel(run: RunState, id: number): string {
-  const p = run.nodes[id].kind === 'finale' ? 1 : pressure(run, id);
-  return p > 0.66 ? 'Bloom close: wild swarms' : p > 0.2 ? 'Bloom nearing' : 'Bloom far';
+  const s = bloomStrength(run);
+  if (run.nodes[id].kind === 'finale') return s > 0 ? `The heart, fed by ${s} node${s === 1 ? '' : 's'}` : 'The heart, unfed';
+  const p = pressure(run, id);
+  const word = p > 0.66 ? 'Close' : p > 0.2 ? 'Nearing' : 'Far';
+  const swarms = p > 0.66 ? 'its swarms come often' : p > 0.2 ? 'its swarms come' : 'wild swarms are rare';
+  return `${word}: ${swarms}${s > 0 && p > 0.2 ? `, ×${swarmScale(s).toFixed(1)} size` : ''}`;
 }
 
 /** How a battle ended for the run: the human's survivors by kind, nests fully held, time. */

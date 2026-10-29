@@ -2,6 +2,7 @@ import { DT, ENERGY, EVENTS, Kind, MAX_LEVEL, NEST_KIND, NEUTRAL, NUM_FACTIONS, 
 import { groupArrive } from './commands';
 import type { EventSpec } from './mapgen';
 import { TAU, dcos, dsin } from './mathx';
+import { updateHeart } from './heart';
 import { Rng } from './rng';
 import { queryRadius } from './spatial';
 import { pushFx, removeUnit, spawnUnit, WILD_COLOSSUS, WILD_SWARM, type Colossus, type Swarm, type World } from './world';
@@ -50,6 +51,7 @@ export function updateEvents(w: World): void {
   }
 
   if (ev.swarms.length && t % EVENTS.swarmRethink === 0) for (const s of ev.swarms) steerSwarm(w, s);
+  if (w.heart) updateHeart(w);
   ev.swarms = ev.swarms.filter((s) => (s.uids = s.uids.filter((u) => w.uidToSlot.has(u))).length > 0);
   if (ev.colossi.length) updateColossi(w);
   if (ev.drops.length) updateDrops(w);
@@ -73,6 +75,12 @@ function spawnSwarm(w: World): void {
   // Rotate through the borders from a seeded start, so no sector is favored.
   if (ev.swarmCount === 0) ev.swarmCount = ev.rng.int(spawns.length);
   const [sx, sy] = spawns[ev.swarmCount++ % spawns.length];
+  releaseSwarm(w, sx, sy, size, ev.spec.params.bloom ? 'bloomSwarm' : 'swarmSpawn');
+}
+
+/** A wild swarm of `size` around (sx, sy) that starts hunting at once. */
+export function releaseSwarm(w: World, sx: number, sy: number, size: number, fx: 'swarmSpawn' | 'bloomSwarm' | null): Swarm {
+  const ev = w.events!;
   const sw: Swarm = { uids: [], tx: sx, ty: sy };
   const spread = Math.sqrt(size) * 6;
   for (let k = 0; k < size; k++) {
@@ -86,14 +94,15 @@ function spawnSwarm(w: World): void {
   }
   ev.swarms.push(sw);
   steerSwarm(w, sw);
-  pushFx(w, 'swarmSpawn', sx, sy, NEUTRAL, spread);
+  if (fx) pushFx(w, fx, sx, sy, NEUTRAL, spread);
+  return sw;
 }
 
 const candX: number[] = [];
 const candY: number[] = [];
 
 /** Head for the biggest army nearby; wander between drop spots if nobody is around. */
-function steerSwarm(w: World, sw: Swarm): void {
+export function steerSwarm(w: World, sw: Swarm): void {
   let cx = 0, cy = 0, n = 0;
   for (const u of sw.uids) {
     const s = w.uidToSlot.get(u);
@@ -310,11 +319,16 @@ function stomp(w: World, s: number): void {
 
 /** Whoever lands the killing blow on a Colossus: full energy and a free upgrade. */
 export function colossusSlain(w: World, x: number, y: number, killer: number): void {
-  if (killer >= 0 && killer !== NEUTRAL) {
-    w.factions[killer].energy = ENERGY.max;
-    grantUpgrade(w, killer);
-  }
+  giantReward(w, killer);
   pushFx(w, 'colossusDown', x, y, killer, 80);
+}
+
+/** Whoever fells a giant (a Colossus or the Bloom's heart) gets full energy and an upgrade. Returns whether a player did. */
+export function giantReward(w: World, killer: number): boolean {
+  if (killer < 0 || killer === NEUTRAL) return false;
+  w.factions[killer].energy = ENERGY.max;
+  grantUpgrade(w, killer);
+  return true;
 }
 
 // ---- garrison regrowth --------------------------------------------------------

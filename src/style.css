@@ -241,6 +241,27 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .nestshare .segs i { display: block; height: 100%; transition: width 0.4s; opacity: 0.8; }
 .nestshare .mark { position: absolute; top: -3px; width: 2px; height: 10px; margin-left: -1px; background: #fff; border-radius: 1px; box-shadow: 0 0 6px #fff; opacity: 0.8; }
 
+/* The Bloom's heart (campaign finale): a boss bar under the top bar. */
+.heartbar {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100% - 32px));
+  padding: 6px 14px 8px;
+  text-align: center;
+  background: rgba(14, 8, 14, 0.82);
+  border: 1px solid rgba(214, 92, 78, 0.55);
+  border-radius: 8px;
+  display: none;
+  pointer-events: none;
+}
+.heart-name { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: #e3707a; }
+.heart-hp { margin-top: 5px; height: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.heart-hp i { display: block; height: 100%; background: linear-gradient(90deg, #8e2338, #e0485e); box-shadow: 0 0 10px #c4364a; transition: width 0.2s linear; }
+.heart-ward { margin-top: 5px; font-size: 12px; color: #c9b9c3; }
+.heartbar.open .heart-ward { color: #ffd2d8; font-weight: 600; }
+
 /* Domination countdown: big, in the dominating color, impossible to miss. */
 .dom {
   --c: #ffb627;

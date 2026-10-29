@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CONQUEST_SHARE, armyFor, nodeSetup } from '../src/campaign/battle';
+import { CONQUEST_SHARE, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
 import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
 import { DIFFICULTIES, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, rollOffer } from '../src/campaign/rewards';
@@ -169,6 +169,30 @@ describe('run difficulty', () => {
       const brutal = newRun(seed, 0, 'swarm', 0, 'brutal');
       expect(brutal.nodes[brutal.heart].difficulty).toBe(3);
       expect(brutal.nodes.some((n) => n.difficulty === 2)).toBe(false);
+    }
+  });
+
+  it('the Bloom near a node makes its swarms come sooner and more often; what it ate makes them bigger', () => {
+    const far = bloomEvents(0, 0), near = bloomEvents(1, 0), fed = bloomEvents(1, 10);
+    expect(near.swarm!.first).toBeLessThan(far.swarm!.first);
+    expect(near.swarm!.every).toBeLessThan(far.swarm!.every);
+    expect(near.swarm!.size).toBeGreaterThan(far.swarm!.size);
+    expect(fed.swarm!.size).toBeGreaterThan(near.swarm!.size);
+    expect(swarmScale(100)).toBe(2);
+    // Far from the front: the calm preset's swarms, not the Bloom's.
+    expect(far).toMatchObject({ swarm: { first: 200, every: 240, size: 22 }, colossus: [], bloom: false });
+    expect(near.bloom).toBe(true);
+  });
+
+  it('the finale has the heart, fed by the swallowed nodes; only Brutal adds the rivals to beat', () => {
+    for (const difficulty of DIFFICULTIES) {
+      const run = newRun('heart', 0, 'swarm', 0, difficulty);
+      run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, 5).map((n) => n.id);
+      const setup = nodeSetup(run, run.heart, false);
+      expect(setup.heart).toEqual({ strength: 5, rule: difficulty === 'brutal' ? 'heart+rivals' : 'heart' });
+      expect(bloomLabel(run, run.heart)).toBe('The heart, fed by 5 nodes');
+      const other = run.nodes.find((n) => n.kind === 'conquest')!;
+      expect(nodeSetup(run, other.id, false).heart).toBeUndefined();
     }
   });
 

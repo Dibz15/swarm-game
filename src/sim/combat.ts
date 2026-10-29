@@ -1,7 +1,8 @@
 import { AGGRO_EXTRA, ALERT_EVERY, ALERT_RADIUS, DAMAGE_VS, RETALIATE_EXTRA, DT, ENERGY, Kind, NEUTRAL, POWER, RETARGET, TRAITS, UNIT_STATS } from './constants';
 import { queryRadius } from './spatial';
-import { removeUnit, type World } from './world';
+import { removeUnit, WILD_HEART, type World } from './world';
 import { colossusSlain } from './events';
+import { heartSlain, heartWard } from './heart';
 
 const MAX_SCAN = 420;
 
@@ -148,7 +149,13 @@ export function resolveDamage(w: World): void {
     if (!w.alive[i] || w.dmg[i] === 0) continue;
     const surged = w.surge[i] > w.tick ? POWER.surgeArmor : 1;
     const fortified = w.fortify[i] > w.tick ? POWER.fortifyArmor * w.factions[w.owner[i]].mods.fortifyArmor : 1;
-    w.hp[i] -= w.dmg[i] * w.armor[i] * surged * fortified;
+    let ward = 1;
+    if (w.wild[i] === WILD_HEART) {
+      ward = heartWard(w);
+      // Any hit, from any range, keeps it from regrowing.
+      w.heart!.threat = w.tick;
+    }
+    w.hp[i] -= w.dmg[i] * w.armor[i] * surged * fortified * ward;
     w.dmg[i] = 0;
     if (w.hp[i] > 0) continue;
     const killer = w.lastHit[i];
@@ -159,7 +166,8 @@ export function resolveDamage(w: World): void {
     }
     w.factions[w.owner[i]].stats.lost++;
     w.deaths.push(w.x[i], w.y[i], w.owner[i]);
-    if (w.kind[i] === Kind.Colossus) colossusSlain(w, w.x[i], w.y[i], killer);
+    if (w.wild[i] === WILD_HEART) heartSlain(w, killer);
+    else if (w.kind[i] === Kind.Colossus) colossusSlain(w, w.x[i], w.y[i], killer);
     removeUnit(w, i);
   }
 }

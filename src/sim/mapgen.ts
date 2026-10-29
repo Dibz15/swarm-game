@@ -71,6 +71,8 @@ export interface EventParams {
   colossus: number[];
   /** seconds per regrown guard on neutral nests (0 = off) */
   regrow: number;
+  /** the swarms are the Bloom's (campaign): their own cue */
+  bloom?: boolean;
 }
 
 export type EventLevel = 'off' | 'calm' | 'normal' | 'wild';
