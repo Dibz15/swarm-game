@@ -1,3 +1,4 @@
+import type { TraitId } from '../campaign/warlords';
 import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
@@ -71,6 +72,10 @@ export class GameView {
   private supplyNests = 0;
   private supplyToastTick = -1e9;
   private bloomToasted = false;
+  /** a campaign warlord in this battle (#66, #100): its units' look, its citadel's marker */
+  warlord: { faction: number; trait: TraitId } | null = null;
+  /** the citadel's walls were breached (sounded once) */
+  private breached = false;
 
   constructor(
     readonly setup: MatchSetup,
@@ -193,6 +198,7 @@ export class GameView {
       selectedNests: this.selection.nests,
       hoverNest: this.hoverNest,
       human: this.human,
+      warlord: this.warlord,
     });
     this.drawAim();
     this.drawEdgeMarkers(time);
@@ -225,15 +231,19 @@ export class GameView {
   /** Arrows at the screen edge pointing to off-screen drops, Colossi and swarms. */
   private drawEdgeMarkers(time: number): void {
     const ev = this.world.events;
-    if (!ev) return;
     const w = this.world;
     const marks: [number, number, readonly number[]][] = [];
-    for (const d of ev.drops) marks.push([d.x, d.y, DROP_MARK]);
-    for (const c of ev.colossi) {
+    // A stronghold's citadel (#100), while it's still the goal.
+    if (w.citadel >= 0 && w.nests[w.citadel].owner !== this.human) {
+      const c = w.nests[w.citadel];
+      marks.push([c.x, c.y, FACTION_RGB[this.warlord?.faction ?? c.owner] ?? WHITE]);
+    }
+    for (const d of ev?.drops ?? []) marks.push([d.x, d.y, DROP_MARK]);
+    for (const c of ev?.colossi ?? []) {
       const s = w.uidToSlot.get(c.uid);
       if (s !== undefined) marks.push([w.x[s], w.y[s], FERAL]);
     }
-    for (const sw of ev.swarms) {
+    for (const sw of ev?.swarms ?? []) {
       let x = 0, y = 0, n = 0;
       for (const u of sw.uids) {
         const s = w.uidToSlot.get(u);
@@ -339,12 +349,19 @@ export class GameView {
       sfx.death(d[k], d[k + 1], d[k + 2]);
     }
     w.deaths = [];
+    // A stronghold's walls breached: the first time you contest the citadel.
+    if (!this.breached && w.citadel >= 0 && w.nests[w.citadel].contested && w.nests[w.citadel].owner !== this.human) {
+      this.breached = true;
+      sfx.citadelBreach();
+      toast('At the citadel: take it to win', hex(this.warlord?.faction ?? w.nests[w.citadel].owner));
+    }
 
     for (const e of w.fx) {
       const c = FACTION_RGB[e.f] ?? WHITE;
       const nest = w.nests[e.nest];
       switch (e.type) {
         case 'capture':
+          if (e.nest === w.citadel && e.f === this.human) sfx.citadelFall();
           rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3.2, dur: 0.7, c, thick: 2.5 });
           particles.burst(e.x, e.y, c, 26, 120, 2.6, 0.8);
           sfx.capture(e.x, e.y, e.f === this.human);

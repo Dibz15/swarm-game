@@ -10,6 +10,7 @@ import { nodeSetup } from '../campaign/battle';
 import { MAP_H, bloomGapWith, type Bloom, type RunNode, type RunState } from '../campaign/run';
 import { FACTION_HEX } from '../content/factions';
 import { generateMap, type MapSpec } from '../sim/mapgen';
+import { mapParamsOf } from '../sim/setup';
 
 export const BLOOM = '#c04a9a';
 export const DIFF_COLOR = ['#b4ff39', '#ffb627', '#ff6b4a', '#ff3cac'] as const;
@@ -80,7 +81,7 @@ function mapFor(run: RunState, n: RunNode): MapSpec | null {
   if (!a.map && mapBudget > 0) {
     mapBudget--;
     const s = nodeSetup(run, n.id, false);
-    a.map = generateMap({ seed: s.seed, size: s.size, players: s.players.length, terrain: s.terrain, caves: s.caves, layout: s.layout });
+    a.map = generateMap(mapParamsOf(s, false));
   }
   return a.map;
 }
@@ -229,7 +230,7 @@ export function battleMapCanvas(run: RunState, n: RunNode, px: number, me: strin
   let m = CARD_MAPS.get(key);
   if (!m) {
     const st = nodeSetup(run, n.id, portrait);
-    m = generateMap({ seed: st.seed, size: st.size, players: st.players.length, portrait, terrain: st.terrain, caves: st.caves, layout: st.layout });
+    m = generateMap(mapParamsOf(st, portrait));
     CARD_MAPS.set(key, m);
   }
   const rivals = artFor(run, n).rivals;

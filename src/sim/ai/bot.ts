@@ -19,6 +19,8 @@ export interface BotConfig {
   choke?: number;
   /** false: never casts powers, whatever the difficulty (campaign Swarmlord) */
   powers?: false;
+  /** a warlord holding the match's citadel (#100): it keeps it garrisoned and defends it first */
+  citadel?: boolean;
 }
 
 interface DifficultyKnobs {
@@ -97,6 +99,9 @@ const NOVA_RESERVE = { minArmy: 30, energy: 25 };
 
 /** Breaking a rival's domination. */
 const DOM_BOT = { value: 3, margin: 1.05 };
+/** A warlord's citadel (#100): the share of its army kept there, how close counts as there, and extra defense. */
+const CITADEL_BOT = { reserve: 0.3, near: 150, defend: 1.6 };
+
 /** At (near) the supply cap: reserve share, attack margin and nest value multipliers. */
 const SUPPLY_BOT = { near: 0.92, reserve: 0.4, margin: 0.85, value: 1.3 };
 
@@ -321,15 +326,16 @@ export class Bot {
       this.issue(w, { t: 'move', p: me, units: slots.map((s) => w.uid[s]), x: nest.x, y: nest.y, nest: nest.id });
     };
 
-    // 1) Defend threatened nests.
+    // 1) Defend threatened nests, the citadel first and from anywhere.
+    const cit = this.cfg.citadel && w.citadel >= 0 && w.nests[w.citadel].owner === me ? w.nests[w.citadel] : null;
     let threatened = false;
-    for (const n of mine) {
+    for (const n of cit ? [cit, ...mine.filter((o) => o !== cit)] : mine) {
       const h = hostile[n.id];
       if (h <= 0) continue;
       threatened = true;
       const need = h * 1.3 + 3 - friendly[n.id];
       if (need <= 0) continue;
-      const slots = take(n.x, n.y, need * 1.3, 480);
+      const slots = n === cit ? take(n.x, n.y, need * CITADEL_BOT.defend, 1e9) : take(n.x, n.y, need * 1.3, 480);
       // Meet them at the mouth they're coming through, not on the nest.
       const m = mouths && CHOKE_BOT.defend && slots.length ? this.mouthUnderAttack(w, n, mouths[n.id]) : null;
       if (m) this.issue(w, { t: 'move', p: me, units: slots.map((s) => w.uid[s]), x: m.gx, y: m.gy, nest: -1 });
@@ -478,7 +484,8 @@ export class Bot {
     // Supply blocked: a capped army only has value if it's used, so keep a
     // thinner reserve, take riskier fights and reach for more nests.
     const capped = myUnits >= supplyCap(w, me) * SUPPLY_BOT.near;
-    const reserve = threatened ? 0 : Math.floor(total * this.p.reserve * (capped ? SUPPLY_BOT.reserve : 1) * (opening ? this.d.openReserve : 1));
+    const guard = cit ? Math.floor(total * CITADEL_BOT.reserve) : 0;
+    const reserve = Math.max(guard, threatened ? 0 : Math.floor(total * this.p.reserve * (capped ? SUPPLY_BOT.reserve : 1) * (opening ? this.d.openReserve : 1)));
     const available = idle.length - used.size - reserve;
     // A passive bot keeps to the nests nearer its home than any rival's.
     const rivalHomes = this.cfg.passive ? w.nests.filter((n) => n.capital && n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] !== myTeam) : [];
@@ -621,6 +628,16 @@ export class Bot {
         const squad = take(o.x, o.y, pickNeed, 1e9);
         if (squad.length) this.issue(w, { t: 'move', p: me, units: squad.map((s) => w.uid[s]), x: o.x, y: o.y, nest: -1 });
       }
+    }
+
+    // A warlord keeps its citadel's guard home.
+    if (cit && guard > 0) {
+      const d2 = (s: number) => (w.x[s] - cit.x) ** 2 + (w.y[s] - cit.y) ** 2;
+      const home = idle.filter((s) => d2(s) <= CITADEL_BOT.near ** 2).length;
+      const away = idle.filter((s) => !used.has(s) && d2(s) > CITADEL_BOT.near ** 2).sort((a, b) => d2(a) - d2(b) || a - b);
+      const back = away.slice(0, Math.max(0, guard - home));
+      for (const s of back) used.add(s);
+      send(back, cit);
     }
 
     // No front rally: new spawns gather at home and join the next attack as a

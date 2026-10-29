@@ -287,12 +287,14 @@ export class Hud {
   }
 
   /** Show a campaign warlord (#66): its name and trait, in its colour, for the whole battle. */
-  setWarlord(w: { faction: number; name: string; trait: string; text: string } | null): void {
+  setWarlord(w: { faction: number; name: string; trait: string; text: string; citadel?: boolean } | null): void {
     this.warlord = w ? w.faction : -1;
     this.warlordChip.style.display = w ? 'block' : 'none';
     if (!w) return;
     this.warlordChip.style.setProperty('--c', hex(w.faction));
-    this.warlordChip.innerHTML = `<b>♛ ${w.name}</b><small>${w.trait}: ${w.text}</small>`;
+    this.warlordChip.innerHTML = `<b>♛ ${w.name}</b><small>${w.trait}: ${w.text}</small>${
+      w.citadel ? '<div class="citadel-goal">Take the citadel to win<span><i></i></span></div>' : ''
+    }`;
   }
 
   update(g: GameView, dt: number): void {
@@ -360,6 +362,14 @@ export class Hud {
     if (this.warlord >= 0) {
       this.warlordChip.classList.toggle('below', hs >= 0);
       this.warlordChip.classList.toggle('down', !!w.factions[this.warlord]?.eliminated);
+      // Your hold on the citadel, while you're taking it.
+      const bar = this.warlordChip.querySelector<HTMLElement>('.citadel-goal i');
+      if (bar && w.citadel >= 0) {
+        const c = w.nests[w.citadel];
+        // Two halves: wearing its control down, then building yours.
+        const k = c.owner === g.human ? 1 : c.owner < 0 ? (c.controller === g.human ? 0.5 + 0.5 * c.control : 0.5) : 0.5 * (1 - c.control);
+        bar.style.width = `${Math.round(100 * Math.max(0, Math.min(1, k)))}%`;
+      }
     }
     this.nestShare.parentElement!.style.visibility = hs >= 0 ? 'hidden' : '';
     if (hs >= 0) {

@@ -1,3 +1,4 @@
+import { fortify } from './fortify';
 import { NEST_RADIUS, NestType } from './constants';
 import { PI, TAU, dcos, dsin } from './mathx';
 import { Rng } from './rng';
@@ -118,6 +119,8 @@ export interface MapParams {
   typeWeights?: readonly number[];
   /** how nests are spread (default: picked by the seed) */
   layout?: MapLayout | 'random';
+  /** this player's capital becomes a walled citadel (campaign strongholds, #100) */
+  stronghold?: number;
 }
 
 export interface NestSpec {
@@ -411,7 +414,10 @@ export function generateMap(p: MapParams): MapSpec {
   const frame: Frame = { w, h, P, sector, base, pos, nests, polar, size: p.size, centerCrystal: L.center === 'crystal' };
   const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), terrainParams(p.terrain), caveParams(p.caves), frame);
   const events = generateEvents(new Rng(p.seed ^ 0x3c9d17), eventParams(p.events), terrain, frame);
-  return { width: w, height: h, nests, terrain, events, layout };
+  const spec: MapSpec = { width: w, height: h, nests, terrain, events, layout };
+  // A stronghold's walls go up last, on their own stream: the rest is the same map.
+  if (p.stronghold !== undefined) fortify(spec, p.stronghold, p.size, new Rng(p.seed ^ 0x51f0a7));
+  return spec;
 }
 
 /**

@@ -90,6 +90,32 @@ They are deliberately separate, and each has one job.
 | Stormcaller | energy +40% | energy +20% |
 | Broodmother | capital +1 level, +2 supply per nest | capital +1 level |
 
+**Stronghold battles** (#100, `src/sim/fortify.ts`).
+- **The map:** the usual generated map, then fortified on its own seeded stream.
+  - The warlord's capital becomes a max-level **citadel** inside a ring of walls.
+  - The ring has three gates that face the middle of the map.
+  - Two more of the warlord's nests (Bastion, Forge or Spire) sit inside.
+  - Anything else in the way is cleared, and there are no caves.
+  - Every other capital must be able to walk in, or the gates widen.
+- **The win:** a human who takes the citadel wins, even with rivals left. A rival taking it wins nothing, and the usual win rules still apply too.
+- **The defence:** the warlord keeps 30% of its army at the citadel, and defends it first and from anywhere.
+- **Readability:**
+  - The citadel is crowned, with an edge marker when it's off screen.
+  - The HUD chip shows "Take the citadel" with a capture bar.
+  - A horn sounds when you reach it, and a fanfare when it falls.
+- **In every domain battle,** the warlord's units have a dark rim plus their trait's look:
+
+| Trait | Look |
+|---|---|
+| Ironhide | plated Shields |
+| Swarmlord | Swarmers pulsing together |
+| Raider-king | long Raider streaks |
+| Longspine | spiked Spears |
+| Stormcaller | sparks |
+| Broodmother | a throbbing capital |
+
+  The warlord's capital wears a crown.
+
 ## Battles
 Each node turns into a `MatchSetup` (`src/sim/setup.ts`) plus an objective. Objectives are checked inside the sim, so battles stay deterministic and testable headless.
 

@@ -291,8 +291,9 @@ class App {
     // A warlord's ground (#66): its sting, and its trait announced and kept on screen.
     const lord = warlordOf(run, id);
     if (lord) {
+      this.game!.warlord = { faction: lord.faction, trait: lord.traitId };
       this.hud?.setWarlord(lord);
-      this.hud?.toast(`♛ ${lord.name}: ${lord.text}`, FACTION_HEX[lord.faction]);
+      this.hud?.toast(lord.citadel ? `♛ ${lord.name}'s stronghold: take the citadel to win` : `♛ ${lord.name}: ${lord.text}`, FACTION_HEX[lord.faction]);
       this.sfx.warlordSting(lord.faction);
     }
   }

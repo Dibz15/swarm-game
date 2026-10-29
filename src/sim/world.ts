@@ -281,6 +281,8 @@ export class World {
   events: EventState | null = null;
   /** the Bloom's heart (campaign finale), or null */
   heart: HeartState | null = null;
+  /** a stronghold's citadel nest (#100): a human taking it wins; -1 if none */
+  citadel = -1;
   bots: Bot[] = [];
 
   /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
@@ -299,7 +301,7 @@ export class World {
   /** no elimination or domination win (tutorial missions without an opponent) */
   endless = false;
   /** how the match ended */
-  winReason: '' | 'elimination' | 'domination' | 'heart' = '';
+  winReason: '' | 'elimination' | 'domination' | 'heart' | 'citadel' = '';
   /** consecutive ticks each team has held the domination share */
   readonly domTicks = new Int32Array(NEUTRAL_TEAM + 1);
   /** per-faction unit counts sampled once a second */
