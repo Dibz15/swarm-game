@@ -1,6 +1,7 @@
 import { creature, type Creature } from '../art/creature';
 import { DIFFICULTY, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { PlayerSetup } from '../sim/setup';
+import type { SiegeSetup } from '../sim/siege';
 import { defaultMods } from '../sim/mods';
 import type { EventParams } from '../sim/mapgen';
 import { Rng, hashString } from '../sim/rng';
@@ -21,6 +22,8 @@ export const CONQUEST_SHARE = 0.8;
 /** The army size (#100) a stronghold's starting garrisons are tuned for; bigger armies meet bigger garrisons. */
 export const STRONGHOLD_ARMY = 32;
 const armySize = (run: RunState, fielded: number[]) => armyFor(run, fielded).reduce((a, b) => a + b.count, 0);
+/** Holding the line (#67), the waves are the main threat; the rival, untouched by them, would otherwise outgrow you. */
+export const SIEGE_RIVAL_PROD = 0.5;
 /** A warlord's production in its own stronghold (#100): it starts with three nests, not one. */
 export const STRONGHOLD_PROD = 0.7;
 /** Domination nodes: hold half the nests (the usual share is 0.6-0.7). */
@@ -61,9 +64,10 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     portrait,
     // A stronghold's warlord starts with three nests: half the map would be a head start.
     domShare: n.kind === 'domination' && !hold ? DOMINATION_SHARE : finale ? undefined : CONQUEST_SHARE,
-    // Brutal: after the heart, the rivals still have to be beaten.
     // The citadel's guards grow with the army you bring, so a late-run swarm can't just rush it.
     stronghold: hold ? { player: 1, scale: Math.max(1, armySize(run, fielded) / STRONGHOLD_ARMY) } : undefined,
+    siege: n.kind === 'hold' ? siegeFor(run, n.depth) : undefined,
+    // Brutal: after the heart, the rivals still have to be beaten.
     heart: finale ? { strength: bloomStrength(run), rule: RUN_DIFFICULTY[difficultyOf(run)].bots > 0 ? 'heart+rivals' : 'heart' } : undefined,
     players: [
       {
@@ -77,7 +81,11 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
       ...factions.slice(0, n.rivals).map((faction, i): PlayerSetup => {
         const personality = rng.pick(PERSONALITIES);
         const lord = lords[i];
-        const plain: PlayerSetup = { faction, team: i + 1, human: false, bot: { difficulty: n.difficulty, personality } };
+        // Holding the line, the rival is a rusher coming for you (#67).
+        const plain: PlayerSetup =
+          n.kind === 'hold'
+            ? { faction, team: i + 1, human: false, prod: (DIFFICULTY[n.difficulty]?.prod ?? 1) * SIEGE_RIVAL_PROD, bot: { difficulty: n.difficulty, personality: 'rusher', focus: run.color } }
+            : { faction, team: i + 1, human: false, bot: { difficulty: n.difficulty, personality } };
         if (!lord) return plain;
         const p = warlordPlayer(run, lord, plain);
         // In its stronghold, the warlord turtles whatever its usual temper.
@@ -85,6 +93,22 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
         return hold ? { ...p, prod: p.prod! * STRONGHOLD_PROD, bot: { ...p.bot!, personality: 'turtler', citadel: true } } : p;
       }),
     ],
+  };
+}
+
+/**
+ * Hold the line (#67): longer, faster and bigger waves further into the run,
+ * bigger still for every node the Bloom ate. PROVISIONAL (#68).
+ */
+export function siegeFor(run: RunState, depth: number): SiegeSetup {
+  const t = Math.min(1, depth / Math.max(1, run.nodes[run.heart].depth));
+  return {
+    seconds: Math.round(lerp(180, 300, t)),
+    first: 20,
+    every: Math.round(lerp(40, 28, t)),
+    size: Math.round(lerp(14, 30, t) * swarmScale(bloomStrength(run))),
+    grow: 1.12,
+    depth: t,
   };
 }
 

@@ -21,6 +21,8 @@ export interface BotConfig {
   powers?: false;
   /** a warlord holding the match's citadel (#100): it keeps it garrisoned and defends it first */
   citadel?: boolean;
+  /** this faction's nests are worth more to it (#67: Hold the line's rival comes for you) */
+  focus?: number;
 }
 
 interface DifficultyKnobs {
@@ -109,6 +111,9 @@ const CITADEL_BOT = {
   home: 520,
   far: 0.35,
 };
+
+/** How much more a focused faction's nests are worth (BotConfig.focus). */
+const FOCUS = 1.6;
 
 /** At (near) the supply cap: reserve share, attack margin and nest value multipliers. */
 const SUPPLY_BOT = { near: 0.92, reserve: 0.4, margin: 0.85, value: 1.3 };
@@ -506,6 +511,7 @@ export class Bot {
       }
       const def = hostile[n.id];
       let value = n.type === NestType.Bastion ? 0.95 * this.p.bastion : n.type === NestType.Hive ? 1 : 1.1;
+      if (n.owner === this.cfg.focus) value *= FOCUS;
       // A warlord in its stronghold stays near its walls instead of racing for the map.
       if (cit && (n.x - cit.x) ** 2 + (n.y - cit.y) ** 2 > CITADEL_BOT.home ** 2) value *= CITADEL_BOT.far;
       value *= 0.6 + 0.4 * n.level;

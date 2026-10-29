@@ -32,6 +32,8 @@ const CITADEL_BLOB = 60;
 /** ...once it outnumbers the hostile units within CITADEL_R of it this many times over */
 const CITADEL_EDGE = 1.5;
 const CITADEL_R = 300;
+/** hostile units this close to its capital send a sieged proxy home (#67) */
+const SIEGE_ALARM = 380;
 
 export interface ProxyKnobs {
   /** seconds between strategic decisions */
@@ -143,11 +145,11 @@ export class Proxy {
   private readonly novaLocked: boolean;
   private readonly citadelBlob: number;
 
-  /** Hostile units within r of (x, y). */
+  /** Hostile units within r of (x, y); neutral garrisons (which never move) don't count. */
   private near(w: World, x: number, y: number, r: number): number {
     queryRadius(w, x, y, r, scratch);
     let n = 0;
-    for (const s of scratch) if (w.hostile(w.owner[s], this.f)) n++;
+    for (const s of scratch) if (w.hostile(w.owner[s], this.f) && (w.owner[s] !== NEUTRAL || w.wild[s] !== 0)) n++;
     return n;
   }
 
@@ -280,6 +282,22 @@ export class Proxy {
       for (const s of blob) (bx += w.x[s]), (by += w.y[s]);
       bx /= blob.length;
       by /= blob.length;
+      // Hold the line (#67): the capital is everything. While anything hostile
+      // is near it, or once it has fallen, the whole blob goes home for it.
+      const sg = w.siege;
+      if (sg && sg.human === me) {
+        const cap = w.nests[sg.capital];
+        if (cap.owner !== me || this.near(w, cap.x, cap.y, SIEGE_ALARM) > 0) {
+          if (this.goal !== cap.id || w.tick - this.lastOrder >= this.k.refresh * TICK_HZ) {
+            out.push({ t: 'move', p: me, units: blob.map((s) => w.uid[s]), x: cap.x, y: cap.y, nest: cap.id });
+            this.goal = cap.id;
+            this.lastOrder = w.tick;
+          }
+          this.mode = 'hold';
+          this.upgrade(w, mine, army, out);
+          return out;
+        }
+      }
       // The Bloom's heart (campaign finale): once its nests are taken, or the
       // blob is big enough to grind through the ward, go for it.
       const heart = heartSlot(w);

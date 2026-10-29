@@ -11,7 +11,10 @@ export const PLAYTEST = 'playtest-';
 
 export type Scene =
   | { kind: 'map'; run: RunState }
-  | { kind: 'battle'; run: RunState; node: number; extra?: 'gates' | 'fall' };
+  | { kind: 'battle'; run: RunState; node: number; extra?: Extra };
+
+/** Playtest shortcuts once a battle starts (main.ts): at a stronghold's gates, its citadel falling, a siege's last seconds, your capital falling. */
+export type Extra = 'gates' | 'fall' | 'ending' | 'capital';
 
 export interface Playtest {
   id: string;
@@ -41,11 +44,22 @@ function withTrait(trait: TraitId, color: number, nodes = 1): [RunState, Warlord
 }
 
 /** A battle scene at a fixed, fair setting: Normal bots, at most two rivals. */
-function fight(r: RunState, node: number, extra?: 'gates' | 'fall'): Scene {
+function fight(r: RunState, node: number, extra?: Extra): Scene {
   const n = r.nodes[node];
   n.difficulty = 1;
   n.rivals = Math.min(n.rivals, 2);
   return { kind: 'battle', run: r, node, extra };
+}
+
+/** The first seeded run with a Hold the line node between `lo` and `hi` of the way to the heart. */
+function withHold(color: number, lo: number, hi: number): [RunState, number] {
+  for (let k = 0; k < 400; k++) {
+    const r = run(`hold-${k}`, color);
+    const far = Math.max(1, r.nodes[r.heart].depth);
+    const n = r.nodes.find((o) => o.kind === 'hold' && o.depth / far >= lo && o.depth / far <= hi);
+    if (n) return [r, n.id];
+  }
+  throw new Error('no run with a hold node there');
 }
 
 /** Stand next to `target` (off it), with only the start and that node taken. */
@@ -157,6 +171,26 @@ export const PLAYTESTS: Playtest[] = [
         const node = w.nodes[1];
         standBy(r, node, w.nodes);
         return fight(r, node);
+      },
+    }),
+  ),
+  ...(
+    [
+      ['hold-early', 'Early in a run', 'A short siege with small waves of the first kinds: swarms, brutes and raiders.', 0, 0.45, undefined],
+      ['hold-late', 'Late in a run', 'A long siege where every kind of wave can come, Colossus included.', 0.65, 1, undefined],
+      ['hold-ending', 'The last 15 seconds', 'The clock is nearly out: the final ticks, then the line held.', 0, 1, 'ending'],
+      ['hold-capital', 'Your capital falls', 'A few seconds in, your capital is torn down: the alarm and the 20-second countdown to retake it.', 0, 1, 'capital'],
+    ] as [string, string, string, number, number, Extra | undefined][]
+  ).map(
+    ([id, title, text, lo, hi, extra]): Playtest => ({
+      id,
+      group: 'Hold the line',
+      title,
+      text: `${text} Your own walls, the wave timeline at the top.`,
+      make: (c) => {
+        const [r, node] = withHold(c, lo, hi);
+        standBy(r, node);
+        return fight(r, node, extra);
       },
     }),
   ),

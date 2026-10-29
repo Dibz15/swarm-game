@@ -527,6 +527,26 @@ export class AudioEngine {
     this.noise(this.reverbIn, 0.5, 0.05, 'lowpass', 600, 200);
   }
 
+  /** Holding the line (#67): a wave arrives. A long, rising horn over a rumble. */
+  siegeWave(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(-26), 1.8, 'sawtooth', 0.055, { attack: 0.3, slide: 1.04 });
+    this.tone(this.ui, this.note(-14), 1.2, 'sawtooth', 0.03, { attack: 0.3, delay: 0.3 });
+    this.noise(this.reverbIn, 1.6, 0.08, 'lowpass', 500, 120);
+  }
+
+  /** Holding the line: your capital has fallen. A fast, urgent alarm. */
+  capitalAlarm(): void {
+    if (!this.ctx) return;
+    for (let k = 0; k < 4; k++) this.tone(this.ui, this.note(k % 2 ? 7 : 12), 0.16, 'square', 0.035, { delay: k * 0.18 });
+  }
+
+  /** Holding the line: the clock ran out and the capital stood. */
+  lineHeld(): void {
+    if (!this.ctx) return;
+    [0, 7, 12, 19].forEach((s, i) => this.tone(this.reverbIn, this.note(s), 1.4, 'triangle', 0.05, { delay: i * 0.14, attack: 0.02 }));
+  }
+
   /** A stronghold's citadel is under attack: a low two-note horn. */
   citadelBreach(): void {
     if (!this.ctx) return;

@@ -3,6 +3,7 @@ import { groupArrive } from './commands';
 import type { EventSpec } from './mapgen';
 import { TAU, dcos, dsin } from './mathx';
 import { updateHeart } from './heart';
+import { updateSiege } from './siege';
 import { Rng } from './rng';
 import { queryRadius } from './spatial';
 import { pushFx, removeUnit, spawnUnit, WILD_COLOSSUS, WILD_SWARM, type Colossus, type Swarm, type World } from './world';
@@ -52,6 +53,7 @@ export function updateEvents(w: World): void {
 
   if (ev.swarms.length && t % EVENTS.swarmRethink === 0) for (const s of ev.swarms) steerSwarm(w, s);
   if (w.heart) updateHeart(w);
+  if (w.siege) updateSiege(w);
   ev.swarms = ev.swarms.filter((s) => (s.uids = s.uids.filter((u) => w.uidToSlot.has(u))).length > 0);
   if (ev.colossi.length) updateColossi(w);
   if (ev.drops.length) updateDrops(w);
@@ -79,14 +81,17 @@ function spawnSwarm(w: World): void {
 }
 
 /** A wild swarm of `size` around (sx, sy) that starts hunting at once. */
-export function releaseSwarm(w: World, sx: number, sy: number, size: number, fx: 'swarmSpawn' | 'bloomSwarm' | null): Swarm {
+/** A wild swarm's usual mix: Swarmers, every fifth a Raider. */
+const SWARM_MIX: readonly number[] = [Kind.Dot, Kind.Dot, Kind.Dot, Kind.Dot, Kind.Swift];
+
+export function releaseSwarm(w: World, sx: number, sy: number, size: number, fx: 'swarmSpawn' | 'bloomSwarm' | null, mix: readonly number[] = SWARM_MIX): Swarm {
   const ev = w.events!;
   const sw: Swarm = { uids: [], tx: sx, ty: sy };
   const spread = Math.sqrt(size) * 6;
   for (let k = 0; k < size; k++) {
     const a = ev.rng.next() * TAU, r = Math.sqrt(ev.rng.next()) * spread;
     const [x, y] = w.terrain.freePoint(sx + dcos(a) * r, sy + dsin(a) * r, 4);
-    const kind = k % 5 === 4 ? Kind.Swift : Kind.Dot;
+    const kind = mix[k % mix.length];
     const s = spawnUnit(w, NEUTRAL, kind, x, y, sx, sy, groupArrive(size));
     if (s < 0) break;
     w.wild[s] = WILD_SWARM;
@@ -115,8 +120,29 @@ export function steerSwarm(w: World, sw: Swarm): void {
   cx /= n;
   cy /= n;
 
-  // Candidates: player nests plus a stride sample of player units.
+  // Candidates: player nests plus a stride sample of player units. A siege
+  // wave (#67) only hunts its quarry, and goes for the nearest of its nests.
   candX.length = candY.length = 0;
+  if (sw.hunt !== undefined) {
+    let bd = Infinity;
+    for (const nest of w.nests) {
+      if (nest.owner !== sw.hunt) continue;
+      // The capital is the prize; raiders pick off the outer nests first.
+      const d = (nest.x - cx) ** 2 + (nest.y - cy) ** 2 + (nest.capital === !!sw.raid ? 1e8 : 0);
+      if (d < bd) (bd = d), (sw.tx = nest.x), (sw.ty = nest.y);
+    }
+    if (bd < Infinity) {
+      const ar = groupArrive(n);
+      for (const u of sw.uids) {
+        const s = w.uidToSlot.get(u);
+        if (s === undefined) continue;
+        w.ox[s] = sw.tx;
+        w.oy[s] = sw.ty;
+        w.arrive[s] = ar;
+      }
+      return;
+    }
+  }
   for (const nest of w.nests) {
     if (nest.owner >= 0 && nest.owner !== NEUTRAL) {
       candX.push(nest.x);
@@ -292,6 +318,7 @@ function updateColossi(w: World): void {
     const [tx, ty] = c.path[c.leg];
     if ((w.x[s] - tx) ** 2 + (w.y[s] - ty) ** 2 < 50 * 50) {
       if (c.leg === c.path.length - 1) {
+        if (c.stay) return true;
         // Walked off the far side: nobody got it.
         removeUnit(w, s);
         return false;

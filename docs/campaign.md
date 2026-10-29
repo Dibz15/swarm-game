@@ -90,6 +90,18 @@ They are deliberately separate, and each has one job.
 | Stormcaller | energy +40% | energy +20% |
 | Broodmother | capital +1 level, +2 supply per nest | capital +1 level |
 
+**Fortress styles** (#67): every fortress (strongholds, and yours when holding the line) rolls its own style.
+
+| Style | Shape |
+|---|---|
+| Ring | lobed, never a perfect circle |
+| Horseshoe | open front behind barricade lanes |
+| Keep | a second inner line |
+| Bastioned | spurs funnel you into each gate |
+| Broken walls | gaps, with cover outside |
+
+Each also rolls its radius (±15%), 2–3 gates (one always facing the middle), the gate width and some cover. Everyone who has to must still be able to walk in, or the gates widen, then fall back to a plain ring. Review them with `?fortress`.
+
 **Stronghold battles** (#100, `src/sim/fortify.ts`).
 - **The map:** the usual generated map, then fortified on its own seeded stream.
   - The warlord's capital becomes the **citadel**, a normal level-1 capital, inside a ring of walls.
@@ -124,10 +136,28 @@ Each node turns into a `MatchSetup` (`src/sim/setup.ts`) plus an objective. Obje
 
 - **Conquest:** eliminate the rivals, or hold 80% of the nests for 30 seconds, so two turtling rivals can't stall it.
 - **Domination:** hold the share of nests (`domShare`) for the countdown. Shorter and racier.
-- **Hold the line (new):**
-  - You start dug in on a sector of a few nests.
-  - Waves (Bloom swarms plus a rival's pushes, through the events director) come for N minutes.
-  - You win if you still hold your capital when the timer runs out.
+- **Hold the line** (#67, `src/sim/siege.ts`):
+  - **Placement:** at most one per depth, past the first, never in a domain. You start dug in behind your own fortress: the same procedural walls as a stronghold, around you.
+  - **The waves:** the Bloom comes in waves on a schedule rolled up front.
+    - Each wave hunts your capital; Raiders go for your outer nests first.
+    - In a siege only, the Bloom's waves tear your nests down to neutral, though they never take them.
+    - One rusher rival pushes at you too. It spawns at half speed: the waves are the main threat.
+  - **Win:** your capital is yours when the clock runs out (3–5 minutes by depth). If it falls you have 20 s to retake it; nothing else ends the battle.
+  - **Wave kinds:**
+
+    | Kind | Units | Joins at depth |
+    |---|---|---|
+    | Swarm | Swarmers with a few Raiders | from the start |
+    | Brutes | Shields | from the start |
+    | Raiders | Raiders only | from the start |
+    | Spears | Spears | 0.35 of the way |
+    | Pincer | two half-size swarms from opposite sides | 0.35 of the way |
+    | Colossus | a Colossus with an escort | 0.65 of the way |
+
+    The first wave is always a swarm, and no kind comes twice running. A wave is a quarter to a half again bigger each time.
+  - **HUD:** a walking timeline at the top. Each upcoming wave is an icon (by kind, sized by strength) sliding toward the arrival line. The clock sits at the end, with a red "Retake your capital" countdown if it falls.
+  - **Sounds:** the wave horn, ticks for the final 10 s, a capital alarm, and line held.
+  - **Probe:** `scripts/siege-probe.ts`. The human proxy turned out a poor judge here (its big blob wanders off to expand), so tune by playtest (#68).
 - **Difficulty** rises with the distance travelled: bot difficulty, rival count, production (`PlayerSetup.prod`) and Bloom pressure.
 - **Later:** team battles (2v2 with an ally) and champion modifiers on any rival.
 

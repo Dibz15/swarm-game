@@ -1,4 +1,5 @@
 import type { TraitId } from '../campaign/warlords';
+import { WAVE_KINDS } from '../sim/siege';
 import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
@@ -66,6 +67,7 @@ export class GameView {
   private mask = new Uint8Array(MAX_UNITS);
   private spawnSeen: number[] = [];
   private domSecs = -1;
+  private siegeSecs = -1;
   private frame = 0;
   /** supply state last frame, to announce hitting the cap once */
   private supplyBlocked = false;
@@ -121,6 +123,13 @@ export class GameView {
     if (secs !== this.domSecs) {
       if (ds && secs <= 10 && secs > 0) this.s.sfx.domTick(1 - secs / 10, ds.team === w.teamOf[this.human]);
       this.domSecs = secs;
+    }
+    // Holding the line (#67): the clock ticks through its last ten seconds.
+    const sg = this.result ? null : w.siege;
+    const left = sg ? Math.ceil((sg.until - w.tick) / TICK_HZ) : -1;
+    if (left !== this.siegeSecs) {
+      if (sg && left <= 10 && left > 0) this.s.sfx.domTick(1 - left / 10, true);
+      this.siegeSecs = left;
     }
     // Soft ticks for your own nests spawning, if they are on screen.
     for (const n of w.nests) {
@@ -183,6 +192,7 @@ export class GameView {
   private finish(r: MatchResult, time: number): void {
     this.result = r;
     this.resultTime = time;
+    if (r === 'victory' && this.world.winReason === 'held') this.s.sfx.lineHeld();
     if (r === 'victory') this.s.sfx.victory();
     else this.s.sfx.defeat();
   }
@@ -458,6 +468,24 @@ export class GameView {
         case 'heartWindup':
           rings.add({ x: e.x, y: e.y, r0: e.r * 1.6, r1: e.r, dur: 0.9, c: FERAL, thick: 2 });
           sfx.heartWindup(e.x, e.y);
+          break;
+        case 'siegeWave': {
+          // e.prev: the wave's index in the schedule; pincers fire once per side.
+          const wave = w.siege?.waves[e.prev];
+          rings.add({ x: e.x, y: e.y, r0: 20, r1: 140, dur: 0.9, c: FERAL, thick: 3 });
+          if (wave && wave.from[0] === w.siege!.spawns.findIndex((p) => p[0] === e.x && p[1] === e.y)) {
+            sfx.siegeWave();
+            toast(`Wave ${e.prev + 1}: ${WAVE_KINDS[wave.kind].name}, ${wave.size} strong`, '#e3707a');
+          }
+          break;
+        }
+        case 'capitalLost':
+          sfx.capitalAlarm();
+          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.6, c: [255, 93, 115], thick: 3 });
+          toast('Your capital has fallen: retake it within 20 seconds!', '#ff5d73');
+          break;
+        case 'capitalRetaken':
+          toast('Capital retaken', hex(this.human));
           break;
         case 'heartPulse': {
           rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r, dur: 0.4, c: FERAL, thick: 5 });

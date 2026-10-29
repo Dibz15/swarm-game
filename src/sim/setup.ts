@@ -4,6 +4,7 @@ import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
 import { generateMap, type MapParams, type MapSpec, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapLayout, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
 import { initEvents } from './events';
 import { initHeart } from './heart';
+import { initSiege, type SiegeSetup } from './siege';
 import { TAU, dcos, dsin } from './mathx';
 import { spawnUnit, World, type HeartRule } from './world';
 
@@ -50,6 +51,8 @@ export interface MatchSetup {
   /** the Bloom's heart (campaign finale): a rooted boss; strength = nodes the Bloom ate */
   heart?: { strength: number; rule: HeartRule };
   /** a warlord's stronghold (#100): this player's capital is a walled citadel; a human taking it wins */
+  /** Hold the line (#67): the human, walled in, holds its capital against waves */
+  siege?: SiegeSetup;
   stronghold?: {
     player: number;
     /** its starting garrisons (citadel and inner nests) are this many times FORTIFY's: matched to the army you bring */
@@ -68,7 +71,7 @@ export function mapParamsOf(setup: MatchSetup, portrait = setup.portrait): MapPa
     caves: setup.caves,
     events: setup.events,
     layout: setup.layout,
-    stronghold: setup.stronghold?.player,
+    fortress: setup.stronghold?.player ?? (setup.siege ? setup.players.findIndex((p) => p.human) : undefined),
   };
 }
 
@@ -129,7 +132,8 @@ export function createWorld(setup: MatchSetup): World {
     const gk = s.player >= 0 || NEST_KIND[s.type] < 0 ? Kind.Dot : NEST_KIND[s.type];
     // A player's garrison overrides the starting army (hand-authored maps).
     // A campaign army (broods) replaces it at the player's capital.
-    const army = s.player >= 0 && w.nests[id].capital && !s.garrison ? setup.players[s.player].army : undefined;
+    // (Holding the line, your fortress's capital garrison gives way to your broods too.)
+    const army = s.player >= 0 && w.nests[id].capital && (!s.garrison || (setup.siege && setup.players[s.player].human)) ? setup.players[s.player].army : undefined;
     const kinds: { kind: number; vet: boolean }[] = army ? army.flatMap((a) => Array.from({ length: a.count }, () => ({ kind: a.kind, vet: !!a.vet }))) : [];
     const hold = setup.stronghold && s.player === setup.stronghold.player ? (setup.stronghold.scale ?? 1) : 1;
     const count = army ? kinds.length : s.player >= 0 ? Math.round((s.garrison || START_UNITS) * hold) : gk === Kind.Tank ? Math.ceil(s.garrison / 2.2) : s.garrison;
@@ -149,6 +153,7 @@ export function createWorld(setup: MatchSetup): World {
 
   initEvents(w, map.events);
   if (setup.heart) initHeart(w, setup.heart.strength, setup.heart.rule);
+  if (setup.siege) initSiege(w, setup.siege, setup.players.find((p) => p.human)?.faction ?? setup.players[0].faction);
 
   for (const p of setup.players) {
     const fs = w.factions[p.faction].stats;

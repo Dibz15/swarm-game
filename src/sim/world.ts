@@ -94,7 +94,10 @@ export type FxType =
   | 'heartWindup'
   | 'heartPulse'
   | 'heartPhase'
-  | 'heartDown';
+  | 'heartDown'
+  | 'siegeWave'
+  | 'capitalLost'
+  | 'capitalRetaken';
 
 export interface FxEvent {
   type: FxType;
@@ -151,6 +154,9 @@ export interface Swarm {
   uids: number[];
   tx: number;
   ty: number;
+  /** a siege wave (#67): it hunts this faction, whatever else is near: its capital, or (raiders) its nearest other nest */
+  hunt?: number;
+  raid?: boolean;
 }
 
 /** A Colossus walking its path; `leg` is the waypoint it heads for. */
@@ -159,6 +165,8 @@ export interface Colossus {
   path: [number, number][];
   leg: number;
   maxHp: number;
+  /** a siege Colossus (#67): at the end of its path it stays, rather than walking off */
+  stay?: boolean;
 }
 
 /** Runtime state of the map's events (schedule in `spec.params`). */
@@ -181,6 +189,33 @@ export const WILD_HEART = 3;
 
 /** How the finale ends: the heart alone, or the heart and then the rivals (Brutal). */
 export type HeartRule = 'heart' | 'heart+rivals';
+
+/** Hold the line (#67): the kinds of Bloom wave. */
+export type WaveKind = 'swarm' | 'brutes' | 'spears' | 'raiders' | 'pincer' | 'colossus';
+
+export interface Wave {
+  /** tick it arrives */
+  at: number;
+  kind: WaveKind;
+  /** units (a Colossus wave: its escort) */
+  size: number;
+  /** spawn indices (into SiegeState.spawns): two for a pincer */
+  from: number[];
+}
+
+/** Hold the line (#67): hold your capital until `until`, against a schedule of waves. */
+export interface SiegeState {
+  until: number;
+  waves: Wave[];
+  /** the next wave to come (index) */
+  next: number;
+  /** the defender and its capital nest */
+  human: number;
+  capital: number;
+  /** tick the capital fell, or -1 */
+  lostAt: number;
+  spawns: [number, number][];
+}
 
 /** The Bloom's heart and its nests (campaign finale). */
 export interface HeartState {
@@ -283,6 +318,8 @@ export class World {
   heart: HeartState | null = null;
   /** a stronghold's citadel nest (#100): a human taking it wins; -1 if none */
   citadel = -1;
+  /** Hold the line (#67), or null */
+  siege: SiegeState | null = null;
   bots: Bot[] = [];
 
   /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
@@ -301,7 +338,7 @@ export class World {
   /** no elimination or domination win (tutorial missions without an opponent) */
   endless = false;
   /** how the match ended */
-  winReason: '' | 'elimination' | 'domination' | 'heart' | 'citadel' = '';
+  winReason: '' | 'elimination' | 'domination' | 'heart' | 'citadel' | 'held' | 'fallen' = '';
   /** consecutive ticks each team has held the domination share */
   readonly domTicks = new Int32Array(NEUTRAL_TEAM + 1);
   /** per-faction unit counts sampled once a second */

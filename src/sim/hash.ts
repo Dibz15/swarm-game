@@ -36,6 +36,10 @@ export function worldHash(w: World): number {
     for (const c of w.events.colossi) mix(c.leg);
   }
   mix(w.citadel);
+  if (w.siege) {
+    mix(w.siege.next);
+    mix(w.siege.lostAt);
+  }
   if (w.heart) {
     mix(w.heart.phase);
     mix(w.heart.pulseAt);

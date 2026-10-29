@@ -2,6 +2,21 @@ import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
 import { isMobile } from './mobile';
 import { heartSlot, standingNests } from '../sim/heart';
+import { SIEGE, WAVE_KINDS } from '../sim/siege';
+import type { WaveKind } from '../sim/world';
+
+/** Seconds of upcoming waves the siege timeline shows (#67). */
+const SIEGE_SPAN = 90;
+/** Wave icons on the timeline, by kind. */
+const svg = (body: string) => `<svg viewBox="0 0 16 16" aria-hidden="true">${body}</svg>`;
+const WAVE_ICON: Record<WaveKind, string> = {
+  swarm: svg('<circle cx="5" cy="6" r="2.2"/><circle cx="11" cy="6" r="2.2"/><circle cx="8" cy="11" r="2.2"/>'),
+  brutes: svg('<path d="M8 1.5 14 4v4.2c0 3.3-2.6 5.4-6 6.3-3.4-.9-6-3-6-6.3V4z"/>'),
+  spears: svg('<path d="M2 14 11 5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M9.5 2.5H14V7z"/>'),
+  raiders: svg('<path d="M2 3l5 5-5 5zM8 3l5 5-5 5z"/>'),
+  pincer: svg('<path d="M1 8l4-4v3h6V4l4 4-4 4V9H5v3z"/>'),
+  colossus: svg('<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2.4"/><circle cx="8" cy="8" r="2"/>'),
+};
 import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, surgeCost } from '../sim/index';
 
 const TIPS = [
@@ -66,6 +81,10 @@ export class Hud {
   private dom: HTMLDivElement;
   private heartBar: HTMLDivElement;
   private warlordChip: HTMLDivElement;
+  private siege: HTMLDivElement;
+  private siegeTrack: HTMLDivElement;
+  /** one icon per scheduled wave (#67), made when the siege is first seen */
+  private waveIcons: HTMLElement[] = [];
   /** the warlord in this battle (#66), whose chip greys out once it's eliminated */
   private warlord = -1;
   private nestShare: HTMLDivElement;
@@ -107,6 +126,7 @@ export class Hud {
         <button class="icon" data-a="pause" title="Pause (Esc)">❚❚</button>
       </div>
       <div class="warlord-chip"></div>
+      <div class="siege"><div class="siege-track"><span class="siege-now"></span></div><div class="siege-clock"></div><div class="siege-lost"></div></div>
       <div class="heartbar"><div class="heart-name">The Bloom's heart</div><div class="heart-hp"><i></i></div><div class="heart-ward"></div></div>
       <div class="dom"><div class="dom-time"></div><div class="dom-text"></div><div class="dom-bar"><i></i></div></div>
       <div class="toasts"></div>
@@ -183,6 +203,8 @@ export class Hud {
     this.dom = q('.dom');
     this.heartBar = q('.heartbar');
     this.warlordChip = q('.warlord-chip');
+    this.siege = q('.siege');
+    this.siegeTrack = q('.siege-track');
     this.nestShare = q('.nestshare .segs');
     this.domMark = q('.nestshare .mark');
     this.nestCard = q('.nestcard');
@@ -286,6 +308,47 @@ export class Hud {
     this.coach.classList.add('pop');
   }
 
+  /**
+   * Holding the line (#67): the waves walk along a timeline toward its left
+   * edge, arriving when they reach it; the clock, and a countdown if the
+   * capital has fallen. Every frame, so the icons glide.
+   */
+  private updateSiege(g: GameView): void {
+    const w = g.world;
+    const sg = w.siege;
+    this.siege.style.display = sg ? 'block' : 'none';
+    this.el.classList.toggle('has-siege', !!sg);
+    if (!sg) return;
+    if (!this.waveIcons.length) {
+      this.waveIcons = sg.waves.map((wave, k) => {
+        const i = document.createElement('span');
+        i.className = `wave wave-${wave.kind}${k >= sg.waves.length / 2 ? ' late' : ''}`;
+        i.innerHTML = `${WAVE_ICON[wave.kind]}${wave.from.length > 1 ? '<b>×2</b>' : ''}`;
+        i.style.setProperty('--s', `${0.8 + Math.min(0.7, wave.size / 60)}`);
+        this.siegeTrack.appendChild(i);
+        return i;
+      });
+    }
+    const span = SIEGE_SPAN * TICK_HZ;
+    sg.waves.forEach((wave, k) => {
+      const el = this.waveIcons[k];
+      const dt = wave.at - (w.tick + g.session.alpha);
+      const show = dt >= -0.6 * TICK_HZ && dt <= span;
+      el.style.display = show ? '' : 'none';
+      if (!show) return;
+      el.style.left = `${Math.max(0, (100 * dt) / span)}%`;
+      el.classList.toggle('arrived', dt <= 0);
+      el.title = `${WAVE_KINDS[wave.kind].name} · ${wave.size}${wave.from.length > 1 ? ' (two sides)' : ''} · in ${formatTime(Math.max(0, Math.round(dt)))}`;
+    });
+    const left = Math.max(0, sg.until - w.tick);
+    const clock = this.siege.children[1] as HTMLElement;
+    const text = `Hold ${formatTime(left)}`;
+    if (clock.textContent !== text) clock.textContent = text;
+    const lost = this.siege.children[2] as HTMLElement;
+    lost.style.display = sg.lostAt >= 0 ? 'block' : 'none';
+    if (sg.lostAt >= 0) lost.textContent = `Retake your capital: ${formatTime(Math.max(0, SIEGE.retake - (w.tick - sg.lostAt)))}`;
+  }
+
   /** Show a campaign warlord (#66): its name and trait, in its colour, for the whole battle. */
   setWarlord(w: { faction: number; name: string; trait: string; text: string; citadel?: boolean } | null): void {
     this.warlord = w ? w.faction : -1;
@@ -301,6 +364,7 @@ export class Hud {
 
   update(g: GameView, dt: number): void {
     this.game = g;
+    this.updateSiege(g);
     this.tipTimer += dt;
     if (this.tipTimer > 9) {
       this.tipTimer = 0;
