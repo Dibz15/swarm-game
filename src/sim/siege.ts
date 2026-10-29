@@ -8,8 +8,9 @@ import { pushFx, spawnUnit, WILD_COLOSSUS, type BoonId, type SiegeState, type Wa
  * Hold the line (#67): you're dug in behind your own walls and must still
  * hold your capital when the clock runs out. The Bloom comes in waves of
  * different kinds on a schedule rolled up front (so the HUD can show what's
- * coming), hunting you. The field outside is the Bloom's: every nest it still
- * holds makes the waves bigger, so sallying out to take them thins the waves.
+ * coming), hunting you. The field outside is the Bloom's: waves emerge from
+ * its nests there, and every one it still holds makes them bigger, so
+ * sallying out to take them thins the waves.
  * Every other wave, you pick a boon. Lose the capital and you have
  * SIEGE.retake to win it back. Everything random is seeded. PROVISIONAL (#68).
  */
@@ -64,7 +65,7 @@ export function initSiege(w: World, s: SiegeSetup, human: number): void {
   const ev = w.events;
   const capital = w.nests.find((n) => n.capital && n.owner === human);
   if (!ev || !capital) return;
-  // Waves come from the far half of the map's swarm spawns.
+  // Waves emerge from the Bloom's nests; once those are all taken, from the far half of the map's swarm spawns.
   const spawns = [...ev.spec.swarmSpawns]
     .map((p) => ({ p, d: (p[0] - capital.x) ** 2 + (p[1] - capital.y) ** 2 }))
     .sort((a, b) => b.d - a.d)
@@ -173,18 +174,18 @@ export function takeBoon(w: World, p: number, k: number): void {
 function release(w: World, sg: SiegeState, wave: Wave): void {
   const info = WAVE_KINDS[wave.kind];
   const size = waveSize(w, wave);
-  const per = wave.from.length > 1 ? Math.ceil(size / wave.from.length) : size;
-  for (const i of wave.from) {
-    const [x, y] = sg.spawns[i];
+  const from = sources(w, sg, wave);
+  const per = Math.ceil(size / from.length);
+  from.forEach(([x, y], side) => {
     const sw = releaseSwarm(w, x, y, per, 'bloomSwarm', info.mix);
     sw.hunt = sg.human;
     sw.raid = wave.kind === 'raiders';
     steerSwarm(w, sw);
-    pushFx(w, 'siegeWave', x, y, NEUTRAL, 40, -1, sg.next - 1);
-  }
+    pushFx(w, 'siegeWave', x, y, NEUTRAL, 40, -1, sg.next - 1, side);
+  });
   if (wave.kind === 'colossus') {
     // A Colossus walks straight for your capital, and stays there.
-    const [x, y] = sg.spawns[wave.from[0]];
+    const [x, y] = from[0];
     const cap = w.nests[sg.capital];
     const s = spawnUnit(w, NEUTRAL, Kind.Colossus, x, y, cap.x, cap.y, 30);
     if (s >= 0) {
@@ -193,6 +194,27 @@ function release(w: World, sg: SiegeState, wave: Wave): void {
       pushFx(w, 'colossusSpawn', x, y, NEUTRAL, 60);
     }
   }
+}
+
+/**
+ * Where a wave comes from: one of the Bloom's nests still standing in the
+ * field (a pincer: two, as far apart as they get). Only once you have taken
+ * them all does it come in from the map's edge.
+ */
+function sources(w: World, sg: SiegeState, wave: Wave): [number, number][] {
+  const standing = sg.bloomNests.map((id) => w.nests[id]).filter((n) => n.owner === NEUTRAL);
+  if (!standing.length) return wave.from.map((i) => sg.spawns[i]);
+  const a = standing[wave.from[0] % standing.length];
+  const out: [number, number][] = [[a.x, a.y]];
+  if (wave.from.length > 1 && standing.length > 1) {
+    let b = a, best = -1;
+    for (const n of standing) {
+      const d = (n.x - a.x) ** 2 + (n.y - a.y) ** 2;
+      if (d > best) (best = d), (b = n);
+    }
+    out.push([b.x, b.y]);
+  } else if (wave.from.length > 1) out.push(sg.spawns[wave.from[1]]);
+  return out;
 }
 
 /**

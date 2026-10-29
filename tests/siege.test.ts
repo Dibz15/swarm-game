@@ -114,6 +114,26 @@ describe('holding the line', () => {
     expect(w.winReason).toBe('fallen');
   });
 
+  it('waves emerge from a Bloom nest still standing; with none left, from the map edge', () => {
+    const w = createWorld(siege(4, { ...SIEGE_SETUP, first: 2, every: 40 }));
+    const sg = w.siege!;
+    const fx: { x: number; y: number }[] = [];
+    for (let t = 0; t < sg.waves[0].at + 2; t++) {
+      step(w, []);
+      for (const e of w.fx) if (e.type === 'siegeWave') fx.push({ x: e.x, y: e.y });
+      w.fx = [];
+    }
+    expect(sg.bloomNests.some((id) => w.nests[id].x === fx[0].x && w.nests[id].y === fx[0].y)).toBe(true);
+    for (const id of sg.bloomNests) w.nests[id].owner = 0;
+    fx.length = 0;
+    for (let t = 0; t < 41 * TICK_HZ && !fx.length; t++) {
+      step(w, []);
+      for (const e of w.fx) if (e.type === 'siegeWave') fx.push({ x: e.x, y: e.y });
+      w.fx = [];
+    }
+    expect(sg.spawns.some(([x, y]) => x === fx[0].x && y === fx[0].y)).toBe(true);
+  });
+
   it('every field nest the Bloom holds makes the waves bigger', () => {
     const w = createWorld(siege());
     const sg = w.siege!;

@@ -470,10 +470,10 @@ export class GameView {
           sfx.heartWindup(e.x, e.y);
           break;
         case 'siegeWave': {
-          // e.prev: the wave's index in the schedule; pincers fire once per side.
+          // e.prev: the wave's index in the schedule; e.x0: which side (a pincer fires one per side).
           const wave = w.siege?.waves[e.prev];
           rings.add({ x: e.x, y: e.y, r0: 20, r1: 140, dur: 0.9, c: FERAL, thick: 3 });
-          if (wave && wave.from[0] === w.siege!.spawns.findIndex((p) => p[0] === e.x && p[1] === e.y)) {
+          if (wave && e.x0 === 0) {
             sfx.siegeWave();
             toast(`Wave ${e.prev + 1}: ${WAVE_KINDS[wave.kind].name}, ${waveSize(w, wave)} strong`, '#e3707a');
           }

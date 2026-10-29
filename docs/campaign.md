@@ -142,7 +142,7 @@ Each node turns into a `MatchSetup` (`src/sim/setup.ts`) plus an objective. Obje
     - Each wave hunts your capital; Raiders go for your outer nests first.
     - In a siege only, the Bloom's waves tear your nests down to neutral, though they never take them.
     - **No rival.** In the first playtest, a rival took the whole field while you held the walls.
-    - **Bloom nests:** the field's neutral nests are the Bloom's (ringed red). Each one it still holds makes every wave 14% bigger, so sallying out between waves to take them thins the waves. A nest left unowned goes back to the Bloom.
+    - **Bloom nests:** the field's neutral nests are the Bloom's (ringed red). Waves emerge from them (from the map edge once you've taken them all), and each one it still holds makes every wave 14% bigger, so sallying out between waves to take them thins the waves. A nest left unowned goes back to the Bloom.
     - **Boons:** every other wave, pick 1 of 3 within 10 s, or the first is taken for you:
       - Reinforcements: a fresh brood now;
       - Hatcheries: +20% production;
