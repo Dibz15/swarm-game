@@ -124,35 +124,46 @@ function echo(w: World, p: number, slots: number[], cx: number, cy: number): voi
 export const bloodCost = (energy: number): number => Math.ceil(energy / PACTS.bloodPerUnit);
 
 /**
- * Pay for a power: its energy, or under Blood price its units. A group power
- * pays from its own group (those nearest its middle, as Nova does), leaving
- * at least `keep`; other powers pay with p's units nearest (x, y). Returns the
- * group left to cast with, or null if p can't pay.
+ * Sacrifice n of p's units from `slots` for a power, those nearest (x, y)
+ * first. Returns the rest.
  */
-function pay(w: World, p: number, cost: number, group: number[], keep: number, x = 0, y = 0): number[] | null {
+function sacrifice(w: World, p: number, slots: number[], n: number, x: number, y: number): number[] {
+  const d2 = (s: number) => (w.x[s] - x) ** 2 + (w.y[s] - y) ** 2;
+  const order = [...slots].sort((a, b) => d2(a) - d2(b) || a - b);
+  for (let k = 0; k < n; k++) {
+    const s = order[k];
+    w.deaths.push(w.x[s], w.y[s], p);
+    w.factions[p].stats.lost++;
+    removeUnit(w, s);
+  }
+  return order.slice(n);
+}
+
+/**
+ * Pay for a power: its energy, or under Blood price its units. A group power
+ * (`group` given) needs someone in it and pays from it (those nearest its
+ * middle, as Nova does), leaving at least `keep`; other powers (`group` null)
+ * pay with p's units nearest (x, y). Returns the group left to cast with, or
+ * null if p can't cast.
+ */
+function pay(w: World, p: number, cost: number, group: number[] | null, keep: number, x = 0, y = 0): number[] | null {
+  if (group && group.length < Math.max(1, keep)) return null;
   const f = w.factions[p];
   if (!f.mods.bloodPrice) {
     if (f.energy < cost) return null;
     f.energy -= cost;
-    return group;
+    return group ?? [];
   }
   const n = bloodCost(cost);
   let from = group;
-  if (group.length) [x, y] = centroid(w, group);
+  if (from) [x, y] = centroid(w, from);
   else {
     from = [];
-    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === p && w.state[i] !== UNIT_FEEDING && !w.ghost[i]) from.push(i);
+    for (let i = 0; i < w.n; i++) if (w.owner[i] === p && inArmy(w, i)) from.push(i);
   }
   if (from.length - n < Math.max(1, keep)) return null;
-  const d2 = (s: number) => (w.x[s] - x) ** 2 + (w.y[s] - y) ** 2;
-  from = [...from].sort((a, b) => d2(a) - d2(b) || a - b);
-  for (let k = 0; k < n; k++) {
-    const s = from[k];
-    w.deaths.push(w.x[s], w.y[s], p);
-    f.stats.lost++;
-    removeUnit(w, s);
-  }
-  return group.length ? from.slice(n) : group;
+  const rest = sacrifice(w, p, from, n, x, y);
+  return group ? rest : [];
 }
 
 const POWERS = new Set<Command['t']>(['surge', 'nova', 'fortify', 'barrage', 'blink', 'lockdown']);
@@ -223,7 +234,7 @@ export function applyCommand(w: World, c: Command): void {
 
     case 'surge': {
       const slots = pay(w, c.p, surgeCost(w, c.p), resolve(w, c.p, c.units), 1);
-      if (!slots || slots.length === 0) return;
+      if (!slots) return;
       const until = w.tick + Math.round(POWER.surgeTicks * f.mods.surgeTicks);
       for (const s of slots) w.surge[s] = until;
       const [cx, cy] = centroid(w, slots);
@@ -242,23 +253,13 @@ export function applyCommand(w: World, c: Command): void {
       return;
     }
     case 'nova': {
-      const group = resolve(w, c.p, c.units);
-      if (group.length < 4) return;
-      const slots = pay(w, c.p, POWER.novaCost, group, 4);
+      const slots = pay(w, c.p, POWER.novaCost, resolve(w, c.p, c.units), 4);
       if (!slots) return;
       const [cx, cy] = centroid(w, slots);
       const R = novaRadius(slots.length, f.mods.novaRadius);
 
       // Sacrifice the units closest to the center.
-      const d2 = (s: number) => (w.x[s] - cx) ** 2 + (w.y[s] - cy) ** 2;
-      slots.sort((a, b) => d2(a) - d2(b) || a - b);
-      const k = Math.max(2, Math.floor(slots.length * POWER.novaSacrifice));
-      for (let i = 0; i < k; i++) {
-        const s = slots[i];
-        w.deaths.push(w.x[s], w.y[s], w.owner[s]);
-        f.stats.lost++;
-        removeUnit(w, s);
-      }
+      sacrifice(w, c.p, slots, Math.max(2, Math.floor(slots.length * POWER.novaSacrifice)), cx, cy);
 
       queryRadius(w, cx, cy, R, scratch);
       for (const j of scratch) {
@@ -281,7 +282,7 @@ export function applyCommand(w: World, c: Command): void {
     case 'fortify': {
       if (!hasPower(w, c.p, 'fortify')) return;
       const slots = pay(w, c.p, POWER.fortifyCost, resolve(w, c.p, c.units), 1);
-      if (!slots || slots.length === 0) return;
+      if (!slots) return;
       const until = w.tick + Math.round(POWER.fortifyTicks * powerBoost(w, c.p, 'fortify'));
       for (const s of slots) w.fortify[s] = until;
       const [cx, cy] = centroid(w, slots);
@@ -293,7 +294,7 @@ export function applyCommand(w: World, c: Command): void {
       if (!hasPower(w, c.p, 'barrage')) return;
       const x = clamp(c.x, 0, w.width), y = clamp(c.y, 0, w.height);
       const from = barrageLaunch(w, c.p, x, y);
-      if (!from || !pay(w, c.p, POWER.barrageCost, [], 1, from.x, from.y)) return;
+      if (!from || !pay(w, c.p, POWER.barrageCost, null, 1, from.x, from.y)) return;
       const r = POWER.barrageRadius * powerBoost(w, c.p, 'barrage');
       const impact = w.tick + barrageFlight(x - from.x, y - from.y);
       if (f.mods.cluster) {
@@ -318,7 +319,7 @@ export function applyCommand(w: World, c: Command): void {
     case 'blink': {
       if (!hasPower(w, c.p, 'blink')) return;
       const slots = pay(w, c.p, POWER.blinkCost, resolve(w, c.p, c.units), 1);
-      if (!slots || slots.length === 0) return;
+      if (!slots) return;
       const [cx, cy] = centroid(w, slots);
       let dx = c.x - cx, dy = c.y - cy;
       const d = Math.sqrt(dx * dx + dy * dy);
@@ -350,7 +351,7 @@ export function applyCommand(w: World, c: Command): void {
       if (!hasPower(w, c.p, 'lockdown')) return;
       const n = w.nests[c.nest];
       if (!n || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, c.p)) return;
-      if (!pay(w, c.p, POWER.lockdownCost, [], 1, n.x, n.y)) return;
+      if (!pay(w, c.p, POWER.lockdownCost, null, 1, n.x, n.y)) return;
       n.lockedUntil = w.tick + Math.round(POWER.lockdownTicks * powerBoost(w, c.p, 'lockdown') * f.mods.lockdownTicks);
       n.lockedBy = c.p;
       pushFx(w, 'lockdown', n.x, n.y, c.p, n.r, n.id, n.owner);

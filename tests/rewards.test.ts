@@ -637,6 +637,18 @@ describe('rewards change the sim (#64)', () => {
     expect(worldHash(a)).toBe(worldHash(b));
   });
 
+  it('a power ordered for units that are gone costs nothing, in energy or (Blood price) in units', () => {
+    for (const reward of [undefined, 'blood-price']) {
+      const w = arena(reward);
+      w.factions[0].energy = 100;
+      for (let k = 0; k < 8; k++) put(w, 0, Kind.Dot, 800 + k * 3, 800);
+      w.grid.build(w);
+      applyCommand(w, { t: 'surge', p: 0, units: [999999] } as never);
+      expect(w.factions[0].energy).toBe(100);
+      expect(w.unitCount[0]).toBe(8);
+    }
+  });
+
   it('a match with every behaviour reward is deterministic', () => {
     const mods = modsOf('swarm-call');
     for (const id of ['spikes', 'phalanx', 'piercing', 'skirmish', 'arsonist', 'scorch', 'implode', 'mend', 'echo', 'thorns', 'siphon', 'drops', 'old-blood', 'blood-price', 'scorched-earth']) REWARD[id].apply(mods);
