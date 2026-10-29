@@ -18,6 +18,8 @@ import { EROSION, EROSION_FLOOR, TRAITS, type TraitId, type Warlord } from './wa
  * battle (the run probe saw 11-15% of Normal × 2 battles hit its 15-minute cap).
  */
 export const CONQUEST_SHARE = 0.8;
+/** A warlord's production in its own stronghold (#100): it starts with three nests, not one. */
+export const STRONGHOLD_PROD = 0.7;
 /** Domination nodes: hold half the nests (the usual share is 0.6-0.7). */
 const DOMINATION_SHARE = 0.5;
 
@@ -74,7 +76,9 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
         const plain: PlayerSetup = { faction, team: i + 1, human: false, bot: { difficulty: n.difficulty, personality } };
         if (!lord) return plain;
         const p = warlordPlayer(run, lord, plain);
-        return hold ? { ...p, bot: { ...p.bot!, citadel: true } } : p;
+        // In its stronghold, the warlord turtles whatever its usual temper.
+        // Its three nests from the start would out-produce you: it spawns slower there.
+        return hold ? { ...p, prod: p.prod! * STRONGHOLD_PROD, bot: { ...p.bot!, personality: 'turtler', citadel: true } } : p;
       }),
     ],
   };

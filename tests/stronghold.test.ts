@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { nodeSetup } from '../src/campaign/battle';
 import { PLAYTEST, PLAYTESTS } from '../src/campaign/playtest';
 import { newRun, type RunState } from '../src/campaign/run';
-import { TICK_HZ } from '../src/sim/constants';
+import { NestType, TICK_HZ } from '../src/sim/constants';
 import { FORTIFY } from '../src/sim/fortify';
 import { resolveDamage } from '../src/sim/combat';
 import { worldHash } from '../src/sim/hash';
@@ -15,7 +15,7 @@ import { Proxy } from '../src/proxy/proxy';
 const SIZES: MapSize[] = ['small', 'medium', 'large'];
 
 describe('a fortified map', () => {
-  it('walls the warlord in: a citadel, two guarded neutral nests inside, and gates every capital can walk through', () => {
+  it('walls the warlord in: a citadel, a Bastion and one more nest of its own inside, and gates every capital can walk through', () => {
     for (const size of SIZES)
       for (let seed = 0; seed < 8; seed++) {
         const base = generateMap({ seed, size, players: 3, terrain: 'standard' });
@@ -23,10 +23,10 @@ describe('a fortified map', () => {
         const citadel = m.nests.find((n) => n.player === 1 && n.capital !== false)!;
         expect(citadel.level).toBe(FORTIFY.citadelLevel);
         expect(citadel.garrison).toBe(FORTIFY.citadelGarrison);
-        // The inside: two guarded neutral nests (owned ones snowballed the warlord).
-        const inside = m.nests.filter((n) => n.player < 0 && (n.x - citadel.x) ** 2 + (n.y - citadel.y) ** 2 < FORTIFY.ringR[size] ** 2);
-        expect(inside.length).toBeGreaterThanOrEqual(2);
-        expect(m.nests.filter((n) => n.player === 1)).toHaveLength(1);
+        const works = m.nests.filter((n) => n.player === 1 && n.capital === false);
+        expect(works).toHaveLength(2);
+        expect(works.map((n) => n.type)).toContain(NestType.Bastion);
+        for (const n of works) expect((n.x - citadel.x) ** 2 + (n.y - citadel.y) ** 2).toBeLessThan(FORTIFY.ringR[size] ** 2);
         expect(m.terrain.walls.length).toBeGreaterThan(0);
         const t = new Terrain(m.terrain, m.width, m.height);
         for (const c of m.nests.filter((n) => n.player >= 0 && n.player !== 1 && n.capital !== false)) {
@@ -34,7 +34,7 @@ describe('a fortified map', () => {
         }
         // The rest of the map is the map it would have been.
         for (const n of m.nests) {
-          if (n.player === 1 || n.garrison === FORTIFY.worksGarrison) continue;
+          if (n.player === 1) continue;
           expect(base.nests.some((b) => b.x === n.x && b.y === n.y && b.type === n.type)).toBe(true);
         }
       }
@@ -112,6 +112,9 @@ describe('stronghold nodes', () => {
     expect(s.stronghold).toEqual({ player: 1 });
     expect(s.caves).toBe('off');
     expect(s.players[1].bot!.citadel).toBe(true);
+    // It turtles there, and its three nests from the start cost it production.
+    expect(s.players[1].bot!.personality).toBe('turtler');
+    expect(s.players[1].prod).toBeLessThan(nodeSetup(run, run.warlords![0].nodes[1] ?? id, false).players[1].prod ?? 2);
     for (const other of run.warlords![0].nodes.slice(1)) {
       const o = nodeSetup(run, other, false);
       expect(o.stronghold).toBeUndefined();

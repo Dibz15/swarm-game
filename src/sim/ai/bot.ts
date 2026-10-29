@@ -99,8 +99,16 @@ const NOVA_RESERVE = { minArmy: 30, energy: 25 };
 
 /** Breaking a rival's domination. */
 const DOM_BOT = { value: 3, margin: 1.05 };
-/** A warlord's citadel (#100): the share of its army kept there, how close counts as there, and how hard and from how far it's defended. */
-const CITADEL_BOT = { reserve: 0.15, near: 150, defend: 1.2, reach: 700 };
+/** A warlord's citadel (#100): the share of its army kept there, how close counts as there, how hard and from how far it's defended. */
+const CITADEL_BOT = {
+  reserve: 0.15,
+  near: 150,
+  defend: 1.2,
+  reach: 700,
+  /** it turtles: nests further than `home` from the citadel are worth this share */
+  home: 520,
+  far: 0.35,
+};
 
 /** At (near) the supply cap: reserve share, attack margin and nest value multipliers. */
 const SUPPLY_BOT = { near: 0.92, reserve: 0.4, margin: 0.85, value: 1.3 };
@@ -498,6 +506,8 @@ export class Bot {
       }
       const def = hostile[n.id];
       let value = n.type === NestType.Bastion ? 0.95 * this.p.bastion : n.type === NestType.Hive ? 1 : 1.1;
+      // A warlord in its stronghold stays near its walls instead of racing for the map.
+      if (cit && (n.x - cit.x) ** 2 + (n.y - cit.y) ** 2 > CITADEL_BOT.home ** 2) value *= CITADEL_BOT.far;
       value *= 0.6 + 0.4 * n.level;
       value *= counterBonus[n.type];
       let margin = this.d.margin * this.p.margin * (capped ? SUPPLY_BOT.margin : 1);

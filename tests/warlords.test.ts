@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nodeSetup, rivals, warlordOf } from '../src/campaign/battle';
+import { STRONGHOLD_PROD, nodeSetup, rivals, warlordOf } from '../src/campaign/battle';
 import { biomassFor, type BattleReport } from '../src/campaign/broods';
 import { modsFor } from '../src/campaign/rewards';
 import { finaleWarlords, newRun, resolveTurn, warlordAt, type RunState } from '../src/campaign/run';
@@ -70,7 +70,10 @@ describe('domain battles', () => {
     const setup = nodeSetup(run, w.stronghold, false);
     const lord = setup.players[1];
     expect(lord.faction).toBe(w.faction);
-    expect(lord.bot!.personality).toBe(w.personality);
+    // In its own stronghold it turtles (#100); elsewhere it keeps its temper.
+    expect(lord.bot!.personality).toBe('turtler');
+    const other = w.nodes.find((id) => id !== w.stronghold);
+    if (other !== undefined) expect(nodeSetup(run, other, false).players[1].bot!.personality).toBe(w.personality);
     expect(lord.mods!.kind[Kind.Tank].hp).toBeCloseTo(1.5);
     expect(setup.players.filter((p) => p.faction === w.faction)).toHaveLength(1);
     expect(warlordOf(run, w.stronghold)!.name).toBe(w.name);
@@ -81,7 +84,7 @@ describe('domain battles', () => {
     const [run, w] = withTrait('swarmlord');
     const lord = nodeSetup(run, w.stronghold, false).players[1];
     expect(lord.bot!.powers).toBe(false);
-    expect(lord.prod).toBeCloseTo((DIFFICULTY[lord.bot!.difficulty].prod ?? 1) * 1.25);
+    expect(lord.prod).toBeCloseTo((DIFFICULTY[lord.bot!.difficulty].prod ?? 1) * 1.25 * STRONGHOLD_PROD);
   });
 
   it('the Bloom eating its domain weakens it; eating the stronghold ends it', () => {
