@@ -7,9 +7,9 @@ import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
-import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
+import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
 import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, surgeCost } from '../sim/commands';
-import type { Nest, World } from '../sim/world';
+import { inArmy, type Nest, type World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
 import { LocalSession } from './session';
@@ -611,7 +611,7 @@ export class GameView {
     const w = this.world;
     const out: number[] = [];
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.owner[i] !== this.human || w.state[i] === UNIT_FEEDING || w.ghost[i]) continue;
+      if (w.owner[i] !== this.human || !inArmy(w, i)) continue;
       if (test(w.x[i], w.y[i])) out.push(w.uid[i]);
     }
     return out;
@@ -733,7 +733,7 @@ export class GameView {
     const w = this.world;
     const units: number[] = [];
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.owner[i] !== this.human || w.kind[i] !== kind || w.state[i] === UNIT_FEEDING || w.ghost[i]) continue;
+      if (w.owner[i] !== this.human || w.kind[i] !== kind || !inArmy(w, i)) continue;
       if (w.x[i] >= x0 && w.x[i] <= x1 && w.y[i] >= y0 && w.y[i] <= y1) units.push(w.uid[i]);
     }
     if (!units.length) return;

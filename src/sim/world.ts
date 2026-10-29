@@ -330,6 +330,8 @@ export class World {
   readonly called = new Int32Array(MAX_UNITS);
   /** Echo (#60): a ghost's expiry tick, or 0 for a real unit */
   readonly ghost = new Int32Array(MAX_UNITS);
+  /** Echo ghosts alive (most matches have none) */
+  ghosts = 0;
   /** Phalanx (#60): nearby friendly Shields last tick */
   readonly guard = new Uint8Array(MAX_UNITS);
   /** spawned by a level-3 nest: extra HP */
@@ -477,6 +479,14 @@ export function maxHp(w: World, i: number): number {
   return UNIT_STATS[k].hp * w.factions[w.owner[i]].mods.kind[k].hp * (w.vet[i] ? LEVEL.veteranHp : 1);
 }
 
+/**
+ * A unit that takes orders and counts as army: alive, not walking off to feed
+ * a nest, and not one of Echo's ghosts (#60).
+ */
+export function inArmy(w: World, i: number): boolean {
+  return w.alive[i] === 1 && w.state[i] !== UNIT_FEEDING && !w.ghost[i];
+}
+
 export function removeUnit(w: World, i: number): void {
   if (!w.alive[i]) return;
   if (w.state[i] === UNIT_FEEDING) {
@@ -489,7 +499,8 @@ export function removeUnit(w: World, i: number): void {
   w.free.push(i);
   w.count--;
   // Ghosts never counted toward the army (supply, elimination).
-  if (!w.ghost[i]) w.unitCount[w.owner[i]]--;
+  if (w.ghost[i]) w.ghosts--;
+  else w.unitCount[w.owner[i]]--;
 }
 
 export function pushFx(

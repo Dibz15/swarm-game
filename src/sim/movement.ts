@@ -68,7 +68,10 @@ export function updateMovement(w: World): void {
     const fortified = w.fortify[i] > w.tick;
     const surged = w.surge[i] > w.tick;
     // Mend: a Surge heals instead of speeding them up.
-    if (surged && fm.mend) w.hp[i] = Math.min(maxHp(w, i), w.hp[i] + (maxHp(w, i) * VARIANTS.mend.heal) / (POWER.surgeTicks * fm.surgeTicks));
+    if (surged && fm.mend) {
+      const max = maxHp(w, i);
+      w.hp[i] = Math.min(max, w.hp[i] + (max * VARIANTS.mend.heal) / (POWER.surgeTicks * fm.surgeTicks));
+    }
     let spd =
       st.speed * fm.kind[w.kind[i]].speed * (surged && !fm.mend ? POWER.surgeSpeed : 1) * (fortified ? (fm.fortifyRoot ? 0 : POWER.fortifySlow) : 1);
     if (w.called[i] > w.tick) spd *= STRAINS.call.speed;
@@ -195,7 +198,7 @@ export function updateMovement(w: World): void {
           if (j === i || !w.alive[j]) continue;
           const ddx = x - w.x[j], ddy = y - w.y[j];
           const dd = ddx * ddx + ddy * ddy;
-          if ((isDot || isTank) && dd < near2 && w.owner[j] === me && w.kind[j] === kind) pack++;
+          if ((isDot || isTank) && dd < near2 && w.owner[j] === me && w.kind[j] === kind && !w.ghost[j]) pack++;
           if (dd < sep2) {
             if (dd > 1e-6) {
               const d = Math.sqrt(dd);

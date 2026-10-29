@@ -23,7 +23,7 @@ import { barrageLaunch, feedNeed, hasPower, surgeCost, type Command } from '../s
 import { LEVEL, MAX_LEVEL, NEUTRAL, NestType, POWER, TICK_HZ, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, bastionTurret } from '../sim/constants';
 import { heartSlot, standingNests } from '../sim/heart';
 import { queryRadius } from '../sim/spatial';
-import { UNIT_FEEDING, type Nest, type World } from '../sim/world';
+import { inArmy, type Nest, type World } from '../sim/world';
 
 /** `goal` while assaulting the Bloom's heart (not a nest id) */
 const HEART_GOAL = -2;
@@ -218,7 +218,7 @@ export class Proxy {
     const weight = new Float64Array(w.factions.length);
     let cx = 0, cy = 0;
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.state[i] === UNIT_FEEDING) continue;
+      if (!inArmy(w, i)) continue;
       const o = w.owner[i];
       weight[o] += UNIT_STATS[w.kind[i]].weight;
       if (o !== me) continue;
@@ -479,7 +479,7 @@ export class Proxy {
     const flush = e >= this.k.dumpAt;
     if (center < 0 || most < (flush ? 3 : 6)) return;
     queryRadius(w, w.x[center], w.y[center], 90, scratch);
-    const own = scratch.filter((s) => w.owner[s] === me && w.state[s] !== UNIT_FEEDING).map((s) => w.uid[s]);
+    const own = scratch.filter((s) => w.owner[s] === me && inArmy(w, s)).map((s) => w.uid[s]);
     let ex = 0, ey = 0, ne = 0;
     for (const s of scratch) {
       if (!w.hostile(w.owner[s], me)) continue;

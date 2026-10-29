@@ -141,13 +141,15 @@ function updateBurns(w: World): void {
 
 /** Echo (#60): ghosts fade when their time is up. */
 function expireGhosts(w: World): void {
+  if (w.ghosts === 0) return;
   for (let i = 0; i < w.n; i++) if (w.alive[i] && w.ghost[i] && w.ghost[i] <= w.tick) removeUnit(w, i);
 }
 
 /** Lockdown Siphon (#60): a locked nest's owner bleeds energy to whoever locked it. */
 function siphon(w: World): void {
   for (const n of w.nests) {
-    if (n.lockedUntil <= w.tick || n.lockedBy === undefined || n.lockedBy < 0 || n.owner < 0 || n.owner === NEUTRAL) continue;
+    // Only while an enemy holds it: a nest that changed hands to the caster's side stops paying.
+    if (n.lockedUntil <= w.tick || n.lockedBy === undefined || n.lockedBy < 0 || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, n.lockedBy)) continue;
     const to = w.factions[n.lockedBy], from = w.factions[n.owner];
     if (!to.mods.siphon) continue;
     const take = Math.min(from.energy, to.mods.siphon * DT);

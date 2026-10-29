@@ -2,7 +2,7 @@ import { Kind, LEVEL, MAX_LEVEL, NEUTRAL, POWER, POWER_NEST, UNIT_STATS, UPGRADE
 import { clamp } from './mathx';
 import { takeBoon } from './siege';
 import { queryRadius } from './spatial';
-import { pushFx, removeUnit, spawnUnit, UNIT_FEEDING, type Nest, type World } from './world';
+import { inArmy, pushFx, removeUnit, spawnUnit, UNIT_FEEDING, type Nest, type World } from './world';
 
 /**
  * Everything a player (human, bot, or later a remote peer) can do.
@@ -72,7 +72,7 @@ function resolve(w: World, p: number, uids: number[]): number[] {
   const out: number[] = [];
   for (const u of uids) {
     const s = w.uidToSlot.get(u);
-    if (s === undefined || !w.alive[s] || w.owner[s] !== p || w.state[s] === UNIT_FEEDING || w.ghost[s]) continue;
+    if (s === undefined || w.owner[s] !== p || !inArmy(w, s)) continue;
     out.push(s);
   }
   return out;
@@ -115,6 +115,7 @@ function echo(w: World, p: number, slots: number[], cx: number, cy: number): voi
     w.ghost[g] = w.tick + E.ticks;
     w.hp[g] = E.hp;
     w.unitCount[p]--;
+    w.ghosts++;
   }
 }
 
@@ -163,7 +164,7 @@ export function applyCommand(w: World, c: Command): void {
       queryRadius(w, n.x, n.y, UPGRADE_PICK_RADIUS, scratch);
       const cand: number[] = [];
       for (const s of scratch) {
-        if (w.owner[s] === c.p && w.state[s] !== UNIT_FEEDING) cand.push(s);
+        if (w.owner[s] === c.p && inArmy(w, s)) cand.push(s);
       }
       if (cand.length < need) {
         pushFx(w, 'upgradeFail', n.x, n.y, c.p, need - cand.length, n.id);

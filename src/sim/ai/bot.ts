@@ -4,7 +4,7 @@ import { Rng } from '../rng';
 import { nestMouths, type Mouth } from './chokes';
 import { supplyCap } from '../nests';
 import { queryRadius } from '../spatial';
-import { UNIT_FEEDING, WILD_COLOSSUS, type Nest, type World } from '../world';
+import { inArmy, UNIT_FEEDING, WILD_COLOSSUS, type Nest, type World } from '../world';
 
 export type Personality = 'rusher' | 'turtler' | 'expander' | 'opportunist';
 export const PERSONALITIES: readonly Personality[] = ['rusher', 'turtler', 'expander', 'opportunist'];
@@ -252,7 +252,7 @@ export class Bot {
       queryRadius(w, b.x, b.y, b.r + 8, scratch);
       const groups: number[][] = [[], [], [], []];
       for (const s of scratch) {
-        if (w.owner[s] !== me || w.state[s] === UNIT_FEEDING) continue;
+        if (w.owner[s] !== me || !inArmy(w, s)) continue;
         groups[(w.x[s] >= b.x ? 1 : 0) + (w.y[s] >= b.y ? 2 : 0)].push(s);
       }
       for (const g of groups) {
@@ -763,7 +763,7 @@ export class Bot {
       const slots: number[] = [];
       for (const u of st.uids) {
         const s = w.uidToSlot.get(u);
-        if (s !== undefined && w.alive[s] && w.owner[s] === me && !used.has(s) && w.state[s] !== UNIT_FEEDING) slots.push(s);
+        if (s !== undefined && w.owner[s] === me && !used.has(s) && inArmy(w, s)) slots.push(s);
       }
       if ((target.owner >= 0 && w.teamOf[target.owner] === w.teamOf[me]) || slots.length < st.size * CHOKE_BOT.minLeft) continue;
       let near = 0;
@@ -837,7 +837,7 @@ export class Bot {
     }
     if (bestC < 0) return;
     queryRadius(w, w.x[bestC], w.y[bestC], 75, scratch);
-    const own = scratch.filter((s) => w.owner[s] === me && w.state[s] !== UNIT_FEEDING);
+    const own = scratch.filter((s) => w.owner[s] === me && inArmy(w, s));
     const uids = own.map((s) => w.uid[s]);
     // Where are the two sides in this fight?
     let ox = 0, oy = 0;

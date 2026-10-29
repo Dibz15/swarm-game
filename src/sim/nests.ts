@@ -21,7 +21,7 @@ import {
 } from './constants';
 import { TAU, dcos, dpow, dsin } from './mathx';
 import { queryRadius } from './spatial';
-import { pushFx, spawnUnit, UNIT_FEEDING, type Nest, type World } from './world';
+import { inArmy, pushFx, spawnUnit, type Nest, type World } from './world';
 
 const scratch: number[] = [];
 const counts = new Float64Array(NUM_FACTIONS);
@@ -116,7 +116,7 @@ function updateControl(w: World, n: Nest): void {
   queryRadius(w, n.x, n.y, n.r, scratch);
   raiders.fill(0);
   for (const s of scratch) {
-    if (w.state[s] === UNIT_FEEDING || w.ghost[s]) continue;
+    if (!inArmy(w, s)) continue;
     // Swifts are raiders: they capture and drain nests several times faster.
     const o = w.owner[s];
     if (w.kind[s] === Kind.Swift) {
