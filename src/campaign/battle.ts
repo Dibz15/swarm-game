@@ -1,5 +1,7 @@
 import { creature, type Creature } from '../art/creature';
-import { PERSONALITIES, type Personality } from '../sim/ai/bot';
+import { DIFFICULTY, PERSONALITIES, type Personality } from '../sim/ai/bot';
+import type { PlayerSetup } from '../sim/setup';
+import { defaultMods } from '../sim/mods';
 import type { EventParams } from '../sim/mapgen';
 import { Rng, hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
@@ -7,7 +9,8 @@ import { TICK_HZ } from '../sim/constants';
 import type { World } from '../sim/world';
 import { MILITIA, fighters, veteran, type BattleReport } from './broods';
 import { modsFor } from './rewards';
-import { RUN_DIFFICULTY, bloomStrength, difficultyOf, maxFielded, pressure, type RunState } from './run';
+import { RUN_DIFFICULTY, bloomStrength, difficultyOf, erosion, finaleWarlords, maxFielded, pressure, warlordFighting, type RunState } from './run';
+import { EROSION, EROSION_FLOOR, TRAITS, type Warlord } from './warlords';
 
 /**
  * Conquest is won by wiping out every rival, or by holding this share of the
@@ -36,6 +39,9 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     [others[i], others[j]] = [others[j], others[i]];
   }
   const finale = n.kind === 'finale';
+  // Warlords take the first rival slots: the domain's own, or those bordering the heart.
+  const lords = (finale ? finaleWarlords(run) : [warlordFighting(run, id)]).filter((w): w is Warlord => !!w).slice(0, n.rivals);
+  const factions = [...lords.map((w) => w.faction), ...others.filter((c) => !lords.some((w) => w.faction === c))];
   const events = bloomEvents(finale ? 1 : pressure(run, id), bloomStrength(run));
   return {
     seed: n.seed,
@@ -57,30 +63,56 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
         nestTypes: run.unlocks.nests,
         mods: modsFor(run.perks, fighters(run.broods, fielded, maxFielded(run))),
       },
-      ...others.slice(0, n.rivals).map((faction, i) => ({
-        faction,
-        team: i + 1,
-        human: false,
-        bot: { difficulty: n.difficulty, personality: rng.pick(PERSONALITIES) },
-      })),
+      ...factions.slice(0, n.rivals).map((faction, i): PlayerSetup => {
+        const personality = rng.pick(PERSONALITIES);
+        const lord = lords[i];
+        const plain: PlayerSetup = { faction, team: i + 1, human: false, bot: { difficulty: n.difficulty, personality } };
+        return lord ? warlordPlayer(run, lord, plain) : plain;
+      }),
     ],
   };
+}
+
+/** A rival slot as the warlord: its trait in mods (and production, and powers), its personality, weakened by erosion. */
+function warlordPlayer(run: RunState, w: Warlord, slot: PlayerSetup): PlayerSetup {
+  const t = TRAITS[w.trait];
+  const mods = defaultMods();
+  t.apply(mods);
+  const d = slot.bot!.difficulty;
+  const prod = (DIFFICULTY[d]?.prod ?? 1) * (t.prod ?? 1) * Math.max(EROSION_FLOOR, 1 - EROSION * erosion(run, w));
+  return { ...slot, mods, prod, bot: { difficulty: d, personality: w.personality, ...(t.noPowers ? { powers: false as const } : {}) } };
+}
+
+/** The warlord a node's battle announces (none outside domains; the finale's first). */
+export function warlordOf(run: RunState, id: number): { faction: number; name: string; trait: string; text: string; weakened: number } | null {
+  const w = run.nodes[id].kind === 'finale' ? finaleWarlords(run)[0] : warlordFighting(run, id);
+  if (!w) return null;
+  const t = TRAITS[w.trait];
+  return { faction: w.faction, name: w.name, trait: t.name, text: t.text, weakened: erosion(run, w) };
 }
 
 export interface Rival {
   faction: number;
   personality: Personality;
   creature: Creature;
+  /** this rival is a warlord */
+  warlord?: Warlord;
 }
 
 /** A node's rivals as the battle will field them, each with its creature portrait (#72). */
 export function rivals(run: RunState, id: number): Rival[] {
   const n = run.nodes[id];
+  const lords = n.kind === 'finale' ? finaleWarlords(run) : [warlordFighting(run, id)].filter((w): w is Warlord => !!w);
   return nodeSetup(run, id, false)
     .players.filter((p) => p.bot)
     .map((p, i) => {
       const personality = p.bot!.personality;
-      return { faction: p.faction, personality, creature: creature(hashString(`rival:${n.seed}:${i}`), p.faction, { temper: personality, tier: n.difficulty }) };
+      const warlord = lords.find((w) => w.faction === p.faction);
+      // A warlord keeps one face all run.
+      const art = warlord
+        ? creature(hashString(`warlord:${run.seed}:${warlord.id}`), p.faction, { temper: personality, tier: 3 })
+        : creature(hashString(`rival:${n.seed}:${i}`), p.faction, { temper: personality, tier: n.difficulty });
+      return { faction: p.faction, personality, creature: art, warlord };
     });
 }
 

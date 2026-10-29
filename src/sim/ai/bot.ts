@@ -17,6 +17,8 @@ export interface BotConfig {
   passive?: boolean;
   /** override the difficulty's choke odds (A/B probes) */
   choke?: number;
+  /** false: never casts powers, whatever the difficulty (campaign Swarmlord) */
+  powers?: false;
 }
 
 interface DifficultyKnobs {
@@ -200,7 +202,8 @@ export class Bot {
     this.faction = faction;
     this.cfg = cfg;
     this.rng = new Rng((seed ^ Math.imul(faction + 1, 0x9e3779b1)) >>> 0);
-    this.d = DIFFICULTY[cfg.difficulty] ?? DIFFICULTY[1];
+    const d = DIFFICULTY[cfg.difficulty] ?? DIFFICULTY[1];
+    this.d = cfg.powers === false ? { ...d, powers: false } : d;
     this.p = PERSONALITY[cfg.personality];
     this.choke = cfg.choke ?? this.d.choke;
   }

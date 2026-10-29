@@ -62,6 +62,34 @@ They are deliberately separate, and each has one job.
 - **The Bloom erodes domains:** each swallowed domain node weakens the warlord, and if the stronghold is swallowed, the warlord is gone. "Let the Bloom deal with that warlord" is a real choice, at the price of a stronger finale.
 - **Warlords don't move.** There is no map AI.
 
+**Warlords as built** (#66, `src/campaign/warlords.ts`). Every number is provisional until #68.
+- **Placement:**
+  - 2–4 strongholds, at least 3 hops apart, in the middle of the map (never the start, the finale or the checkpoint).
+  - Each has 1–3 linked neighbours as its domain.
+  - Placement uses its own seeded stream, so the rest of the map is the same as without warlords.
+- **Domain battles:** the warlord takes the first rival slot and fights with its trait and a fixed personality. The other rivals stay plain bots.
+- **Strongholds and rewards:**
+  - Strongholds are one bot level harder, within the run difficulty's rules.
+  - Biomass: ×1.3 in a domain, ×2 at the stronghold.
+  - Rescue odds rise to 50% in a domain.
+  - Offers after a win weigh rares 20% in a domain and 40% at the stronghold (10% elsewhere).
+- **Erosion:** each domain node the Bloom swallows costs the warlord 10% of its production, down to 50%. If the Bloom swallows the stronghold, the warlord is gone.
+- **Breaking:** taking the stronghold breaks the domain, and its other nodes become ordinary. You also get the warlord's **trophy**, a run perk worth about half its trait.
+- **Finale:** living warlords with a domain node next to the heart take the finale's rival slots.
+- **Readability:**
+  - On the map, domains are washed in the warlord's colour and strongholds are crowned.
+  - The node card names the warlord, its trait and its erosion.
+  - In battle, a sting and a toast play, and a HUD chip shows the warlord until it's eliminated.
+
+| Trait | In battle | Trophy |
+|---|---|---|
+| Ironhide | Shields +50% HP | Shields +25% HP |
+| Swarmlord | spawns 25% faster, no powers | +1 supply per nest |
+| Raider-king | Raiders capture +50%, run +15% | Raiders capture +25% |
+| Longspine | Spears reach +20% | Spears reach +10% |
+| Stormcaller | energy +40% | energy +20% |
+| Broodmother | capital +1 level, +2 supply per nest | capital +1 level |
+
 ## Battles
 Each node turns into a `MatchSetup` (`src/sim/setup.ts`) plus an objective. Objectives are checked inside the sim, so battles stay deterministic and testable headless.
 

@@ -1,6 +1,6 @@
 import './style.css';
 import { AudioEngine } from './audio/engine';
-import { FACTION_RGB } from './content/factions';
+import { FACTION_HEX, FACTION_RGB } from './content/factions';
 import { GameView, type Services } from './game/gameView';
 import type { EndReason } from './game/recording';
 import { recordingEnabled, saveRecording } from './game/recordStore';
@@ -17,7 +17,7 @@ import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
 import { mapBloom, needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
 import type { BattleReport } from './campaign/broods';
-import { battleReport, nodeSetup } from './campaign/battle';
+import { battleReport, nodeSetup, warlordOf } from './campaign/battle';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
 import { rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
 import { DemoOverlay } from './ui/demo';
@@ -288,6 +288,13 @@ class App {
     this.startGame(nodeSetup(run, id, window.innerHeight > window.innerWidth * 1.15, fielded), { scenario: `campaign: ${node.kind}` });
     this.run = { state: run, node: id, fielded };
     if (!run.unlocks.nova) this.game!.lock('nova', 'Unlock Nova at the camp');
+    // A warlord's ground (#66): its sting, and its trait announced and kept on screen.
+    const lord = warlordOf(run, id);
+    if (lord) {
+      this.hud?.setWarlord(lord);
+      this.hud?.toast(`♛ ${lord.name}: ${lord.text}`, FACTION_HEX[lord.faction]);
+      this.sfx.warlordSting(lord.faction);
+    }
   }
 
   /** How the battle ended for the run: survivors by kind, nests held, time. */
@@ -308,6 +315,7 @@ class App {
       else if (e.what === 'wounded') s.broodWounded();
       else if (e.what === 'rescued') s.broodRescued();
     }
+    if (res.warlords.some((w) => w.what === 'broken')) s.domainBroken();
     if (res.checkpoint === 'reached') s.checkpointReached();
     if (res.checkpoint === 'restored') s.checkpointRestart();
   }

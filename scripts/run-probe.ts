@@ -9,7 +9,7 @@
 import { battleReport, nodeSetup } from '../src/campaign/battle';
 import { COST, KIND_NEST, UNLOCKS, fit, type PackId, type Unlock } from '../src/campaign/broods';
 import { REWARD, STRAIN_SLOTS, TIER_WEIGHT } from '../src/campaign/rewards';
-import { type RunDifficulty, grow, heal, hops, maxFielded, moves, needsBattle, newRun, resolveTurn, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
+import { type RunDifficulty, grow, heal, hops, maxFielded, moves, needsBattle, newRun, resolveTurn, takeReward, unlock, unlockCost, unlocked, warlordFighting, type RunState } from '../src/campaign/run';
 import { TICK_HZ } from '../src/sim/constants';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -116,11 +116,14 @@ const rewards: Record<string, number> = {};
 const bought: Record<string, number> = {};
 let deaths = 0, rescues = 0;
 const t0 = performance.now();
+/** warlords (#66): how each run's ended up, and domain battles fought and won */
+const lords = { broken: 0, eaten: 0, fought: 0, avoided: 0, battles: 0, wins: 0 };
 
 for (let r = 0; r < runs; r++) {
   const pack = PACKS[(firstSeed + r) % PACKS.length];
   const run = newRun(`probe-${firstSeed + r}`, 0, pack, 0, DIFFICULTY);
   let restored = false, earned = 0;
+  const met = new Set<number>();
   for (let guard = 0; guard < 80 && run.status === 'active'; guard++) {
     const picked = pickReward(run);
     if (picked) rewards[picked] = (rewards[picked] ?? 0) + 1;
@@ -133,7 +136,13 @@ for (let r = 0; r < runs; r++) {
       continue;
     }
     const fielded = pickBroods(run);
+    const lord = node.kind === 'finale' ? undefined : warlordFighting(run, id);
     const res = fight(run, id, fielded);
+    if (lord) {
+      met.add(lord.id);
+      lords.battles++;
+      if (res.won) lords.wins++;
+    }
     battles.push({
       kind: node.kind,
       difficulty: node.difficulty,
@@ -150,6 +159,12 @@ for (let r = 0; r < runs; r++) {
     deaths += turn.events.filter((e) => e.what === 'died').length;
     rescues += turn.events.filter((e) => e.what === 'rescued').length;
     if (turn.checkpoint === 'restored') restored = true;
+  }
+  for (const w of run.warlords ?? []) {
+    if (w.broken) lords.broken++;
+    else if (run.swallowed.includes(w.stronghold)) lords.eaten++;
+    else if (met.has(w.id)) lords.fought++;
+    else lords.avoided++;
   }
   outcomes.push({ status: run.status, lostTo: run.lostTo, turns: run.turn, broods: run.broods.length, biomass: earned, restored, pack, at: run.at, depth: run.nodes[run.at].depth });
   const last = battles.slice(-run.log.length);
@@ -174,6 +189,9 @@ for (const p of PACKS) {
 }
 const lostAt = outcomes.filter((o) => o.status === 'lost').map((o) => o.depth);
 if (lostAt.length) console.log(`  runs lost at depth: ${lostAt.sort((a, b) => a - b).join(' ')}`);
+console.log(
+  `  warlords per run: broken ${(lords.broken / runs).toFixed(1)}, eaten by the Bloom ${(lords.eaten / runs).toFixed(1)}, fought but standing ${(lords.fought / runs).toFixed(1)}, never fought ${(lords.avoided / runs).toFixed(1)}; domain battles ${pct(lords.wins, lords.battles)} won of ${lords.battles}`,
+);
 
 const group = (label: string, key: (b: Battle) => string) => {
   const by = new Map<string, Battle[]>();
