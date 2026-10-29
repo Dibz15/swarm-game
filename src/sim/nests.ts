@@ -25,6 +25,8 @@ import { pushFx, spawnUnit, UNIT_FEEDING, type Nest, type World } from './world'
 
 const scratch: number[] = [];
 const counts = new Float64Array(NUM_FACTIONS);
+/** factions with Raiders on the nest this tick (Arsonist) */
+const raiders = new Uint8Array(NUM_FACTIONS);
 
 function captureRate(count: number, level: number): number {
   return (DT * (0.12 + 0.025 * Math.min(count, 24))) / (0.8 + 0.2 * level);
@@ -112,11 +114,15 @@ function applyArmor(w: World, n: Nest): void {
 function updateControl(w: World, n: Nest): void {
   counts.fill(0);
   queryRadius(w, n.x, n.y, n.r, scratch);
+  raiders.fill(0);
   for (const s of scratch) {
     if (w.state[s] === UNIT_FEEDING) continue;
     // Swifts are raiders: they capture and drain nests several times faster.
     const o = w.owner[s];
-    counts[o] += w.kind[s] === Kind.Swift ? TRAITS.raidCapture * w.factions[o].mods.kind[Kind.Swift].capture : 1;
+    if (w.kind[s] === Kind.Swift) {
+      counts[o] += TRAITS.raidCapture * w.factions[o].mods.kind[Kind.Swift].capture;
+      raiders[o] = 1;
+    } else counts[o] += 1;
   }
 
   // Which teams are standing on the nest, and which faction leads each?
@@ -160,8 +166,8 @@ function updateControl(w: World, n: Nest): void {
   }
 
   if (n.owner >= 0) {
-    // Enemy-held: drain control until it flips to unowned.
-    n.control -= rate;
+    // Enemy-held: drain control until it flips to unowned. Arsonist Raiders burn it down faster.
+    n.control -= raiders[leadA] ? rate * w.factions[leadA].mods.kind[Kind.Swift].arson : rate;
     if (n.control <= 0) {
       const prev = n.owner;
       n.owner = -1;

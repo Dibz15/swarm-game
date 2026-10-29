@@ -64,16 +64,22 @@ export const REWARDS: Reward[] = [
   strain('frenzy', 'Frenzy', Kind.Dot, 'uncommon', 'Bigger pack bonus: +60% from nearby Swarmers', (k) => (k.pack *= 1.6)),
   strain('lean', 'Lean', Kind.Dot, 'common', '+15% speed, −15% HP', (k) => ((k.speed *= 1.15), (k.hp *= 0.85))),
   strain('thick-hide', 'Thick hide', Kind.Dot, 'common', '+25% HP, −10% speed', (k) => ((k.hp *= 1.25), (k.speed *= 0.9))),
+  strain('swarm-call', 'Swarm-call', Kind.Dot, 'uncommon', 'A dying Swarmer rouses those nearby: +25% damage and +20% speed for 2 s', (k) => (k.call = 0.25)),
   // Shield strains
   strain('plated', 'Plated', Kind.Tank, 'common', '+30% HP', (k) => (k.hp *= 1.3)),
   strain('bulwark', 'Bulwark', Kind.Tank, 'uncommon', 'Enemies pick Shields as targets from further away', (k) => (k.taunt *= 0.6)),
+  strain('spikes', 'Spikes', Kind.Tank, 'common', 'A quarter of the damage Shields are dealt hits the attacker back', (k) => (k.spikes = 0.25)),
+  strain('phalanx', 'Phalanx', Kind.Tank, 'uncommon', 'Shields take 8% less damage for each Shield beside them (up to 3)', (k) => (k.phalanx = 0.08)),
   // Spear strains
   strain('barbed', 'Barbed', Kind.Lancer, 'uncommon', '+40% splash radius', (k) => (k.splash *= 1.4)),
   strain('longshot', 'Longshot', Kind.Lancer, 'common', '+25% range, −15% damage', (k) => ((k.range *= 1.25), (k.dps *= 0.85))),
   strain('quickdraw', 'Quickdraw', Kind.Lancer, 'rare', '+25% damage (faster shots)', (k) => (k.dps *= 1.25)),
+  strain('piercing', 'Piercing', Kind.Lancer, 'uncommon', 'Shots carry on through a line of enemies behind the target', (k) => (k.pierceLine = true)),
   // Raider strains
   strain('saboteur', 'Saboteur', Kind.Swift, 'common', 'Raiders capture 40% faster still', (k) => (k.capture *= 1.4)),
   strain('fleet', 'Fleet', Kind.Swift, 'common', '+15% speed', (k) => (k.speed *= 1.15)),
+  strain('skirmish', 'Skirmish', Kind.Swift, 'common', 'Badly hurt Raiders fall back to a nest, heal, and return', (k) => (k.skirmish = true)),
+  strain('arsonist', 'Arsonist', Kind.Swift, 'rare', 'Enemy nests with your Raiders on them lose control 60% faster', (k) => (k.arson = 1.6)),
   // Power variants
   variant('heavy-shell', 'Heavy shell', 'barrage', 'uncommon', 'Barrage: +50% damage budget', (m) => (m.barrageBudget *= 1.5)),
   variant('wide', 'Wide', 'nova', 'common', 'Nova: +35% radius, −25% damage', (m) => ((m.novaRadius *= 1.35), (m.novaDamage *= 0.75))),

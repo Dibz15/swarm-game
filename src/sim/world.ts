@@ -1,4 +1,4 @@
-import { ALL_NEST_TYPES, MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './constants';
+import { ALL_NEST_TYPES, LEVEL, MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './constants';
 import { Rng } from './rng';
 import { defaultMods, type FactionMods } from './mods';
 import { Grid } from './spatial';
@@ -99,7 +99,8 @@ export type FxType =
   | 'capitalLost'
   | 'capitalRetaken'
   | 'boonOffer'
-  | 'boonTaken';
+  | 'boonTaken'
+  | 'swarmCall';
 
 export interface FxEvent {
   type: FxType;
@@ -257,6 +258,8 @@ export interface HeartState {
 }
 
 export const UNIT_FEEDING = 1;
+/** Skirmish (#60): falling back to a nest to heal */
+export const UNIT_RETREAT = 2;
 
 /**
  * Entire game state. Units live in structure-of-arrays typed arrays indexed
@@ -310,6 +313,10 @@ export class World {
   readonly alertTick = new Int32Array(MAX_UNITS);
   /** nearby friendly Dots last tick (pack bonus) */
   readonly pack = new Uint8Array(MAX_UNITS);
+  /** Swarm-call (#60): tick until which the unit is roused */
+  readonly called = new Int32Array(MAX_UNITS);
+  /** Phalanx (#60): nearby friendly Shields last tick */
+  readonly guard = new Uint8Array(MAX_UNITS);
   /** spawned by a level-3 nest: extra HP */
   readonly vet = new Uint8Array(MAX_UNITS);
   /** neutral event units: WILD_SWARM, WILD_COLOSSUS or WILD_HEART, else 0 */
@@ -431,6 +438,8 @@ export function spawnUnit(
   w.surge[i] = 0;
   w.fortify[i] = 0;
   w.pack[i] = 0;
+  w.called[i] = 0;
+  w.guard[i] = 0;
   w.wild[i] = 0;
   w.vet[i] = 0;
   w.attacker[i] = -1;
@@ -442,6 +451,12 @@ export function spawnUnit(
   w.count++;
   w.unitCount[owner]++;
   return i;
+}
+
+/** A unit's full HP (it isn't stored: rebuilt from its kind, mods and veterancy). */
+export function maxHp(w: World, i: number): number {
+  const k = w.kind[i];
+  return UNIT_STATS[k].hp * w.factions[w.owner[i]].mods.kind[k].hp * (w.vet[i] ? LEVEL.veteranHp : 1);
 }
 
 export function removeUnit(w: World, i: number): void {

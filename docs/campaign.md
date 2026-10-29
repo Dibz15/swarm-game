@@ -190,14 +190,14 @@ After every won node, **pick 1 of 3** offers.
 - **Rarity tiers:** common, uncommon and rare.
 - **Where rares come from:** warlord domains and strongholds weight the offers toward rare.
 
-**The full pool is 43 items. v1 ships the 25 numeric ones. The other 18 need new sim behaviour and are left for later.** Both lists live here so nothing is lost.
+**The full pool is 43 items.** v1 shipped the 25 numeric ones. The other 18 add rules to the sim (#60). They're built in three parts: strains, then power variants, then perks and pacts. Items marked *(built)* are in the pool.
 
-| Family | **v1 (25)** | **Later (18)**, needs new behaviour |
+| Family | **v1 (25)** | **Behaviour (18)**, #60 |
 |---|---|---|
-| **Swarmer strain** | *Frenzy* (bigger pack bonus); *Lean* (+speed, −HP); *Thick hide* (+25% HP, −speed) | *Swarm-call* (a dying Swarmer briefly boosts its neighbours) |
-| **Shield strain** | *Plated* (+HP); *Bulwark* (draws fire from further away) | *Spikes* (reflect some damage); *Phalanx* (tougher next to other Shields) |
-| **Spear strain** | *Barbed* (wider splash); *Longshot* (+range, −dps); *Quickdraw* (faster shots) | *Piercing* (shots pass through a line) |
-| **Raider strain** | *Saboteur* (even faster capture); *Fleet* (+speed) | *Skirmish* (retreat when hurt); *Arsonist* (contested nests lose control faster) |
+| **Swarmer strain** | *Frenzy* (bigger pack bonus); *Lean* (+speed, −HP); *Thick hide* (+25% HP, −speed) | *Swarm-call* (built: a dying Swarmer rouses Swarmers within 70 px, +25% damage and +20% speed for 2 s) |
+| **Shield strain** | *Plated* (+HP); *Bulwark* (draws fire from further away) | *Spikes* (built: a quarter of each blow comes back at the attacker); *Phalanx* (built: −8% damage taken per Shield beside it, up to 3) |
+| **Spear strain** | *Barbed* (wider splash); *Longshot* (+range, −dps); *Quickdraw* (faster shots) | *Piercing* (built: shots run on 90 px past the target, hitting up to 3 more along the line) |
+| **Raider strain** | *Saboteur* (even faster capture); *Fleet* (+speed) | *Skirmish* (built: below 35% HP a Raider falls back to its nearest nest, heals there, and returns at 90%; new orders don't call it back); *Arsonist* (built: enemy nests with your Raiders on them drain 60% faster) |
 | **Power variants** (one per power at a time) | Barrage *Heavy shell* (bigger damage budget); Nova *Wide* (wider, weaker); Surge *Overdrive* (longer, cheaper); Blink *Long jump* (+range); Fortify *Root* (can't move, much tougher); Lockdown *Long* (longer duration) | Barrage *Cluster* (three small blasts) and *Scorch* (lingering burn); Nova *Implode* (pulls in); Surge *Mend* (heals instead of speed); Blink *Echo* (leaves a decoy); Fortify *Thorns*; Lockdown *Siphon* (drains energy) |
 | **Nest and economy perks** | capitals start at level 2; Bastion turret +range; +1 supply per nest; crystals charge 25% faster; +15% energy income; faster capture at every nest | supply drops favour you; level-2 nests spawn veterans |
 | **Pacts** (strong, with a drawback) | *Glass swarm* (+30% damage, −20% HP); *Hunger* (double biomass, but the Bloom advances faster); *Lone wolf* (field 1 brood only, but it's huge) | *Blood price* (powers cost units instead of energy); *Scorched earth* (captured nests start half-controlled, you spawn 20% faster); *Feral* (no powers, +25% production) |
@@ -207,7 +207,7 @@ After every won node, **pick 1 of 3** offers.
   - A headless reward-impact probe plays the same seeded battles with and without each item, the same A/B method as `scripts/choke-probe.ts`, and reports the win-rate and margin change per item.
   - The most impactful items become rare; the weakest get buffed or made common. Pacts are judged on net impact after their drawback.
   - Until the probe exists, v1 ships provisional tiers, marked as such in the code.
-- **In the sim:** a deterministic per-faction modifier table (`FactionMods` in `world.ts`), read where stats are used (`combat.ts`, `movement.ts`, `nests.ts`, and the power code in `commands.ts` and `step.ts`). The v1 items are all numeric multipliers. Champion modifiers on enemies will reuse the same table.
+- **In the sim:** a deterministic per-faction modifier table (`FactionMods` in `mods.ts`), read where stats are used (`combat.ts`, `movement.ts`, `nests.ts`, and the power code in `commands.ts` and `step.ts`). The v1 items are all numeric multipliers; the behaviour items switch on rules in the same places. Champion modifiers on enemies will reuse the same table.
 
 ## Finale: the Bloom's heart
 - **Map:** a large map overrun by the Bloom, with its swarms at full pressure. The heart, a rooted boss (`src/sim/heart.ts`), sits near the centre.

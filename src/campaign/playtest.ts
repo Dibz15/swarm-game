@@ -4,6 +4,8 @@
  * starts them. Their ids start with PLAYTEST, and the store never saves them.
  */
 
+import { Kind } from '../sim/constants';
+import { newBrood } from './broods';
 import { newRun, type RunState } from './run';
 import type { TraitId, Warlord } from './warlords';
 
@@ -67,6 +69,22 @@ function standBy(r: RunState, target: number, avoid: number[] = []): void {
   const links = r.nodes[target].links.filter((l) => r.nodes[l].kind !== 'finale');
   r.at = links.find((l) => !avoid.includes(l)) ?? links[0];
   r.visited = [r.start, r.at];
+}
+
+/**
+ * A battle next to the start with these broods (kind and strains) fielded,
+ * these perks held and every nest type unlocked, so a reward can be tried
+ * without earning it.
+ */
+function armed(seed: string, color: number, broods: [number, string[]][], perks: string[] = []): Scene {
+  const r = run(seed, color);
+  r.broods = broods.map(([kind, strains], id) => ({ ...newBrood(id, kind, r.seed, []), size: 16, cap: 16, strains }));
+  r.nextBrood = r.broods.length;
+  r.fielded = r.broods.map((b) => b.id);
+  r.unlocks = { nests: 0xff, nova: true };
+  r.perks.push(...perks);
+  const node = r.nodes[r.start].links.find((l) => r.nodes[l].kind === 'conquest' && !r.nodes[l].domain) ?? r.nodes[r.start].links[0];
+  return fight(r, node);
 }
 
 const TRAIT_NAMES: Record<TraitId, string> = {
@@ -194,6 +212,20 @@ export const PLAYTESTS: Playtest[] = [
       },
     }),
   ),
+  {
+    id: 'strains-front',
+    group: 'Rewards',
+    title: 'Swarm-call, Spikes, Phalanx, Piercing',
+    text: 'Swarmers that rouse each other as they fall (a small ring), Shields that hurt to hit and toughen side by side, and Spears whose shots run on through a line.',
+    make: (c) => armed('strains-front', c, [[Kind.Dot, ['swarm-call']], [Kind.Tank, ['spikes', 'phalanx']], [Kind.Lancer, ['piercing']]]),
+  },
+  {
+    id: 'strains-raid',
+    group: 'Rewards',
+    title: 'Skirmish and Arsonist',
+    text: 'Raiders that fall back (faded) to a nest to heal when badly hurt, and burn down enemy nests faster.',
+    make: (c) => armed('strains-raid', c, [[Kind.Swift, ['skirmish', 'arsonist']], [Kind.Swift, []], [Kind.Dot, []]]),
+  },
   {
     id: 'finale-lords',
     group: 'Finale',

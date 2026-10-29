@@ -68,6 +68,22 @@ export const TRAITS = {
   stomp: { radius: 46, damage: 14, every: 2 * 30 },
 };
 
+/**
+ * Behaviour strains (#60): campaign rewards that add a rule, not just a
+ * number. Each is off unless the faction's KindMods turn it on. PROVISIONAL
+ * numbers (#68).
+ */
+export const STRAINS = {
+  /** Swarm-call: a dying Swarmer rouses Swarmers this close for `ticks` (damage +call, speed ×speed) */
+  call: { radius: 70, ticks: 2 * 30, speed: 1.2 },
+  /** Phalanx: Shields count other Shields this close, up to `max` */
+  phalanx: { radius: 26, max: 3 },
+  /** Piercing: Spear shots carry this far past the target, hitting up to `extra` within `width` of the line */
+  line: { reach: 90, width: 10, extra: 3, damage: 0.45 },
+  /** Skirmish: Raiders below `flee` of their HP fall back to a nest, heal there at `heal` hp/s and return at `back` */
+  skirmish: { flee: 0.35, back: 0.9, heal: 6 },
+};
+
 /** units notice enemies this far beyond their attack range */
 export const AGGRO_EXTRA = 26;
 /** a unit shot from beyond its notice range turns on its attacker if it's within this much extra */

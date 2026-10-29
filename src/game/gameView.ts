@@ -404,6 +404,9 @@ export class GameView {
           sfx.nova(e.x, e.y, e.f === this.human);
           break;
         }
+        case 'swarmCall':
+          rings.add({ x: e.x, y: e.y, r0: 4, r1: e.r, dur: 0.35, c, thick: 1.5 });
+          break;
         case 'surge':
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 1.4, dur: 0.5, c, thick: 2 });
           sfx.surge(e.x, e.y, e.f === this.human);
