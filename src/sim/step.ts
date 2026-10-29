@@ -1,3 +1,4 @@
+import { siegeVictory } from './siege';
 import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, POWER, TERRAIN, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
 import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
@@ -145,6 +146,8 @@ function checkVictory(w: World): void {
   }
 
   if (w.endless) return;
+  // Hold the line (#67): only the siege decides it.
+  if (w.siege && siegeVictory(w)) return;
   // A stronghold (#100): a human taking the citadel wins, whoever else is left.
   if (w.citadel >= 0) {
     const c = w.nests[w.citadel];

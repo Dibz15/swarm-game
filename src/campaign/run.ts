@@ -77,7 +77,7 @@ export const RUN_DIFFICULTY: Record<RunDifficulty, DifficultyRules> = {
 /** saves from before difficulty were Standard */
 export const difficultyOf = (run: { difficulty?: RunDifficulty }): RunDifficulty => run.difficulty ?? 'standard';
 
-export type NodeKind = 'start' | 'conquest' | 'domination' | 'finale';
+export type NodeKind = 'start' | 'conquest' | 'domination' | 'hold' | 'finale';
 
 export interface RunNode {
   id: number;
@@ -321,6 +321,20 @@ function battle(node: RunNode, t: number, rng: Rng, rules: DifficultyRules): voi
   node.reward = Math.round(10 + 20 * t + node.rivals * 4 + (node.kind === 'domination' ? 4 : 0));
 }
 
+/** Hold the line (#67): at most one per depth, past the first, outside domains. Its own stream. */
+const HOLD_ODDS = 0.45;
+function placeHolds(seed: number, nodes: RunNode[], far: number): void {
+  const rng = new Rng(hashString(`${seed}:holds`));
+  for (let d = 2; d < far; d++) {
+    const pool = nodes.filter((n) => n.depth === d && (n.kind === 'conquest' || n.kind === 'domination') && !n.checkpoint && n.domain === undefined);
+    if (!pool.length || rng.next() >= HOLD_ODDS) continue;
+    const n = rng.pick(pool);
+    const t = Math.min(1, d / far);
+    // No rival (#67 playtest: it took the field while you held the walls): just you and the Bloom.
+    Object.assign(n, { kind: 'hold', rivals: 0, size: 'medium', caves: 'off', reward: Math.round(10 + 20 * t + 8) });
+  }
+}
+
 export function newRun(seedText: string, color: number, pack: PackId = 'swarm', now = Date.now(), difficulty: RunDifficulty = 'standard'): RunState {
   const rules = RUN_DIFFICULTY[difficulty];
   const seed = hashString(`run:${seedText.trim() || 'swarm'}`);
@@ -378,6 +392,7 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
       if (n.rescue === undefined && wr.next() < DOMAIN_RESCUE) n.rescue = wr.pick([Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift]);
     }
   }
+  placeHolds(seed, nodes, far);
 
   // The Bloom: starts just behind everything, and moves at a pace the
   // shortest route to the heart keeps ahead of with room for a lost battle or

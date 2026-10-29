@@ -1,6 +1,7 @@
 import { creature, type Creature } from '../art/creature';
 import { DIFFICULTY, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { PlayerSetup } from '../sim/setup';
+import type { SiegeSetup } from '../sim/siege';
 import { defaultMods } from '../sim/mods';
 import type { EventParams } from '../sim/mapgen';
 import { Rng, hashString } from '../sim/rng';
@@ -61,9 +62,10 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     portrait,
     // A stronghold's warlord starts with three nests: half the map would be a head start.
     domShare: n.kind === 'domination' && !hold ? DOMINATION_SHARE : finale ? undefined : CONQUEST_SHARE,
-    // Brutal: after the heart, the rivals still have to be beaten.
     // The citadel's guards grow with the army you bring, so a late-run swarm can't just rush it.
     stronghold: hold ? { player: 1, scale: Math.max(1, armySize(run, fielded) / STRONGHOLD_ARMY) } : undefined,
+    siege: n.kind === 'hold' ? siegeFor(run, n.depth) : undefined,
+    // Brutal: after the heart, the rivals still have to be beaten.
     heart: finale ? { strength: bloomStrength(run), rule: RUN_DIFFICULTY[difficultyOf(run)].bots > 0 ? 'heart+rivals' : 'heart' } : undefined,
     players: [
       {
@@ -85,6 +87,23 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
         return hold ? { ...p, prod: p.prod! * STRONGHOLD_PROD, bot: { ...p.bot!, personality: 'turtler', citadel: true } } : p;
       }),
     ],
+  };
+}
+
+/**
+ * Hold the line (#67): longer, faster and bigger waves further into the run,
+ * bigger still for every node the Bloom ate (and, in battle, for every field
+ * nest it holds: SIEGE.perNest). PROVISIONAL (#68).
+ */
+export function siegeFor(run: RunState, depth: number): SiegeSetup {
+  const t = Math.min(1, depth / Math.max(1, run.nodes[run.heart].depth));
+  return {
+    seconds: Math.round(lerp(180, 300, t)),
+    first: 20,
+    every: Math.round(lerp(36, 26, t)),
+    size: Math.round(lerp(22, 38, t) * swarmScale(bloomStrength(run))),
+    grow: 1.18,
+    depth: t,
   };
 }
 

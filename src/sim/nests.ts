@@ -149,8 +149,9 @@ function updateControl(w: World, n: Nest): void {
     return;
   }
 
-  // Neutral garrison units only defend; they never capture.
-  if (leadA === NEUTRAL && n.owner !== NEUTRAL) return;
+  // Neutral garrison units only defend; they never capture. In a siege (#67)
+  // the Bloom's waves do tear down a player's nests, though never take them.
+  if (leadA === NEUTRAL && n.owner !== NEUTRAL && (!w.siege || n.owner < 0)) return;
 
   const rate = captureRate(totalA, n.level) * w.factions[leadA].mods.captureRate;
   if (n.owner >= 0 && teamA === ownerTeam) {

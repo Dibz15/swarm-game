@@ -12,7 +12,7 @@ import { Particles, Rings } from './render/particles';
 import { Renderer } from './render/renderer';
 import { drawWorld } from './render/scene';
 import { PERSONALITIES } from './sim/ai/bot';
-import { Kind, MAX_UNITS, TICK_HZ } from './sim/constants';
+import { Kind, MAX_UNITS, NEUTRAL, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
 import { mapBloom, needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
@@ -20,6 +20,7 @@ import type { BattleReport } from './campaign/broods';
 import { battleReport, nodeSetup, warlordOf } from './campaign/battle';
 import { PLAYTEST, type Playtest } from './campaign/playtest';
 import { playtestMenu } from './ui/playtest';
+import { fortressGrid } from './ui/fortressGrid';
 import { FORTIFY } from './sim/fortify';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
 import { rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
@@ -114,6 +115,7 @@ class App {
     if (bench > 0) this.startBench(bench);
     else if (q.has('eventdemo')) this.startEventDemo();
     else if (q.has('creatures')) this.setScreen(creatureGrid());
+    else if (q.has('fortress')) this.setScreen(fortressGrid());
     else if (q.has('heart')) this.startHeartDemo(Number(q.get('heart')) || 0);
     else if (q.has('playtest')) this.showPlaytests();
     else this.showMenu();
@@ -288,7 +290,25 @@ class App {
     const run = scene.run;
     this.runMove(run, scene.node, run.broods.map((b) => b.id));
     const w = this.game?.world;
-    if (!w || w.citadel < 0) return;
+    if (!w) return;
+    if (w.siege && scene.extra === 'ending') {
+      // The clock nearly out, and no waves left to come.
+      w.siege.until = w.tick + 15 * TICK_HZ;
+      w.siege.next = w.siege.waves.length;
+      return;
+    }
+    if (w.siege && scene.extra === 'capital') {
+      const sg = w.siege, game = this.game;
+      setTimeout(() => {
+        if (this.game !== game || w.over) return;
+        const cap = w.nests[sg.capital];
+        cap.owner = -1;
+        cap.controller = NEUTRAL;
+        cap.control = 0;
+      }, 4000);
+      return;
+    }
+    if (w.citadel < 0) return;
     const c = w.nests[w.citadel];
     const human = this.game!.human;
     if (scene.extra === 'gates') {

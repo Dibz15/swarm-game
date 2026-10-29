@@ -162,7 +162,7 @@ function mapSprite(run: RunState, n: RunNode, style: 'constellation' | 'minimap'
  * walls, nebula and rift fields (with `detail`), crystals, and the nests in
  * their owners' colours (your start in yours, rivals' in theirs).
  */
-function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: (player: number) => string, ox: number, oy: number, s: number, detail: boolean): void {
+export function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: (player: number) => string, ox: number, oy: number, s: number, detail: boolean): void {
   const X = (x: number) => ox + x * s, Y = (y: number) => oy + y * s;
   const capsule = (c: { x1: number; y1: number; x2: number; y2: number; r: number }, ctx: CanvasRenderingContext2D) => {
     ctx.lineWidth = Math.max(1, c.r * 2 * s);
@@ -222,9 +222,8 @@ function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: (player
 
 const CARD_MAPS = new Map<string, MapSpec>();
 
-/** A larger picture of a node's battle map for its card, `px` CSS pixels on its long side. */
-export function battleMapCanvas(run: RunState, n: RunNode, px: number, me: string): HTMLCanvasElement {
-  // The same orientation the battle will use: tall on a portrait screen.
+/** A node's battle map as the card shows it (cached): the same orientation the battle will use. */
+export function cardMap(run: RunState, n: RunNode): MapSpec {
   const portrait = window.innerHeight > window.innerWidth * 1.15;
   const key = `${n.seed}:${portrait}`;
   let m = CARD_MAPS.get(key);
@@ -233,6 +232,12 @@ export function battleMapCanvas(run: RunState, n: RunNode, px: number, me: strin
     m = generateMap(mapParamsOf(st, portrait));
     CARD_MAPS.set(key, m);
   }
+  return m;
+}
+
+/** A larger picture of a node's battle map for its card, `px` CSS pixels on its long side. */
+export function battleMapCanvas(run: RunState, n: RunNode, px: number, me: string): HTMLCanvasElement {
+  const m = cardMap(run, n);
   const rivals = artFor(run, n).rivals;
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const long = Math.max(m.width, m.height);
@@ -300,6 +305,19 @@ export function drawIcon(
       g.moveTo(gx - dy * k * 0.35, gy + dx * k * 0.35);
       g.lineTo(gx + dy * k * 0.35, gy - dx * k * 0.35);
     }
+    g.stroke();
+  } else if (n.kind === 'hold') {
+    // A battlement: a wall with three merlons (#67).
+    const m = k * 0.8;
+    g.moveTo(x - m, y + m);
+    g.lineTo(x - m, y - m);
+    g.lineTo(x - m * 0.4, y - m);
+    g.lineTo(x - m * 0.4, y - m * 0.45);
+    g.lineTo(x + m * 0.4, y - m * 0.45);
+    g.lineTo(x + m * 0.4, y - m);
+    g.lineTo(x + m, y - m);
+    g.lineTo(x + m, y + m);
+    g.closePath();
     g.stroke();
   } else if (n.kind === 'domination') {
     // A crowned ring: hold the ground.
@@ -381,6 +399,16 @@ export function glyph(g: CanvasRenderingContext2D, kind: RunNode['kind'], x: num
     g.lineTo(x + k, y + k);
     g.moveTo(x + k, y - k);
     g.lineTo(x - k, y + k);
+  } else if (kind === 'hold') {
+    // A wall with three merlons.
+    g.moveTo(x - k, y + k);
+    g.lineTo(x - k, y - k);
+    g.lineTo(x - k * 0.4, y - k);
+    g.lineTo(x - k * 0.4, y - k * 0.4);
+    g.lineTo(x + k * 0.4, y - k * 0.4);
+    g.lineTo(x + k * 0.4, y - k);
+    g.lineTo(x + k, y - k);
+    g.lineTo(x + k, y + k);
   } else if (kind === 'domination') {
     g.arc(x, y, k, 0, Math.PI * 2);
     g.moveTo(x + k * 0.3, y);

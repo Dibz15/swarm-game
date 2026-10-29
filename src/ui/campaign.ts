@@ -5,8 +5,9 @@
 
 import type { AudioEngine } from '../audio/engine';
 import { mountCreatures } from '../art/creature';
-import { BLOOM, BloomField, MapFx, battleMapCanvas, bloomGapView, sigilCanvas, drawIcon, glyph, nodeRadius, tendrils, wobble } from './runmapfx';
-import { bloomLabel, rivals, warlordOf, type Rival } from '../campaign/battle';
+import { BLOOM, BloomField, MapFx, battleMapCanvas, cardMap, bloomGapView, sigilCanvas, drawIcon, glyph, nodeRadius, tendrils, wobble } from './runmapfx';
+import { bloomLabel, rivals, siegeFor, warlordOf, type Rival } from '../campaign/battle';
+import { FORTRESS_LABEL } from '../sim/fortify';
 import { STRONGHOLD_WEIGHT, TRAITS, trophyOf } from '../campaign/warlords';
 import { broodCreature, broodTemper } from '../campaign/character';
 import {
@@ -59,12 +60,14 @@ export const KIND_LABEL: Record<RunNode['kind'], string> = {
   start: 'Your camp',
   conquest: 'Conquest',
   domination: 'Domination',
+  hold: 'Hold the line',
   finale: "The Bloom's heart",
 };
 const KIND_TEXT: Record<RunNode['kind'], string> = {
   start: 'Where the run began.',
   conquest: 'Wipe out every rival, or hold 80% of the nests for 30 seconds.',
   domination: 'Hold half the nests for 30 seconds, or wipe out every rival.',
+  hold: "Dug in behind your own walls: keep your capital until the clock runs out, against the Bloom's waves. Its nests in the field feed them; sally out to take them. Every other wave, pick a boon. Lose the capital and you have 20 seconds to take it back.",
   finale: 'The final battle: a large map against three Hard rivals. Win it to end the run.',
 };
 
@@ -925,8 +928,19 @@ export function runMap(
     const fortress = !taken && !dead && warlordAt(run, n.id)?.stronghold === n.id;
     if (n.kind !== 'start' && !taken && !dead) {
       foes = rivals(run, n.id);
-      rows.push(`<dt>Enemies</dt><dd>${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}${rivalStrip(foes, true, 'small')}</dd>`);
-      rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${fortress ? 'Fortress' : CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}<div class="battle-map-slot"></div></dd>`);
+      rows.push(
+        n.kind === 'hold'
+          ? `<dt>Enemies</dt><dd>The Bloom: every nest it holds in the field makes its waves bigger</dd>`
+          : `<dt>Enemies</dt><dd>${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}${rivalStrip(foes, true, 'small')}</dd>`,
+      );
+      // Strongholds and Hold the line are fortresses, each in its own style (#67).
+      const fort = fortress || n.kind === 'hold' ? cardMap(run, n).fortress : undefined;
+      const ground = fort ? `Fortress (${FORTRESS_LABEL[fort.style]})` : CAVE_LABEL[n.caves];
+      rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${ground} · ${TERRAIN_LABEL[n.terrain]}<div class="battle-map-slot"></div></dd>`);
+      if (n.kind === 'hold') {
+        const sg = siegeFor(run, n.depth);
+        rows.push(`<dt>Siege</dt><dd>Hold for ${Math.floor(sg.seconds / 60)}:${String(sg.seconds % 60).padStart(2, '0')} · a wave every ${sg.every}s, the first ${sg.size} strong and growing</dd>`);
+      }
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
       const lord = warlordOf(run, n.id);
       if (lord) {

@@ -19,7 +19,7 @@ describe('a fortified map', () => {
     for (const size of SIZES)
       for (let seed = 0; seed < 8; seed++) {
         const base = generateMap({ seed, size, players: 3, terrain: 'standard' });
-        const m = generateMap({ seed, size, players: 3, terrain: 'standard', stronghold: 1 });
+        const m = generateMap({ seed, size, players: 3, terrain: 'standard', fortress: 1 });
         const citadel = m.nests.find((n) => n.player === 1 && n.capital !== false)!;
         expect(citadel.level).toBe(FORTIFY.citadelLevel);
         expect(citadel.garrison).toBe(FORTIFY.citadelGarrison);
@@ -41,7 +41,7 @@ describe('a fortified map', () => {
   });
 
   it('is seeded', () => {
-    const p = { seed: 4, size: 'medium' as const, players: 3, terrain: 'standard' as const, stronghold: 1 };
+    const p = { seed: 4, size: 'medium' as const, players: 3, terrain: 'standard' as const, fortress: 1 };
     expect(generateMap(p)).toEqual(generateMap(p));
   });
 });
@@ -153,7 +153,8 @@ describe('playtests', () => {
       const setup = nodeSetup(s.run, s.node, false);
       if (p.group.startsWith('Stronghold')) expect(setup.stronghold).toMatchObject({ player: 1 });
       else expect(setup.stronghold).toBeUndefined();
-      if (p.id.startsWith('domain-') || p.id.startsWith('hold-') && p.id !== 'hold-gates' && p.id !== 'hold-fall') {
+      expect(!!setup.siege).toBe(p.group === 'Hold the line');
+      if (p.group.startsWith('Domain') || (p.group.startsWith('Stronghold') && p.id !== 'hold-gates' && p.id !== 'hold-fall')) {
         const trait = p.id.replace(/^(domain|hold)-/, '');
         expect(s.run.warlords!.find((w) => w.faction === setup.players[1].faction)?.trait).toBe(trait);
       }
