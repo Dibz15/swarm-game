@@ -39,6 +39,8 @@ export function worldHash(w: World): number {
   if (w.siege) {
     mix(w.siege.next);
     mix(w.siege.lostAt);
+    mix(w.siege.boons.length);
+    mix(w.siege.offer ? w.siege.offer.until : -1);
   }
   if (w.heart) {
     mix(w.heart.phase);

@@ -8,7 +8,7 @@ import { worldHash } from '../src/sim/hash';
 import { generateMap } from '../src/sim/mapgen';
 import { Rng } from '../src/sim/rng';
 import { createWorld, type MatchSetup } from '../src/sim/setup';
-import { SIEGE, WAVE_KINDS, rollWaves, type SiegeSetup } from '../src/sim/siege';
+import { SIEGE, WAVE_KINDS, rollWaves, waveSize, type SiegeSetup } from '../src/sim/siege';
 import { step } from '../src/sim/step';
 import { Terrain } from '../src/sim/terrain';
 import { Proxy } from '../src/proxy/proxy';
@@ -25,7 +25,7 @@ function siege(seed = 4, s: SiegeSetup = SIEGE_SETUP): MatchSetup {
     siege: s,
     players: [
       { faction: 0, team: 0, human: true },
-      { faction: 1, team: 1, human: false, bot: { difficulty: 0, personality: 'rusher', focus: 0 } },
+      { faction: 1, team: 1, human: false, bot: { difficulty: 0, personality: 'rusher' } },
     ],
   };
 }
@@ -114,6 +114,35 @@ describe('holding the line', () => {
     expect(w.winReason).toBe('fallen');
   });
 
+  it('every field nest the Bloom holds makes the waves bigger', () => {
+    const w = createWorld(siege());
+    const sg = w.siege!;
+    expect(sg.bloomNests.length).toBeGreaterThan(3);
+    const wave = sg.waves[0];
+    const full = waveSize(w, wave);
+    expect(full).toBe(Math.round(wave.size * (1 + SIEGE.perNest * sg.bloomNests.length)));
+    for (const id of sg.bloomNests) w.nests[id].owner = 0;
+    expect(waveSize(w, wave)).toBe(wave.size);
+  });
+
+  it('offers a boon every other wave; the first is taken if you do not choose, or the one you pick', () => {
+    const w = createWorld(siege(4, { ...SIEGE_SETUP, first: 5, every: 15, size: 6 }));
+    const sg = w.siege!;
+    run(w, sg.waves[1].at - w.tick + SIEGE.boonDelay + 1);
+    expect(sg.offer?.ids).toHaveLength(3);
+    const first = sg.offer!.ids[0];
+    run(w, SIEGE.boonOpen + 1);
+    expect(sg.boons).toEqual([first]);
+    expect(sg.offer).toBeNull();
+    // The next offer: pick the third.
+    run(w, sg.waves[3].at - w.tick + SIEGE.boonDelay + 1);
+    const third = sg.offer!.ids[2];
+    const prod = w.factions[0].prodMult;
+    step(w, [{ t: 'boon', p: 0, k: 2 }]);
+    expect(sg.boons[1]).toBe(third);
+    if (third === 'production') expect(w.factions[0].prodMult).toBeCloseTo(prod * 1.2);
+  });
+
   it('replays identically', () => {
     const play = () => {
       const w = createWorld(siege(9));
@@ -153,26 +182,27 @@ describe('Hold the line in runs', () => {
         expect(n.depth).toBeGreaterThanOrEqual(2);
         const s = nodeSetup(r, n.id, false);
         expect(s.siege).toBeDefined();
-        expect(s.players).toHaveLength(2);
-        expect(s.players[1].bot!.focus).toBe(r.color);
+        // Just you and the Bloom.
+        expect(s.players).toHaveLength(1);
       }
     }
     expect(holds).toBeGreaterThan(10);
   });
 
   // #67's done-when, as a sanity check (not tuning, #68): the human proxy can
-  // hold the line, and can lose it.
+  // hold the line, and doing nothing loses it.
   it('can be held, and lost', () => {
     const outcomes: string[] = [];
-    for (let k = 0; k < 6 && !(outcomes.includes('held') && outcomes.includes('fallen')); k++) {
+    for (let k = 0; k < 8 && !(outcomes.includes('held') && outcomes.includes('fallen')); k++) {
       const r = newRun(`siege-probe-${k}`, 0, 'swarm', 0);
       const node = r.nodes.find((n) => n.kind === 'hold');
       if (!node) continue;
       for (const b of r.broods) b.size = b.cap = 14;
       const w = createWorld(nodeSetup(r, node.id, false, r.broods.map((b) => b.id)));
-      const proxy = new Proxy(r.color, { skill: 1 });
+      // Odd seeds: nobody gives an order.
+      const proxy = k % 2 ? null : new Proxy(r.color, { skill: 1 });
       while (!w.over && w.tick < 6 * 60 * TICK_HZ) {
-        step(w, proxy.think(w));
+        step(w, proxy ? proxy.think(w) : []);
         w.fx = [];
         w.deaths = [];
       }

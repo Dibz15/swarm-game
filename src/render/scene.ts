@@ -316,6 +316,15 @@ function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
     if (d.progress > 0) r.shape(true, d.x, d.y, R + 6, 0, d.progress, 0, 0.07, hc, 235);
   }
   drawHeart(r, w, o);
+  // Holding the line (#67): the Bloom's nests in the field, each feeding the waves.
+  if (w.siege) {
+    const beat = 0.5 + 0.5 * Math.sin(o.time * 2.4);
+    for (const id of w.siege.bloomNests) {
+      const n = w.nests[id];
+      if (n.owner !== NEUTRAL) continue;
+      r.shape(false, n.x, n.y, n.r * 1.7, 0, 1, o.time * 0.3, 0.05, HEART_RGB, Math.round(110 + 80 * beat));
+    }
+  }
   for (const c of ev.colossi) {
     const s = w.uidToSlot.get(c.uid);
     if (s === undefined) continue;

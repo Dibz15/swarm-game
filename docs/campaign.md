@@ -141,7 +141,13 @@ Each node turns into a `MatchSetup` (`src/sim/setup.ts`) plus an objective. Obje
   - **The waves:** the Bloom comes in waves on a schedule rolled up front.
     - Each wave hunts your capital; Raiders go for your outer nests first.
     - In a siege only, the Bloom's waves tear your nests down to neutral, though they never take them.
-    - One rusher rival pushes at you too. It spawns at half speed: the waves are the main threat.
+    - **No rival.** In the first playtest, a rival took the whole field while you held the walls.
+    - **Bloom nests:** the field's neutral nests are the Bloom's (ringed red). Each one it still holds makes every wave 14% bigger, so sallying out between waves to take them thins the waves. A nest left unowned goes back to the Bloom.
+    - **Boons:** every other wave, pick 1 of 3 within 10 s, or the first is taken for you:
+      - Reinforcements: a fresh brood now;
+      - Hatcheries: +20% production;
+      - Surge of power: full energy;
+      - Raise the walls: your capital and inner nests go up a level.
   - **Win:** your capital is yours when the clock runs out (3–5 minutes by depth). If it falls you have 20 s to retake it; nothing else ends the battle.
   - **Wave kinds:**
 
@@ -157,7 +163,7 @@ Each node turns into a `MatchSetup` (`src/sim/setup.ts`) plus an objective. Obje
     The first wave is always a swarm, and no kind comes twice running. A wave is a quarter to a half again bigger each time.
   - **HUD:** a walking timeline at the top. Each upcoming wave is an icon (by kind, sized by strength) sliding toward the arrival line. The clock sits at the end, with a red "Retake your capital" countdown if it falls.
   - **Sounds:** the wave horn, ticks for the final 10 s, a capital alarm, and line held.
-  - **Probe:** `scripts/siege-probe.ts`. The human proxy turned out a poor judge here (its big blob wanders off to expand), so tune by playtest (#68).
+  - **Probe:** `scripts/siege-probe.ts`, with `IDLE=1` to give no orders at all. Over 10 seeds, doing nothing holds 0 and the proxy holds 6. Tune by playtest (#68).
 - **Difficulty** rises with the distance travelled: bot difficulty, rival count, production (`PlayerSetup.prod`) and Bloom pressure.
 - **Later:** team battles (2v2 with an ally) and champion modifiers on any rival.
 

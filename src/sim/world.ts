@@ -97,7 +97,9 @@ export type FxType =
   | 'heartDown'
   | 'siegeWave'
   | 'capitalLost'
-  | 'capitalRetaken';
+  | 'capitalRetaken'
+  | 'boonOffer'
+  | 'boonTaken';
 
 export interface FxEvent {
   type: FxType;
@@ -215,7 +217,18 @@ export interface SiegeState {
   /** tick the capital fell, or -1 */
   lostAt: number;
   spawns: [number, number][];
+  /** the field's nests (neutral at the start): each one the Bloom still holds makes the waves bigger */
+  bloomNests: number[];
+  /** a boon on offer between waves: pick one before `until`, or the first is taken for you */
+  offer: { ids: BoonId[]; until: number } | null;
+  /** when the next offer opens (tick), or -1 */
+  offerAt: number;
+  /** boons taken so far */
+  boons: BoonId[];
 }
+
+/** Holding the line (#67): what you can pick between waves. */
+export type BoonId = 'reinforce' | 'production' | 'energy' | 'levels';
 
 /** The Bloom's heart and its nests (campaign finale). */
 export interface HeartState {

@@ -1,5 +1,6 @@
 import { LEVEL, MAX_LEVEL, NEUTRAL, POWER, POWER_NEST, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, TICK_HZ, type NestPower } from './constants';
 import { clamp } from './mathx';
+import { takeBoon } from './siege';
 import { queryRadius } from './spatial';
 import { pushFx, removeUnit, UNIT_FEEDING, type Nest, type World } from './world';
 
@@ -19,7 +20,9 @@ export type Command =
   | { t: 'blink'; p: number; units: number[]; x: number; y: number }
   | { t: 'lockdown'; p: number; nest: number }
   /** tutorial missions only (endless worlds): bring the next wild swarm forward to `secs` from now */
-  | { t: 'summon'; p: number; secs: number };
+  | { t: 'summon'; p: number; secs: number }
+  /** Hold the line (#67): take boon `k` of the current offer */
+  | { t: 'boon'; p: number; k: number };
 
 /** True if p holds (fully controls) a nest that grants this power. */
 export function hasPower(w: World, p: number, power: NestPower): boolean {
@@ -171,6 +174,9 @@ export function applyCommand(w: World, c: Command): void {
       return;
     }
 
+    case 'boon':
+      takeBoon(w, c.p, c.k);
+      return;
     case 'summon': {
       const ev = w.events;
       if (!w.endless || !ev?.spec.params.swarm) return;

@@ -1,14 +1,16 @@
-import { Kind, NEUTRAL, TICK_HZ } from './constants';
+import { ENERGY, Kind, MAX_LEVEL, NEUTRAL, TICK_HZ } from './constants';
 import { releaseSwarm, steerSwarm } from './events';
-import { dpow } from './mathx';
+import { TAU, dcos, dpow, dsin } from './mathx';
 import { Rng } from './rng';
-import { pushFx, spawnUnit, WILD_COLOSSUS, type SiegeState, type Wave, type WaveKind, type World } from './world';
+import { pushFx, spawnUnit, WILD_COLOSSUS, type BoonId, type SiegeState, type Wave, type WaveKind, type World } from './world';
 
 /**
  * Hold the line (#67): you're dug in behind your own walls and must still
  * hold your capital when the clock runs out. The Bloom comes in waves of
  * different kinds on a schedule rolled up front (so the HUD can show what's
- * coming), hunting you; a rival pushes too. Lose the capital and you have
+ * coming), hunting you. The field outside is the Bloom's: every nest it still
+ * holds makes the waves bigger, so sallying out to take them thins the waves.
+ * Every other wave, you pick a boon. Lose the capital and you have
  * SIEGE.retake to win it back. Everything random is seeded. PROVISIONAL (#68).
  */
 export interface SiegeSetup {
@@ -29,7 +31,22 @@ export const SIEGE = {
   retake: 20 * TICK_HZ,
   /** no wave this close to the end */
   quiet: 10,
+  /** each field nest the Bloom holds makes the waves this much bigger */
+  perNest: 0.14,
+  /** a boon is offered after every this-many waves, this long after the wave, and stays open this long */
+  boonEvery: 2,
+  boonDelay: 10 * TICK_HZ,
+  boonOpen: 10 * TICK_HZ,
 };
+
+/** Boons between waves: what each does (scaled to the siege) and how it reads. */
+export const BOONS: Record<BoonId, { name: string; text: string }> = {
+  reinforce: { name: 'Reinforcements', text: 'A fresh brood at your capital, now' },
+  production: { name: 'Hatcheries', text: 'Your nests spawn 20% faster for the rest of the siege' },
+  energy: { name: 'Surge of power', text: 'Full energy, now' },
+  levels: { name: 'Raise the walls', text: 'Your capital and inner nests go up a level' },
+};
+const BOON_IDS = Object.keys(BOONS) as BoonId[];
 
 /** Each kind: when it joins the pool (run depth), its unit mix, and its size against a swarm. */
 export const WAVE_KINDS: Record<WaveKind, { from: number; mix: readonly number[]; size: number; name: string }> = {
@@ -62,8 +79,23 @@ export function initSiege(w: World, s: SiegeSetup, human: number): void {
     capital: capital.id,
     lostAt: -1,
     spawns,
+    bloomNests: w.nests.filter((n) => n.owner === NEUTRAL).map((n) => n.id),
+    offer: null,
+    offerAt: -1,
+    boons: [],
   };
 }
+
+/** How much bigger the waves are for the field nests the Bloom still holds. */
+export function bloomFactor(w: World): number {
+  const sg = w.siege!;
+  let n = 0;
+  for (const id of sg.bloomNests) if (w.nests[id].owner === NEUTRAL) n++;
+  return 1 + SIEGE.perNest * n;
+}
+
+/** A wave's size as it would come right now. */
+export const waveSize = (w: World, wave: Wave): number => Math.round(wave.size * bloomFactor(w));
 
 /** The wave schedule: when, what, how many and from where. */
 export function rollWaves(rng: Rng, s: SiegeSetup, spawns: [number, number][], t0 = 0): Wave[] {
@@ -96,12 +128,52 @@ export function rollWaves(rng: Rng, s: SiegeSetup, spawns: [number, number][], t
 /** Release the waves that are due. Runs from updateEvents. */
 export function updateSiege(w: World): void {
   const sg = w.siege!;
-  while (sg.next < sg.waves.length && w.tick >= sg.waves[sg.next].at) release(w, sg, sg.waves[sg.next++]);
+  while (sg.next < sg.waves.length && w.tick >= sg.waves[sg.next].at) {
+    release(w, sg, sg.waves[sg.next++]);
+    if (sg.next % SIEGE.boonEvery === 0 && sg.offerAt < 0 && !sg.offer) sg.offerAt = w.tick + SIEGE.boonDelay;
+  }
+  // Boons: offered a little after every other wave; the first is taken if you don't choose.
+  if (sg.offerAt >= 0 && w.tick >= sg.offerAt) {
+    sg.offerAt = -1;
+    const rng = new Rng((w.seed ^ 0xb0b0) + sg.boons.length * 7919);
+    const pool = [...BOON_IDS];
+    const ids: BoonId[] = [];
+    while (ids.length < 3) ids.push(pool.splice(rng.int(pool.length), 1)[0]);
+    sg.offer = { ids, until: w.tick + SIEGE.boonOpen };
+    pushFx(w, 'boonOffer', 0, 0, sg.human);
+  }
+  if (sg.offer && w.tick >= sg.offer.until) takeBoon(w, sg.human, 0);
+}
+
+/** Take boon `k` of the offer on the table (a command, so it's in lockstep). */
+export function takeBoon(w: World, p: number, k: number): void {
+  const sg = w.siege;
+  if (!sg || !sg.offer || p !== sg.human) return;
+  const id = sg.offer.ids[k] ?? sg.offer.ids[0];
+  sg.offer = null;
+  sg.boons.push(id);
+  const f = w.factions[p];
+  const cap = w.nests[sg.capital];
+  if (id === 'reinforce') {
+    // About the size of the next wave's half, mostly Swarmers with Shields among them.
+    const next = sg.waves[Math.min(sg.next, sg.waves.length - 1)];
+    const n = Math.round(10 + 0.5 * (next ? waveSize(w, next) : 20));
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * TAU, r = cap.r * (0.6 + 0.5 * ((k * 7) % 5) / 5);
+      spawnUnit(w, p, k % 4 === 3 ? Kind.Tank : Kind.Dot, cap.x + dcos(a) * r, cap.y + dsin(a) * r, cap.x, cap.y, cap.r + 14);
+    }
+  } else if (id === 'production') f.prodMult *= 1.2;
+  else if (id === 'energy') f.energy = ENERGY.max;
+  else if (id === 'levels') {
+    for (const n of w.nests) if (n.owner === p && (n.capital || (n.x - cap.x) ** 2 + (n.y - cap.y) ** 2 < 260 * 260)) n.level = Math.min(MAX_LEVEL, n.level + 1);
+  }
+  pushFx(w, 'boonTaken', cap.x, cap.y, p, cap.r, -1, BOON_IDS.indexOf(id));
 }
 
 function release(w: World, sg: SiegeState, wave: Wave): void {
   const info = WAVE_KINDS[wave.kind];
-  const per = wave.from.length > 1 ? Math.ceil(wave.size / wave.from.length) : wave.size;
+  const size = waveSize(w, wave);
+  const per = wave.from.length > 1 ? Math.ceil(size / wave.from.length) : size;
   for (const i of wave.from) {
     const [x, y] = sg.spawns[i];
     const sw = releaseSwarm(w, x, y, per, 'bloomSwarm', info.mix);

@@ -67,7 +67,7 @@ const KIND_TEXT: Record<RunNode['kind'], string> = {
   start: 'Where the run began.',
   conquest: 'Wipe out every rival, or hold 80% of the nests for 30 seconds.',
   domination: 'Hold half the nests for 30 seconds, or wipe out every rival.',
-  hold: "Dug in behind your own walls: keep your capital until the clock runs out, against the Bloom's waves and a rival. Lose it and you have 20 seconds to take it back.",
+  hold: "Dug in behind your own walls: keep your capital until the clock runs out, against the Bloom's waves. Its nests in the field feed them; sally out to take them. Every other wave, pick a boon. Lose the capital and you have 20 seconds to take it back.",
   finale: 'The final battle: a large map against three Hard rivals. Win it to end the run.',
 };
 
@@ -928,7 +928,11 @@ export function runMap(
     const fortress = !taken && !dead && warlordAt(run, n.id)?.stronghold === n.id;
     if (n.kind !== 'start' && !taken && !dead) {
       foes = rivals(run, n.id);
-      rows.push(`<dt>Enemies</dt><dd>${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}${rivalStrip(foes, true, 'small')}</dd>`);
+      rows.push(
+        n.kind === 'hold'
+          ? `<dt>Enemies</dt><dd>The Bloom: every nest it holds in the field makes its waves bigger</dd>`
+          : `<dt>Enemies</dt><dd>${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}${rivalStrip(foes, true, 'small')}</dd>`,
+      );
       // Strongholds and Hold the line are fortresses, each in its own style (#67).
       const fort = fortress || n.kind === 'hold' ? cardMap(run, n).fortress : undefined;
       const ground = fort ? `Fortress (${FORTRESS_LABEL[fort.style]})` : CAVE_LABEL[n.caves];

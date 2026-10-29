@@ -2,7 +2,7 @@ import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
 import { isMobile } from './mobile';
 import { heartSlot, standingNests } from '../sim/heart';
-import { SIEGE, WAVE_KINDS } from '../sim/siege';
+import { BOONS, SIEGE, WAVE_KINDS, waveSize } from '../sim/siege';
 import type { WaveKind } from '../sim/world';
 
 /** Seconds of upcoming waves the siege timeline shows (#67). */
@@ -83,6 +83,9 @@ export class Hud {
   private warlordChip: HTMLDivElement;
   private siege: HTMLDivElement;
   private siegeTrack: HTMLDivElement;
+  private boon: HTMLDivElement;
+  /** the offer the boon panel shows (its closing tick), to rebuild it once per offer */
+  private boonShown = -1;
   /** one icon per scheduled wave (#67), made when the siege is first seen */
   private waveIcons: HTMLElement[] = [];
   /** the warlord in this battle (#66), whose chip greys out once it's eliminated */
@@ -126,7 +129,8 @@ export class Hud {
         <button class="icon" data-a="pause" title="Pause (Esc)">❚❚</button>
       </div>
       <div class="warlord-chip"></div>
-      <div class="siege"><div class="siege-track"><span class="siege-now"></span></div><div class="siege-clock"></div><div class="siege-lost"></div></div>
+      <div class="siege"><div class="siege-track"><span class="siege-now"></span></div><div class="siege-clock"></div><div class="siege-lost"></div><div class="siege-bloom"></div></div>
+      <div class="boon"><div class="boon-head">Pick one <span></span></div><div class="boon-list"></div></div>
       <div class="heartbar"><div class="heart-name">The Bloom's heart</div><div class="heart-hp"><i></i></div><div class="heart-ward"></div></div>
       <div class="dom"><div class="dom-time"></div><div class="dom-text"></div><div class="dom-bar"><i></i></div></div>
       <div class="toasts"></div>
@@ -205,6 +209,7 @@ export class Hud {
     this.warlordChip = q('.warlord-chip');
     this.siege = q('.siege');
     this.siegeTrack = q('.siege-track');
+    this.boon = q('.boon');
     this.nestShare = q('.nestshare .segs');
     this.domMark = q('.nestshare .mark');
     this.nestCard = q('.nestcard');
@@ -338,7 +343,7 @@ export class Hud {
       if (!show) return;
       el.style.left = `${Math.max(0, (100 * dt) / span)}%`;
       el.classList.toggle('arrived', dt <= 0);
-      el.title = `${WAVE_KINDS[wave.kind].name} · ${wave.size}${wave.from.length > 1 ? ' (two sides)' : ''} · in ${formatTime(Math.max(0, Math.round(dt)))}`;
+      el.title = `${WAVE_KINDS[wave.kind].name} · ${waveSize(w, wave)}${wave.from.length > 1 ? ' (two sides)' : ''} · in ${formatTime(Math.max(0, Math.round(dt)))}`;
     });
     const left = Math.max(0, sg.until - w.tick);
     const clock = this.siege.children[1] as HTMLElement;
@@ -347,6 +352,28 @@ export class Hud {
     const lost = this.siege.children[2] as HTMLElement;
     lost.style.display = sg.lostAt >= 0 ? 'block' : 'none';
     if (sg.lostAt >= 0) lost.textContent = `Retake your capital: ${formatTime(Math.max(0, SIEGE.retake - (w.tick - sg.lostAt)))}`;
+    // The Bloom's nests in the field: what taking them would save you.
+    const held = sg.bloomNests.filter((id) => w.nests[id].owner === NEUTRAL).length;
+    const bloom = this.siege.children[3] as HTMLElement;
+    const btext = held ? `${held} Bloom nest${held > 1 ? 's' : ''} feed the waves (+${Math.round(100 * SIEGE.perNest * held)}%): take them to thin them` : 'The Bloom holds no nests: its waves are at their weakest';
+    if (bloom.textContent !== btext) bloom.textContent = btext;
+
+    // A boon on offer: three choices and the time left to pick.
+    const offer = sg.offer;
+    this.boon.style.display = offer ? 'block' : 'none';
+    if (!offer) {
+      this.boonShown = -1;
+      return;
+    }
+    if (this.boonShown !== offer.until) {
+      this.boonShown = offer.until;
+      const list = this.boon.querySelector('.boon-list')!;
+      list.innerHTML = offer.ids.map((id, k) => `<button data-k="${k}"><b>${BOONS[id].name}</b><small>${BOONS[id].text}</small></button>`).join('');
+      list.querySelectorAll<HTMLButtonElement>('button').forEach((b) => b.addEventListener('click', () => this.game?.pickBoon(Number(b.dataset.k))));
+    }
+    const head = this.boon.querySelector('.boon-head span')!;
+    const t = `${Math.ceil((offer.until - w.tick) / TICK_HZ)}s, then the first is yours`;
+    if (head.textContent !== t) head.textContent = t;
   }
 
   /** Show a campaign warlord (#66): its name and trait, in its colour, for the whole battle. */

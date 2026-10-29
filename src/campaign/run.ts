@@ -330,7 +330,8 @@ function placeHolds(seed: number, nodes: RunNode[], far: number): void {
     if (!pool.length || rng.next() >= HOLD_ODDS) continue;
     const n = rng.pick(pool);
     const t = Math.min(1, d / far);
-    Object.assign(n, { kind: 'hold', rivals: 1, size: 'medium', caves: 'off', reward: Math.round(10 + 20 * t + 8) });
+    // No rival (#67 playtest: it took the field while you held the walls): just you and the Bloom.
+    Object.assign(n, { kind: 'hold', rivals: 0, size: 'medium', caves: 'off', reward: Math.round(10 + 20 * t + 8) });
   }
 }
 

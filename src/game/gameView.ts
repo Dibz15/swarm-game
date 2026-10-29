@@ -1,5 +1,5 @@
 import type { TraitId } from '../campaign/warlords';
-import { WAVE_KINDS } from '../sim/siege';
+import { BOONS, WAVE_KINDS, waveSize } from '../sim/siege';
 import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
@@ -475,7 +475,7 @@ export class GameView {
           rings.add({ x: e.x, y: e.y, r0: 20, r1: 140, dur: 0.9, c: FERAL, thick: 3 });
           if (wave && wave.from[0] === w.siege!.spawns.findIndex((p) => p[0] === e.x && p[1] === e.y)) {
             sfx.siegeWave();
-            toast(`Wave ${e.prev + 1}: ${WAVE_KINDS[wave.kind].name}, ${wave.size} strong`, '#e3707a');
+            toast(`Wave ${e.prev + 1}: ${WAVE_KINDS[wave.kind].name}, ${waveSize(w, wave)} strong`, '#e3707a');
           }
           break;
         }
@@ -484,6 +484,16 @@ export class GameView {
           rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.6, c: [255, 93, 115], thick: 3 });
           toast('Your capital has fallen: retake it within 20 seconds!', '#ff5d73');
           break;
+        case 'boonOffer':
+          sfx.boonOffer();
+          break;
+        case 'boonTaken': {
+          const id = (Object.keys(BOONS) as (keyof typeof BOONS)[])[e.prev];
+          if (id) toast(`${BOONS[id].name}: ${BOONS[id].text.toLowerCase()}`, hex(this.human));
+          rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3, dur: 0.6, c: FACTION_RGB[this.human], thick: 3 });
+          sfx.levelUp(e.x, e.y, true);
+          break;
+        }
         case 'capitalRetaken':
           toast('Capital retaken', hex(this.human));
           break;
@@ -822,6 +832,11 @@ export class GameView {
     }
     this.s.sfx.order();
     return this.world.nests[orders[0].nest];
+  }
+
+  /** Holding the line (#67): take boon `k` of the offer. */
+  pickBoon(k: number): void {
+    if (this.world.siege?.offer) this.session.issue({ t: 'boon', p: this.human, k });
   }
 
   surge(): void {

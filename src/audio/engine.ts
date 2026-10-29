@@ -535,6 +535,12 @@ export class AudioEngine {
     this.noise(this.reverbIn, 1.6, 0.08, 'lowpass', 500, 120);
   }
 
+  /** Holding the line: a boon on offer. Three bright, rising notes. */
+  boonOffer(): void {
+    if (!this.ctx) return;
+    [12, 16, 19].forEach((s, i) => this.tone(this.ui, this.note(s), 0.3, 'triangle', 0.04, { delay: i * 0.08 }));
+  }
+
   /** Holding the line: your capital has fallen. A fast, urgent alarm. */
   capitalAlarm(): void {
     if (!this.ctx) return;

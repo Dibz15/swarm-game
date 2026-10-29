@@ -22,8 +22,6 @@ export const CONQUEST_SHARE = 0.8;
 /** The army size (#100) a stronghold's starting garrisons are tuned for; bigger armies meet bigger garrisons. */
 export const STRONGHOLD_ARMY = 32;
 const armySize = (run: RunState, fielded: number[]) => armyFor(run, fielded).reduce((a, b) => a + b.count, 0);
-/** Holding the line (#67), the waves are the main threat; the rival, untouched by them, would otherwise outgrow you. */
-export const SIEGE_RIVAL_PROD = 0.5;
 /** A warlord's production in its own stronghold (#100): it starts with three nests, not one. */
 export const STRONGHOLD_PROD = 0.7;
 /** Domination nodes: hold half the nests (the usual share is 0.6-0.7). */
@@ -81,11 +79,7 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
       ...factions.slice(0, n.rivals).map((faction, i): PlayerSetup => {
         const personality = rng.pick(PERSONALITIES);
         const lord = lords[i];
-        // Holding the line, the rival is a rusher coming for you (#67).
-        const plain: PlayerSetup =
-          n.kind === 'hold'
-            ? { faction, team: i + 1, human: false, prod: (DIFFICULTY[n.difficulty]?.prod ?? 1) * SIEGE_RIVAL_PROD, bot: { difficulty: n.difficulty, personality: 'rusher', focus: run.color } }
-            : { faction, team: i + 1, human: false, bot: { difficulty: n.difficulty, personality } };
+        const plain: PlayerSetup = { faction, team: i + 1, human: false, bot: { difficulty: n.difficulty, personality } };
         if (!lord) return plain;
         const p = warlordPlayer(run, lord, plain);
         // In its stronghold, the warlord turtles whatever its usual temper.
@@ -98,16 +92,17 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
 
 /**
  * Hold the line (#67): longer, faster and bigger waves further into the run,
- * bigger still for every node the Bloom ate. PROVISIONAL (#68).
+ * bigger still for every node the Bloom ate (and, in battle, for every field
+ * nest it holds: SIEGE.perNest). PROVISIONAL (#68).
  */
 export function siegeFor(run: RunState, depth: number): SiegeSetup {
   const t = Math.min(1, depth / Math.max(1, run.nodes[run.heart].depth));
   return {
     seconds: Math.round(lerp(180, 300, t)),
     first: 20,
-    every: Math.round(lerp(40, 28, t)),
-    size: Math.round(lerp(14, 30, t) * swarmScale(bloomStrength(run))),
-    grow: 1.12,
+    every: Math.round(lerp(36, 26, t)),
+    size: Math.round(lerp(22, 38, t) * swarmScale(bloomStrength(run))),
+    grow: 1.18,
     depth: t,
   };
 }
