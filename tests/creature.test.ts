@@ -107,7 +107,8 @@ describe('rival portraits', () => {
       const bots = nodeSetup(run, n.id, false).players.filter((p) => p.bot);
       expect(rs.map((r) => r.faction)).toEqual(bots.map((p) => p.faction));
       expect(rs.map((r) => r.personality)).toEqual(bots.map((p) => p.bot!.personality));
-      expect(rs.every((r) => r.creature.tier === n.difficulty)).toBe(true);
+      // A warlord keeps its own face (tier 3) all run.
+      expect(rs.every((r) => r.creature.tier === (r.warlord ? 3 : n.difficulty))).toBe(true);
       expect(JSON.stringify(rivals(run, n.id))).toBe(JSON.stringify(rs));
     }
   });

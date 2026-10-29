@@ -6,7 +6,8 @@
 import type { AudioEngine } from '../audio/engine';
 import { mountCreatures } from '../art/creature';
 import { BLOOM, BloomField, MapFx, battleMapCanvas, bloomGapView, sigilCanvas, drawIcon, glyph, nodeRadius, tendrils, wobble } from './runmapfx';
-import { bloomLabel, rivals, type Rival } from '../campaign/battle';
+import { bloomLabel, rivals, warlordOf, type Rival } from '../campaign/battle';
+import { STRONGHOLD_WEIGHT, TRAITS, trophyOf } from '../campaign/warlords';
 import { broodCreature, broodTemper } from '../campaign/character';
 import {
   MAP_H,
@@ -20,6 +21,7 @@ import {
   rerollCost,
   rerollOffer,
   revealed,
+  warlordFighting,
   DIFFICULTIES,
   RUN_DIFFICULTY,
   difficultyOf,
@@ -80,7 +82,7 @@ const TEMPER_HINT: Record<Personality, string> = {
 function rivalStrip(list: Rival[], names: boolean, cls = ''): string {
   const one = (r: Rival, i: number) =>
     `<span class="rival" style="--c:${FACTION_HEX[r.faction]}" title="${r.creature.name}: ${TEMPER_LABEL[r.personality]}, ${TEMPER_HINT[r.personality]}">
-      <span class="portrait" data-creature="${i}"></span>${names ? `<span class="who"><b>${r.creature.name}</b><small>${TEMPER_LABEL[r.personality]}</small></span>` : ''}
+      <span class="portrait" data-creature="${i}"></span>${names ? `<span class="who"><b>${r.warlord ? `♛ ${esc(r.warlord.name)}` : r.creature.name}</b><small>${r.warlord ? TRAITS[r.warlord.trait].name : TEMPER_LABEL[r.personality]}</small></span>` : ''}
     </span>`;
   return `<div class="rival-strip ${cls}">${list.map(one).join('')}</div>`;
 }
@@ -301,6 +303,32 @@ function drawMap(
   const open = new Set(moves(run));
   const isSwallowed = (id: number) => run.swallowed.includes(id) && (!opts.fresh.has(id) || opts.freshT >= 1);
 
+  // Warlord domains (#66): a soft wash in the warlord's colour over its nodes
+  // and the links between them; grey once broken, the Bloom's once eaten.
+  for (const w of run.warlords ?? []) {
+    if (!w.nodes.some((id) => known.has(id))) continue;
+    const eaten = run.swallowed.includes(w.stronghold);
+    g.fillStyle = g.strokeStyle = w.broken ? '#8a90a8' : eaten ? BLOOM : FACTION_HEX[w.faction];
+    g.globalAlpha = w.broken || eaten ? 0.08 : 0.16;
+    g.lineCap = 'round';
+    g.lineWidth = 34 * u;
+    for (const a of w.nodes)
+      for (const l of run.nodes[a].links) {
+        if (l < a || !w.nodes.includes(l) || !known.has(a) || !known.has(l)) continue;
+        g.beginPath();
+        g.moveTo(X(run.nodes[a].x), Y(run.nodes[a].y));
+        g.lineTo(X(run.nodes[l].x), Y(run.nodes[l].y));
+        g.stroke();
+      }
+    for (const id of w.nodes) {
+      if (!known.has(id)) continue;
+      g.beginPath();
+      g.arc(X(run.nodes[id].x), Y(run.nodes[id].y), (id === w.stronghold ? 30 : 24) * u, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+  }
+
   // Links.
   for (const n of run.nodes) {
     if (!known.has(n.id)) continue;
@@ -389,6 +417,9 @@ function drawMap(
       g.closePath();
       g.fill();
     }
+    // A crown on a warlord's stronghold while it stands.
+    const lord = n.domain === undefined ? undefined : run.warlords?.[n.domain];
+    if (lord && lord.stronghold === n.id && !lord.broken && !dead) crown(g, x, y - r - 7 * u, u, FACTION_HEX[lord.faction]);
     // A small brood badge where one waits to be rescued.
     // The camp beside your swarm: tap it (or your node) to open the camp.
     if (here && !opts.thumb) campSymbol(g, x + r * CAMP_AT, y - r * CAMP_AT, u, me, pulse);
@@ -412,6 +443,25 @@ function drawMap(
   // Unlike the node icons, the swarm lives in the map: it shrinks as you zoom out (1 at the default zoom).
   if (fx && run.status === 'active') fx.swarm.draw(g, run.nodes[run.at], opts.time, X, Y, u, me, (v.s * VIEW_SPAN) / cw);
   return v;
+}
+
+/** A warlord's crown: three points over a band. */
+function crown(g: CanvasRenderingContext2D, x: number, y: number, u: number, color: string): void {
+  const w = 9 * u, h = 7 * u;
+  g.beginPath();
+  g.moveTo(x - w, y + h * 0.5);
+  g.lineTo(x - w, y - h * 0.5);
+  g.lineTo(x - w * 0.45, y);
+  g.lineTo(x, y - h * 0.8);
+  g.lineTo(x + w * 0.45, y);
+  g.lineTo(x + w, y - h * 0.5);
+  g.lineTo(x + w, y + h * 0.5);
+  g.closePath();
+  g.fillStyle = color;
+  g.fill();
+  g.strokeStyle = '#06070f';
+  g.lineWidth = 1.2 * u;
+  g.stroke();
 }
 
 /** The field for hub thumbnails, which have no effects state. */
@@ -582,7 +632,7 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
     body.innerHTML = run.perks.length
       ? `<div class="unlock-cards">${run.perks
           .map((p) => {
-            const r = REWARD[p];
+            const r = REWARD[p] ?? trophyOf(p);
             return `<article class="unlock-card on"><span class="icon-art reward">✦</span><div class="who"><b>${esc(r?.name ?? p)}</b><small>${esc(r?.text ?? '')}</small></div></article>`;
           })
           .join('')}</div>`
@@ -830,6 +880,18 @@ export function runMap(
       rows.push(`<dt>Enemies</dt><dd>${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}${rivalStrip(foes, true, 'small')}</dd>`);
       rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}<div class="battle-map-slot"></div></dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
+      const lord = warlordOf(run, n.id);
+      if (lord) {
+        const weak = lord.weakened ? ` · weakened ×${lord.weakened} by the Bloom` : '';
+        const where = n.kind === 'finale' ? 'joins the finale · ' : '';
+        rows.push(`<dt>Warlord</dt><dd><b style="color:${FACTION_HEX[lord.faction]}">♛ ${esc(lord.name)}</b> · ${where}${esc(lord.text)}${weak}</dd>`);
+        const w = warlordFighting(run, n.id);
+        if (w && w.stronghold === n.id) {
+          rows.push(
+            `<dt>Stronghold</dt><dd>Take it to break the domain: ${Math.round(STRONGHOLD_WEIGHT.rare)}% rare picks, and its trophy: ${esc(TRAITS[w.trait].trophy.text)}</dd>`,
+          );
+        }
+      }
       if (n.reward) {
         const rescue =
           n.rescue === undefined ? '' : run.broods.length < MAX_ROSTER ? ` · rescue a ${KIND_NAME[n.rescue]} brood` : ` · a ${KIND_NAME[n.rescue]} brood waits, but your roster is full (${MAX_ROSTER})`;
@@ -1059,6 +1121,18 @@ const EVENT_TEXT: Record<BroodEvent['what'], (e: BroodEvent) => string> = {
   recovered: () => 'has recovered',
 };
 
+/** What happened to warlords this turn: a domain you broke, a stronghold the Bloom ate. */
+function lordText(run: RunState, res: TurnResult): string {
+  const items = res.warlords.map(({ id, what }) => {
+    const w = run.warlords![id];
+    const name = `<b style="color:${FACTION_HEX[w.faction]}">♛ ${esc(w.name)}</b>`;
+    return what === 'broken'
+      ? `<li>${name}'s domain is broken. Trophy: <b>${esc(TRAITS[w.trait].trophy.name)}</b>. ${esc(TRAITS[w.trait].trophy.text)}.</li>`
+      : `<li>The Bloom ate ${name}'s stronghold: the warlord is gone.</li>`;
+  });
+  return items.length ? `<ul class="brood-events warlord-events">${items.join('')}</ul>` : '';
+}
+
 export function runDebrief(run: RunState, node: RunNode, won: boolean, res: TurnResult, h: { next: () => void; hub: () => void }): HTMLDivElement {
   const over = run.status !== 'active';
   const restored = res.checkpoint === 'restored';
@@ -1091,6 +1165,7 @@ export function runDebrief(run: RunState, node: RunNode, won: boolean, res: Turn
         <h2>${title}</h2>
         <p>${text}</p>
         ${foes.length && !restored ? rivalStrip(foes, true, won ? 'beaten' : '') : ''}
+        ${restored ? '' : lordText(run, res)}
         ${events.length ? `<ul class="brood-events">${events.map((e) => `<li><span class="glyph">${KIND_GLYPH[e.kind]}</span> <b>${esc(e.name)}</b> ${EVENT_TEXT[e.what](e)}</li>`).join('')}</ul>` : ''}
         ${res.checkpoint === 'reached' ? '<p class="hint">⚑ Checkpoint reached: if your swarm falls after this, the run restarts here once.</p>' : ''}
         <p>${broods(run)} <span class="hint">${run.biomass} biomass</span></p>

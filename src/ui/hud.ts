@@ -65,6 +65,9 @@ export class Hud {
   private toasts: HTMLDivElement;
   private dom: HTMLDivElement;
   private heartBar: HTMLDivElement;
+  private warlordChip: HTMLDivElement;
+  /** the warlord in this battle (#66), whose chip greys out once it's eliminated */
+  private warlord = -1;
   private nestShare: HTMLDivElement;
   private domMark: HTMLElement;
   private nestCard: HTMLDivElement;
@@ -103,6 +106,7 @@ export class Hud {
         <button class="icon" data-a="mute" title="Mute (M)">♪</button>
         <button class="icon" data-a="pause" title="Pause (Esc)">❚❚</button>
       </div>
+      <div class="warlord-chip"></div>
       <div class="heartbar"><div class="heart-name">The Bloom's heart</div><div class="heart-hp"><i></i></div><div class="heart-ward"></div></div>
       <div class="dom"><div class="dom-time"></div><div class="dom-text"></div><div class="dom-bar"><i></i></div></div>
       <div class="toasts"></div>
@@ -178,6 +182,7 @@ export class Hud {
     this.toasts = q('.toasts');
     this.dom = q('.dom');
     this.heartBar = q('.heartbar');
+    this.warlordChip = q('.warlord-chip');
     this.nestShare = q('.nestshare .segs');
     this.domMark = q('.nestshare .mark');
     this.nestCard = q('.nestcard');
@@ -281,6 +286,15 @@ export class Hud {
     this.coach.classList.add('pop');
   }
 
+  /** Show a campaign warlord (#66): its name and trait, in its colour, for the whole battle. */
+  setWarlord(w: { faction: number; name: string; trait: string; text: string } | null): void {
+    this.warlord = w ? w.faction : -1;
+    this.warlordChip.style.display = w ? 'block' : 'none';
+    if (!w) return;
+    this.warlordChip.style.setProperty('--c', hex(w.faction));
+    this.warlordChip.innerHTML = `<b>♛ ${w.name}</b><small>${w.trait}: ${w.text}</small>`;
+  }
+
   update(g: GameView, dt: number): void {
     this.game = g;
     this.tipTimer += dt;
@@ -343,6 +357,10 @@ export class Hud {
     // The Bloom's heart (campaign finale): its health, and what wards it.
     const hs = heartSlot(w);
     this.heartBar.style.display = hs >= 0 ? 'block' : 'none';
+    if (this.warlord >= 0) {
+      this.warlordChip.classList.toggle('below', hs >= 0);
+      this.warlordChip.classList.toggle('down', !!w.factions[this.warlord]?.eliminated);
+    }
     this.nestShare.parentElement!.style.visibility = hs >= 0 ? 'hidden' : '';
     if (hs >= 0) {
       const h = w.heart!;

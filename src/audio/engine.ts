@@ -517,6 +517,24 @@ export class AudioEngine {
     this.noise(this.reverbIn, 1.4, 0.08, 'lowpass', 900, 200);
   }
 
+  /** A warlord's sting (#66): a short brassy motif in its colour's register. */
+  warlordSting(faction: number): void {
+    if (!this.ctx) return;
+    const v = VOICE[faction] ?? VOICE[NEUTRAL];
+    const o = 12 * (v.octave - 2);
+    [0, 3, -2, 0].forEach((s, i) => this.tone(this.ui, this.note(s + o - 12), i === 3 ? 0.9 : 0.28, 'sawtooth', 0.04, { delay: i * 0.17, attack: 0.03 }));
+    this.tone(this.reverbIn, this.note(o - 24), 1.2, v.type, 0.06, { delay: 0.51, attack: 0.05 });
+    this.noise(this.reverbIn, 0.5, 0.05, 'lowpass', 600, 200);
+  }
+
+  /** A warlord's stronghold falls: a crash, then a rising chord. */
+  domainBroken(): void {
+    if (!this.ctx) return;
+    this.noise(this.reverbIn, 0.9, 0.09, 'lowpass', 1200, 150);
+    this.tone(this.ui, this.note(-12), 0.6, 'sawtooth', 0.05, { slide: 0.6 });
+    [0, 4, 7, 12].forEach((s, i) => this.tone(this.reverbIn, this.note(s), 1.1, 'triangle', 0.045, { delay: 0.35 + i * 0.08 }));
+  }
+
   /** Supply drop incoming: a bright falling chime. */
   dropIncoming(): void {
     if (!this.ctx) return;

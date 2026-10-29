@@ -30,7 +30,17 @@ import {
   type PackId,
   type Unlock,
 } from './broods';
-import { HUNGER_BLOOM, REROLL, REWARD, STRAIN_SLOTS, rollOffer } from './rewards';
+import { HUNGER_BLOOM, REROLL, REWARD, STRAIN_SLOTS, TIER_WEIGHT, rollOffer } from './rewards';
+import {
+  DOMAIN_RESCUE,
+  DOMAIN_REWARD,
+  DOMAIN_WEIGHT,
+  STRONGHOLD_REWARD,
+  STRONGHOLD_WEIGHT,
+  TROPHY,
+  placeWarlords,
+  type Warlord,
+} from './warlords';
 
 export const MAP_W = 1000;
 export const MAP_H = 620;
@@ -91,6 +101,8 @@ export interface RunNode {
   rescue?: number;
   /** reaching this node saves a checkpoint the run can restart from once */
   checkpoint?: boolean;
+  /** the warlord whose domain this node is in (its id) */
+  domain?: number;
 }
 
 /** Where the Bloom grows from: a node you left, and the Bloom time you left it. */
@@ -191,7 +203,9 @@ export interface RunState {
   /** run-wide rewards: power variants, perks and pacts (ids in rewards.ts) */
   perks: string[];
   /** a reward offer waiting to be picked (saved, so reloading shows the same one) */
-  offer?: { ids: string[]; rerolls: number };
+  offer?: { ids: string[]; rerolls: number; weight?: Record<'common' | 'uncommon' | 'rare', number> };
+  /** rival warlords and their domains (#66; older saves have none) */
+  warlords?: Warlord[];
   status: RunStatus;
   /** why a lost run ended */
   lostTo?: 'broods' | 'bloom';
@@ -348,6 +362,24 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
     if (n.kind === 'start' || n.kind === 'finale' || n.checkpoint) continue;
     if (rng.next() < RESCUE_ODDS) n.rescue = rng.pick([Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift]);
   }
+  // Warlords (#66), on their own seeded streams so the map above is unchanged.
+  const warlords = placeWarlords(seed, nodes, far, color, (from) => hops(nodes, from));
+  const wr = new Rng(hashString(`${seed}:domains`));
+  for (const w of warlords) {
+    for (const id of w.nodes) {
+      const n = nodes[id];
+      n.domain = w.id;
+      if (id === w.stronghold) {
+        n.reward = Math.round(n.reward * STRONGHOLD_REWARD);
+        // One step harder, within the run's rules (as in battle()): Gentle has no
+        // Normal bots, Brutal no Hard ones, and only Brutal goes past Hard.
+        n.difficulty = Math.min(rules.bots > 0 ? 3 : 2, n.difficulty + 1);
+        if (rules.bots < 0 && n.difficulty === 1) n.difficulty = 0;
+        if (rules.bots > 0 && n.difficulty === 2) n.difficulty = 3;
+      } else n.reward = Math.round(n.reward * DOMAIN_REWARD);
+      if (n.rescue === undefined && wr.next() < DOMAIN_RESCUE) n.rescue = wr.pick([Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift]);
+    }
+  }
 
   // The Bloom: starts just behind everything, and moves at a pace the
   // shortest route to the heart keeps ahead of with room for a lost battle or
@@ -384,6 +416,7 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
     ...startBroods(seed, pack),
     biomass: 0,
     perks: [],
+    warlords,
     status: 'active',
     checkpointUsed: false,
     created: now,
@@ -461,6 +494,8 @@ export interface TurnResult {
   events: BroodEvent[];
   biomass: number;
   checkpoint?: 'reached' | 'restored';
+  /** a domain broken by your win, or a stronghold the Bloom ate */
+  warlords: { id: number; what: 'broken' | 'eaten' }[];
 }
 
 /**
@@ -472,7 +507,9 @@ export interface TurnResult {
 export function resolveTurn(run: RunState, id: number, report: BattleReport | null, fielded: number[] = [], now = Date.now()): TurnResult {
   const node = run.nodes[id];
   const won = report ? report.won : true;
-  const res: TurnResult = { fresh: [], events: [], biomass: 0 };
+  const res: TurnResult = { fresh: [], events: [], biomass: 0, warlords: [] };
+  // Before the turn changes anything: whose ground this battle was on.
+  const lord = report ? warlordFighting(run, id) : undefined;
   run.turn++;
   run.updated = now;
   if (report) {
@@ -489,6 +526,11 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
       run.broods.push(b);
       res.events.push({ name: b.name, kind: b.kind, what: 'rescued', size: b.size });
     }
+    if (report && lord && lord.stronghold === id && !lord.broken) {
+      lord.broken = true;
+      run.perks.push(TROPHY + lord.trait);
+      res.warlords.push({ id: lord.id, what: 'broken' });
+    }
     if (!run.visited.includes(id)) run.visited.push(id);
     // The Bloom will grow from where you came.
     const from = run.nodes[run.at];
@@ -504,6 +546,7 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
   if (!(report && !report.won && RUN_DIFFICULTY[difficultyOf(run)].holdOnLoss)) run.bloom.time++;
   res.fresh = swallowedNow(run).filter((n) => !run.swallowed.includes(n));
   run.swallowed.push(...res.fresh);
+  for (const w of run.warlords ?? []) if (!w.broken && res.fresh.includes(w.stronghold)) res.warlords.push({ id: w.id, what: 'eaten' });
 
   const lost: RunState['lostTo'] = run.broods.length === 0 ? 'broods' : moves(run).length === 0 ? 'bloom' : undefined;
   if (lost) {
@@ -522,8 +565,9 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
   }
   // After the checkpoint snapshot, so a restore doesn't hand the same pick out twice.
   if (report?.won) {
-    const ids = rollOffer(run, 0);
-    run.offer = ids.length ? { ids, rerolls: 0 } : undefined;
+    const weight = offerWeight(id, lord);
+    const ids = rollOffer(run, 0, weight);
+    run.offer = ids.length ? { ids, rerolls: 0, ...(weight === TIER_WEIGHT ? {} : { weight }) } : undefined;
   }
   return res;
 }
@@ -578,7 +622,7 @@ export function rerollOffer(run: RunState): boolean {
   if (!o || run.biomass < rerollCost(run)) return false;
   run.biomass -= rerollCost(run);
   o.rerolls++;
-  o.ids = rollOffer(run, o.rerolls);
+  o.ids = rollOffer(run, o.rerolls, o.weight);
   return true;
 }
 
@@ -651,4 +695,40 @@ export function speedBloom(b: Bloom, factor: number): void {
     if (r > 0) s.born = b.time - BLOOM_LAG - r / step;
   }
   b.step = step;
+}
+
+// ---- warlords (#66) ---------------------------------------------------------
+
+/** A warlord still in the run: its stronghold neither taken nor swallowed. */
+export const living = (run: RunState, w: Warlord): boolean => !w.broken && !run.swallowed.includes(w.stronghold);
+
+/** How many of a warlord's domain nodes the Bloom has swallowed. */
+export const erosion = (run: RunState, w: Warlord): number => w.nodes.filter((id) => run.swallowed.includes(id)).length;
+
+/** The living warlord whose domain holds this node, if any. */
+export function warlordAt(run: RunState, id: number): Warlord | undefined {
+  const d = run.nodes[id].domain;
+  const w = d === undefined ? undefined : run.warlords?.[d];
+  return w && living(run, w) ? w : undefined;
+}
+
+/**
+ * The warlord in a node's battle: the living one whose domain it is, or the
+ * one whose stronghold it is even once broken (so the debrief still shows who
+ * you beat). The finale has none: see `finaleWarlords`.
+ */
+export function warlordFighting(run: RunState, id: number): Warlord | undefined {
+  return warlordAt(run, id) ?? run.warlords?.find((w) => w.stronghold === id);
+}
+
+/** Living warlords whose domains border the heart: they join the finale. */
+export function finaleWarlords(run: RunState): Warlord[] {
+  const near = new Set(run.nodes[run.heart].links);
+  return (run.warlords ?? []).filter((w) => living(run, w) && w.nodes.some((id) => near.has(id)));
+}
+
+/** Offer weights after a win here: richer in a domain, richest at its stronghold. */
+function offerWeight(id: number, lord: Warlord | undefined): typeof TIER_WEIGHT {
+  if (!lord) return TIER_WEIGHT;
+  return lord.stronghold === id ? STRONGHOLD_WEIGHT : DOMAIN_WEIGHT;
 }

@@ -262,6 +262,27 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .heart-ward { margin-top: 5px; font-size: 12px; color: #c9b9c3; }
 .heartbar.open .heart-ward { color: #ffd2d8; font-weight: 600; }
 
+/* A campaign warlord (#66): who leads this battle, and its trait. */
+.warlord-chip {
+  position: absolute;
+  top: 54px;
+  left: 12px;
+  max-width: min(260px, calc(100% - 24px));
+  padding: 5px 10px 6px;
+  background: rgba(8, 10, 22, 0.8);
+  border: 1px solid var(--c);
+  border-left-width: 3px;
+  border-radius: 6px;
+  display: none;
+  pointer-events: none;
+  transition: opacity 0.4s;
+}
+.warlord-chip b { display: block; font-size: 13px; color: var(--c); }
+.warlord-chip small { display: block; font-size: 11px; color: #c9cde0; }
+.warlord-chip.below { top: 128px; }
+.warlord-chip.down { opacity: 0.4; }
+.warlord-chip.down b { text-decoration: line-through; }
+
 /* Domination countdown: big, in the dominating color, impossible to miss. */
 .dom {
   --c: #ffb627;

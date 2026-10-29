@@ -12,6 +12,7 @@ import { Kind, POWER_NEST } from '../sim/constants';
 import { defaultMods, type FactionMods } from '../sim/mods';
 import { Rng, hashString } from '../sim/rng';
 import type { Brood } from './broods';
+import { trophyOf } from './warlords';
 
 export type Tier = 'common' | 'uncommon' | 'rare';
 export type Family = 'strain' | 'power' | 'perk' | 'pact';
@@ -34,7 +35,7 @@ export interface Reward {
 export const STRAIN_SLOTS = 2;
 /** rerolling an offer: base + step per reroll already made on it */
 export const REROLL = { base: 10, step: 5 };
-/** offer weights per tier (PROVISIONAL); warlord domains will tilt these (phase 5) */
+/** offer weights per tier (PROVISIONAL); warlord domains tilt these (DOMAIN_WEIGHT in warlords.ts) */
 export const TIER_WEIGHT: Record<Tier, number> = { common: 60, uncommon: 30, rare: 10 };
 /** Hunger's Bloom speed-up */
 export const HUNGER_BLOOM = 1.25;
@@ -148,7 +149,7 @@ export function rollOffer(run: OfferRun, rerolls: number, weight: Record<Tier, n
 /** The match modifiers for a battle: the run's perks, plus the strains of the broods that fight. */
 export function modsFor(perks: string[], fighting: Brood[]): FactionMods {
   const m = defaultMods();
-  for (const id of perks) REWARD[id]?.apply(m);
+  for (const id of perks) (REWARD[id] ?? trophyOf(id))?.apply(m);
   // Two broods of one kind both lend their strains; the same strain doesn't stack.
   const strains = new Set(fighting.flatMap((b) => b.strains));
   for (const id of strains) REWARD[id]?.apply(m);
