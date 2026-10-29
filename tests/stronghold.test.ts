@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nodeSetup } from '../src/campaign/battle';
+import { PLAYTEST, PLAYTESTS } from '../src/campaign/playtest';
 import { newRun, type RunState } from '../src/campaign/run';
 import { MAX_LEVEL, TICK_HZ } from '../src/sim/constants';
 import { resolveDamage } from '../src/sim/combat';
@@ -131,4 +132,24 @@ describe('stronghold nodes', () => {
     });
     expect(win).toBeDefined();
   }, 240_000);
+});
+
+describe('playtests', () => {
+  it('every scenario builds, and fights the battle it says it does', () => {
+    for (const p of PLAYTESTS) {
+      const s = p.make(0);
+      expect(s.run.id.startsWith(PLAYTEST)).toBe(true);
+      expect(s.run.nodes[s.run.at].links).toBeDefined();
+      if (s.kind !== 'battle') continue;
+      expect(s.run.nodes[s.run.at].links).toContain(s.node);
+      const setup = nodeSetup(s.run, s.node, false);
+      if (p.group.startsWith('Stronghold')) expect(setup.stronghold).toEqual({ player: 1 });
+      else expect(setup.stronghold).toBeUndefined();
+      if (p.id.startsWith('domain-') || p.id.startsWith('hold-') && p.id !== 'hold-gates' && p.id !== 'hold-fall') {
+        const trait = p.id.replace(/^(domain|hold)-/, '');
+        expect(s.run.warlords!.find((w) => w.faction === setup.players[1].faction)?.trait).toBe(trait);
+      }
+      if (p.id === 'finale-lords') expect(setup.players.filter((pl) => pl.mods && !pl.human).length).toBeGreaterThanOrEqual(2);
+    }
+  });
 });

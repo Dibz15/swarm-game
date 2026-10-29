@@ -289,6 +289,8 @@ export class Hud {
   /** Show a campaign warlord (#66): its name and trait, in its colour, for the whole battle. */
   setWarlord(w: { faction: number; name: string; trait: string; text: string; citadel?: boolean } | null): void {
     this.warlord = w ? w.faction : -1;
+    // Toasts drop below the chip so they don't cover it.
+    this.el.classList.toggle('has-lord', !!w);
     this.warlordChip.style.display = w ? 'block' : 'none';
     if (!w) return;
     this.warlordChip.style.setProperty('--c', hex(w.faction));
