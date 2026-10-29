@@ -105,10 +105,10 @@ export function updateCombat(w: World): void {
       if (w.called[i] > w.tick) mult *= 1 + km.call;
       const dmg = st.dps * km.dps * mult * DT;
       w.dmg[t] += dmg;
-      // Spikes: some of the blow comes back at whoever struck it.
+      // Spikes: some of the damage it takes comes back at whoever struck it.
       const spikes = w.factions[w.owner[t]].mods.kind[w.kind[t]].spikes;
       if (spikes > 0) {
-        w.dmg[i] += dmg * spikes;
+        w.dmg[i] += dmg * taken(w, t) * spikes;
         w.lastHit[i] = w.owner[t];
       }
       w.lastHit[t] = w.owner[i];
@@ -173,13 +173,28 @@ function pierceLine(w: World, i: number, t: number, base: number): void {
 }
 
 const callScratch: number[] = [];
+/** Swarm-call rings drawn this tick: a big clash shows a few, not one per death. */
+let callFxTick = -1, callFx = 0;
+const CALL_FX_PER_TICK = 3;
 
 /** Swarm-call (#60): a dying Swarmer rouses the Swarmers around it. */
 function swarmCall(w: World, i: number): void {
   const owner = w.owner[i];
   queryRadius(w, w.x[i], w.y[i], STRAINS.call.radius, callScratch);
   for (const j of callScratch) if (j !== i && w.owner[j] === owner && w.kind[j] === Kind.Dot) w.called[j] = w.tick + STRAINS.call.ticks;
-  pushFx(w, 'swarmCall', w.x[i], w.y[i], owner, STRAINS.call.radius);
+  if (callFxTick !== w.tick) (callFxTick = w.tick), (callFx = 0);
+  if (callFx++ < CALL_FX_PER_TICK) pushFx(w, 'swarmCall', w.x[i], w.y[i], owner, STRAINS.call.radius);
+}
+
+/** Share of a hit unit i actually takes: home armour, Surge, Fortify and Phalanx (not the heart's ward). */
+function taken(w: World, i: number): number {
+  const fm = w.factions[w.owner[i]].mods;
+  const surged = w.surge[i] > w.tick ? POWER.surgeArmor : 1;
+  const fortified = w.fortify[i] > w.tick ? POWER.fortifyArmor * fm.fortifyArmor : 1;
+  // Phalanx: Shields shoulder to shoulder take less.
+  const ph = fm.kind[w.kind[i]].phalanx;
+  const phalanx = ph > 0 ? 1 - ph * Math.min(w.guard[i], STRAINS.phalanx.max) : 1;
+  return w.armor[i] * surged * fortified * phalanx;
 }
 
 /** Apply accumulated damage; remove the dead and credit kills. */
@@ -187,18 +202,13 @@ export function resolveDamage(w: World): void {
   const n = w.n;
   for (let i = 0; i < n; i++) {
     if (!w.alive[i] || w.dmg[i] === 0) continue;
-    const surged = w.surge[i] > w.tick ? POWER.surgeArmor : 1;
-    const fortified = w.fortify[i] > w.tick ? POWER.fortifyArmor * w.factions[w.owner[i]].mods.fortifyArmor : 1;
     let ward = 1;
     if (w.wild[i] === WILD_HEART) {
       ward = heartWard(w);
       // Any hit, from any range, keeps it from regrowing.
       w.heart!.threat = w.tick;
     }
-    const km = w.factions[w.owner[i]].mods.kind[w.kind[i]];
-    // Phalanx: Shields shoulder to shoulder take less.
-    const phalanx = km.phalanx > 0 ? 1 - km.phalanx * Math.min(w.guard[i], STRAINS.phalanx.max) : 1;
-    w.hp[i] -= w.dmg[i] * w.armor[i] * surged * fortified * ward * phalanx;
+    w.hp[i] -= w.dmg[i] * taken(w, i) * ward;
     w.dmg[i] = 0;
     if (w.hp[i] > 0) continue;
     const killer = w.lastHit[i];
@@ -211,7 +221,7 @@ export function resolveDamage(w: World): void {
     w.deaths.push(w.x[i], w.y[i], w.owner[i]);
     if (w.wild[i] === WILD_HEART) heartSlain(w, killer);
     else if (w.kind[i] === Kind.Colossus) colossusSlain(w, w.x[i], w.y[i], killer);
-    if (km.call > 0) swarmCall(w, i);
+    if (w.factions[w.owner[i]].mods.kind[w.kind[i]].call > 0) swarmCall(w, i);
     removeUnit(w, i);
   }
 }
