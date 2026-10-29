@@ -371,11 +371,9 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
       n.domain = w.id;
       if (id === w.stronghold) {
         n.reward = Math.round(n.reward * STRONGHOLD_REWARD);
-        // One step harder, within the run's rules (as in battle()): Gentle has no
-        // Normal bots, Brutal no Hard ones, and only Brutal goes past Hard.
-        n.difficulty = Math.min(rules.bots > 0 ? 3 : 2, n.difficulty + 1);
-        if (rules.bots < 0 && n.difficulty === 1) n.difficulty = 0;
-        if (rules.bots > 0 && n.difficulty === 2) n.difficulty = 3;
+        // The fortress is what makes it harder (#100): the bots stay at the node's
+        // level, and only the warlord and one rival hold it.
+        n.rivals = Math.min(n.rivals, 2);
       } else n.reward = Math.round(n.reward * DOMAIN_REWARD);
       if (n.rescue === undefined && wr.next() < DOMAIN_RESCUE) n.rescue = wr.pick([Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift]);
     }

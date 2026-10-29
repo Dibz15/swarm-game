@@ -35,6 +35,7 @@ export function worldHash(w: World): number {
     for (const s of w.events.swarms) mix(Math.round(s.tx * 64) ^ Math.round(s.ty * 64));
     for (const c of w.events.colossi) mix(c.leg);
   }
+  mix(w.citadel);
   if (w.heart) {
     mix(w.heart.phase);
     mix(w.heart.pulseAt);

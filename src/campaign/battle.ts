@@ -10,7 +10,7 @@ import type { World } from '../sim/world';
 import { MILITIA, fighters, veteran, type BattleReport } from './broods';
 import { modsFor } from './rewards';
 import { RUN_DIFFICULTY, bloomStrength, difficultyOf, erosion, finaleWarlords, maxFielded, pressure, warlordFighting, type RunState } from './run';
-import { EROSION, EROSION_FLOOR, TRAITS, type Warlord } from './warlords';
+import { EROSION, EROSION_FLOOR, TRAITS, type TraitId, type Warlord } from './warlords';
 
 /**
  * Conquest is won by wiping out every rival, or by holding this share of the
@@ -18,6 +18,11 @@ import { EROSION, EROSION_FLOOR, TRAITS, type Warlord } from './warlords';
  * battle (the run probe saw 11-15% of Normal × 2 battles hit its 15-minute cap).
  */
 export const CONQUEST_SHARE = 0.8;
+/** The army size (#100) a stronghold's starting garrisons are tuned for; bigger armies meet bigger garrisons. */
+export const STRONGHOLD_ARMY = 32;
+const armySize = (run: RunState, fielded: number[]) => armyFor(run, fielded).reduce((a, b) => a + b.count, 0);
+/** A warlord's production in its own stronghold (#100): it starts with three nests, not one. */
+export const STRONGHOLD_PROD = 0.7;
 /** Domination nodes: hold half the nests (the usual share is 0.6-0.7). */
 const DOMINATION_SHARE = 0.5;
 
@@ -42,17 +47,23 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
   // Warlords take the first rival slots: the domain's own, or those bordering the heart.
   const lords = (finale ? finaleWarlords(run) : [warlordFighting(run, id)]).filter((w): w is Warlord => !!w).slice(0, n.rivals);
   const factions = [...lords.map((w) => w.faction), ...others.filter((c) => !lords.some((w) => w.faction === c))];
+  // A standing warlord's stronghold (#100): its capital is a walled citadel to take.
+  const hold = !finale && lords[0] && lords[0].stronghold === id && !lords[0].broken;
   const events = bloomEvents(finale ? 1 : pressure(run, id), bloomStrength(run));
   return {
     seed: n.seed,
     size: n.size,
     terrain: n.terrain,
-    caves: n.caves,
+    // No cave rock in a fortress: it could seal the gates.
+    caves: hold ? 'off' : n.caves,
     layout: 'random',
     events,
     portrait,
-    domShare: n.kind === 'domination' ? DOMINATION_SHARE : finale ? undefined : CONQUEST_SHARE,
+    // A stronghold's warlord starts with three nests: half the map would be a head start.
+    domShare: n.kind === 'domination' && !hold ? DOMINATION_SHARE : finale ? undefined : CONQUEST_SHARE,
     // Brutal: after the heart, the rivals still have to be beaten.
+    // The citadel's guards grow with the army you bring, so a late-run swarm can't just rush it.
+    stronghold: hold ? { player: 1, scale: Math.max(1, armySize(run, fielded) / STRONGHOLD_ARMY) } : undefined,
     heart: finale ? { strength: bloomStrength(run), rule: RUN_DIFFICULTY[difficultyOf(run)].bots > 0 ? 'heart+rivals' : 'heart' } : undefined,
     players: [
       {
@@ -67,7 +78,11 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
         const personality = rng.pick(PERSONALITIES);
         const lord = lords[i];
         const plain: PlayerSetup = { faction, team: i + 1, human: false, bot: { difficulty: n.difficulty, personality } };
-        return lord ? warlordPlayer(run, lord, plain) : plain;
+        if (!lord) return plain;
+        const p = warlordPlayer(run, lord, plain);
+        // In its stronghold, the warlord turtles whatever its usual temper.
+        // Its three nests from the start would out-produce you: it spawns slower there.
+        return hold ? { ...p, prod: p.prod! * STRONGHOLD_PROD, bot: { ...p.bot!, personality: 'turtler', citadel: true } } : p;
       }),
     ],
   };
@@ -84,11 +99,15 @@ function warlordPlayer(run: RunState, w: Warlord, slot: PlayerSetup): PlayerSetu
 }
 
 /** The warlord a node's battle announces (none outside domains; the finale's first). */
-export function warlordOf(run: RunState, id: number): { faction: number; name: string; trait: string; text: string; weakened: number } | null {
+export function warlordOf(
+  run: RunState,
+  id: number,
+): { faction: number; name: string; traitId: TraitId; trait: string; text: string; weakened: number; citadel: boolean } | null {
   const w = run.nodes[id].kind === 'finale' ? finaleWarlords(run)[0] : warlordFighting(run, id);
   if (!w) return null;
   const t = TRAITS[w.trait];
-  return { faction: w.faction, name: w.name, trait: t.name, text: t.text, weakened: erosion(run, w) };
+  const citadel = run.nodes[id].kind !== 'finale' && w.stronghold === id && !w.broken;
+  return { faction: w.faction, name: w.name, traitId: w.trait, trait: t.name, text: t.text, weakened: erosion(run, w), citadel };
 }
 
 export interface Rival {

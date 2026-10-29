@@ -145,6 +145,16 @@ function checkVictory(w: World): void {
   }
 
   if (w.endless) return;
+  // A stronghold (#100): a human taking the citadel wins, whoever else is left.
+  if (w.citadel >= 0) {
+    const c = w.nests[w.citadel];
+    if (c.owner >= 0 && c.owner !== NEUTRAL && c.control >= 1 && w.factions[c.owner].human) {
+      w.over = true;
+      w.winnerTeam = w.teamOf[c.owner];
+      w.winReason = 'citadel';
+      return;
+    }
+  }
   // While the Bloom's heart lives it is the goal: only losing every human
   // (or, with no human in the match, every player) ends the match.
   if (w.heart && !w.heart.slain) {

@@ -3,6 +3,7 @@ import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, P
 import { HEART, heartSlot, standingNests } from '../sim/heart';
 import { WILD_HEART, type World } from '../sim/world';
 import type { Renderer } from './renderer';
+import type { TraitId } from '../campaign/warlords';
 
 export interface SceneOpts {
   alpha: number;
@@ -13,6 +14,8 @@ export interface SceneOpts {
   selectedNests: ReadonlySet<number>;
   hoverNest: number;
   human: number;
+  /** a campaign warlord in this battle (#66, #100): its units wear its trait's look */
+  warlord?: { faction: number; trait: TraitId } | null;
 }
 
 /** Nest outline echoes its unit: Hive hex, Forge block, Spire needle, Den arrowhead, Bastion octagon. */
@@ -107,6 +110,19 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
     // Capitals wear a second, slowly counter-rotating ring.
     if (n.capital && n.owner >= 0 && n.owner !== NEUTRAL) {
       r.shape(false, n.x, n.y, n.r * 1.2, 0, 0.92, 0, 0.035, c, 120);
+    }
+    // A warlord's capital wears a crown (#66); a stronghold's citadel a bigger one,
+    // and a slow ring of battlements while it stands (#100).
+    const citadel = n.id === w.citadel;
+    const lordCap = !!o.warlord && n.capital && n.owner === o.warlord.faction;
+    if (citadel || lordCap) {
+      const lc = FACTION_RGB[o.warlord?.faction ?? n.owner] ?? c;
+      if (lordCap && o.warlord!.trait === 'broodmother') {
+        const beat = Math.pow(0.5 + 0.5 * Math.sin(o.time * 2.2), 2);
+        r.shape(true, n.x, n.y, R * (1.35 + 0.12 * beat), 0, 1, 0, 0.06, lc, Math.round(60 + 100 * beat));
+      }
+      if (citadel && n.owner !== o.human) r.shape(false, n.x, n.y, R * 1.55, 0, 0.9, o.time * 0.15, 0.05, lc, 150);
+      crownAt(r, n.x, n.y - R * (citadel ? 1.9 : 1.6), citadel ? 1.6 : 1.1, lc);
     }
 
     // Level pips under the nest.
@@ -206,6 +222,11 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
   const sel = o.selected;
   const surgeGlow = 0.5 + 0.5 * Math.sin(o.time * 18);
   const lit: RGB[] = FACTION_RGB.map((c) => mixRgb(c, WHITE, SELECT_MIX));
+  // The warlord's units (#100): a pale halo on all of them, and their trait's look.
+  const lord = o.warlord?.faction ?? -1;
+  const trait = o.warlord?.trait;
+  const halo = lord >= 0 ? mixRgb(FACTION_RGB[lord], WHITE, 0.55) : WHITE;
+  const swarmBeat = 1 + 0.18 * Math.sin(o.time * 6);
   for (let i = 0; i < w.n; i++) {
     if (!w.alive[i]) continue;
     const x = w.px[i] + (w.x[i] - w.px[i]) * a;
@@ -240,14 +261,37 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
       if (w.engaged[i] && t >= 0) angle = Math.atan2(w.y[t] - w.y[i], w.x[t] - w.x[i]);
       else angle = Math.atan2(w.vy[i], w.vx[i]);
     }
-    // Swifts leave a faint streak behind them.
+    // Swifts leave a faint streak behind them (a Raider-king's, long and bright).
+    const lords = owner === lord;
     if (kind === Kind.Swift) {
       const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
-      if (sp2 > 400) r.beam(x - w.vx[i] * 0.16, y - w.vy[i] * 0.16, x, y, c[0], c[1], c[2], 70, 1.4);
+      const king = lords && trait === 'raider-king';
+      if (sp2 > 400) r.beam(x - w.vx[i] * (king ? 0.4 : 0.16), y - w.vy[i] * (king ? 0.4 : 0.16), x, y, c[0], c[1], c[2], king ? 150 : 70, king ? 2.2 : 1.4);
     }
     const shape = kind + (w.fortify[i] > w.tick ? 10 : 0);
+    if (lords) {
+      if (trait === 'swarmlord' && kind === Kind.Dot) size *= swarmBeat;
+      r.unit(x, y, size * 1.7, halo[0], halo[1], halo[2], 70, shape, angle);
+      if (trait === 'ironhide' && kind === Kind.Tank) r.shape(false, x, y, size * 1.15, 5, 1, angle, 0.2, mixRgb(c, WHITE, 0.35), 170);
+      if (trait === 'longspine' && kind === Kind.Lancer) {
+        const sx = Math.cos(angle), sy = Math.sin(angle);
+        r.beam(x, y, x + sx * size * 2.6, y + sy * size * 2.6, c[0], c[1], c[2], 200, 1.3);
+      }
+      if (trait === 'stormcaller' && (i * 7 + o.frame) % 41 === 0) {
+        const k = (i * 13 + o.frame) % 8;
+        r.unit(x + Math.cos(k) * size * 1.6, y + Math.sin(k) * size * 1.6, 2.2, 220, 235, 255, 240);
+      }
+    }
     r.unit(x, y, size, c[0], c[1], c[2], alpha, shape, angle);
   }
+}
+
+/** A crown above a warlord's capital: three points over a band. */
+function crownAt(r: Renderer, x: number, y: number, s: number, c: RGB): void {
+  r.beam(x - 8 * s, y + 3 * s, x + 8 * s, y + 3 * s, c[0], c[1], c[2], 240, 3 * s);
+  r.shape(true, x - 6 * s, y, 4.5 * s, 3, 0, 0, 0.6, c, 240);
+  r.shape(true, x, y - 1.5 * s, 6 * s, 3, 0, 0, 0.6, c, 240);
+  r.shape(true, x + 6 * s, y, 4.5 * s, 3, 0, 0, 0.6, c, 240);
 }
 
 /** Supply drops (falling beacon, then a capture ring) and Colossus health rings. */

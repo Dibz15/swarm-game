@@ -3,6 +3,7 @@
  * save can't break the others; finished runs move to a short history.
  */
 
+import { PLAYTEST } from './playtest';
 import { RUN_VERSION, type RunState, type RunStatus } from './run';
 
 const PREFIX = `swarm.run.v${RUN_VERSION}.`;
@@ -19,6 +20,8 @@ export interface PastRun {
 }
 
 export function saveRun(run: RunState): void {
+  // Playtest runs (?playtest) are throwaway.
+  if (run.id.startsWith(PLAYTEST)) return;
   try {
     localStorage.setItem(PREFIX + run.id, JSON.stringify(run));
   } catch {
@@ -81,6 +84,7 @@ export function loadHistory(): PastRun[] {
 
 /** A run ended: drop its save and remember it (newest first, last 12). */
 export function finishRun(run: RunState): void {
+  if (run.id.startsWith(PLAYTEST)) return;
   deleteRun(run.id);
   const past: PastRun = { seedText: run.seedText, status: run.status, turns: run.turn, biomass: run.biomass, ended: run.updated };
   try {

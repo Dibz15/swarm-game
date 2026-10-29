@@ -21,6 +21,7 @@ import {
   rerollCost,
   rerollOffer,
   revealed,
+  warlordAt,
   warlordFighting,
   DIFFICULTIES,
   RUN_DIFFICULTY,
@@ -920,10 +921,12 @@ export function runMap(
     const dead = run.swallowed.includes(n.id);
     const rows: string[] = [];
     let foes: Rival[] = [];
+    // A standing warlord's stronghold (#100) is its own kind of battle.
+    const fortress = !taken && !dead && warlordAt(run, n.id)?.stronghold === n.id;
     if (n.kind !== 'start' && !taken && !dead) {
       foes = rivals(run, n.id);
       rows.push(`<dt>Enemies</dt><dd>${n.rivals} rival${n.rivals > 1 ? 's' : ''} · ${DIFFICULTY_NAMES[n.difficulty]}${rivalStrip(foes, true, 'small')}</dd>`);
-      rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}<div class="battle-map-slot"></div></dd>`);
+      rows.push(`<dt>Map</dt><dd>${SIZE_LABEL[n.size]} · ${fortress ? 'Fortress' : CAVE_LABEL[n.caves]} · ${TERRAIN_LABEL[n.terrain]}<div class="battle-map-slot"></div></dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
       const lord = warlordOf(run, n.id);
       if (lord) {
@@ -933,7 +936,7 @@ export function runMap(
         const w = warlordFighting(run, n.id);
         if (w && w.stronghold === n.id) {
           rows.push(
-            `<dt>Stronghold</dt><dd>Take it to break the domain: ${Math.round(STRONGHOLD_WEIGHT.rare)}% rare picks, and its trophy: ${esc(TRAITS[w.trait].trophy.text)}</dd>`,
+            `<dt>Stronghold</dt><dd>Taking it breaks the domain: ${Math.round(STRONGHOLD_WEIGHT.rare)}% rare picks, and its trophy: ${esc(TRAITS[w.trait].trophy.text)}</dd>`,
           );
         }
       }
@@ -948,8 +951,8 @@ export function runMap(
     const verb = !canGo ? null : needsBattle(run, n.id) ? 'Fight' : 'March';
     panel.innerHTML = `
       <button class="icon close" data-a="close" aria-label="Close">✕</button>
-      <h3 class="with-sigil"><span class="sigil-slot"></span>${KIND_LABEL[n.kind]}</h3>
-      <p>${KIND_TEXT[n.kind]}</p>
+      <h3 class="with-sigil"><span class="sigil-slot"></span>${fortress ? 'Stronghold' : KIND_LABEL[n.kind]}</h3>
+      <p>${fortress ? `Take the warlord's citadel to win, even with rivals left. Or: ${KIND_TEXT[n.kind].charAt(0).toLowerCase()}${KIND_TEXT[n.kind].slice(1)}` : KIND_TEXT[n.kind]}</p>
       ${rows.length ? `<dl>${rows.join('')}</dl>` : ''}
       ${status ? `<p class="hint">${status}</p>` : ''}
       ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}
@@ -1199,7 +1202,7 @@ export function runDebrief(run: RunState, node: RunNode, won: boolean, res: Turn
           ? 'The Bloom closed every route. Your swarm is consumed.'
           : 'Your last brood is gone.'
         : won
-          ? `${KIND_LABEL[node.kind]} won. +${res.biomass} biomass.`
+          ? `${res.warlords.some((w) => w.what === 'broken') ? 'Citadel taken' : `${KIND_LABEL[node.kind]} won`}. +${res.biomass} biomass.`
           : 'Your swarm falls back. The Bloom advances anyway.';
   const events = restored ? [] : res.events;
   const foes = node.kind === 'start' ? [] : rivals(run, node.id);

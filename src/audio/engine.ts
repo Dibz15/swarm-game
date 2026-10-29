@@ -527,6 +527,21 @@ export class AudioEngine {
     this.noise(this.reverbIn, 0.5, 0.05, 'lowpass', 600, 200);
   }
 
+  /** A stronghold's citadel is under attack: a low two-note horn. */
+  citadelBreach(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(-24), 1.1, 'sawtooth', 0.05, { attack: 0.15, slide: 0.97 });
+    this.tone(this.ui, this.note(-19), 1.3, 'sawtooth', 0.045, { attack: 0.15, delay: 0.55, slide: 0.97 });
+    this.noise(this.reverbIn, 1, 0.05, 'lowpass', 700, 180);
+  }
+
+  /** The citadel falls to you: a bright fanfare. */
+  citadelFall(): void {
+    if (!this.ctx) return;
+    [0, 4, 7, 12, 16].forEach((s, i) => this.tone(this.reverbIn, this.note(s), 0.6 + i * 0.1, 'triangle', 0.05, { delay: i * 0.1 }));
+    this.tone(this.reverbIn, this.note(-12), 1.6, 'sawtooth', 0.04, { delay: 0.5, attack: 0.05 });
+  }
+
   /** A warlord's stronghold falls: a crash, then a rising chord. */
   domainBroken(): void {
     if (!this.ctx) return;

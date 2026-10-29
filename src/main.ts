@@ -18,6 +18,9 @@ import { spawnUnit } from './sim/world';
 import { mapBloom, needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
 import type { BattleReport } from './campaign/broods';
 import { battleReport, nodeSetup, warlordOf } from './campaign/battle';
+import { PLAYTEST, type Playtest } from './campaign/playtest';
+import { playtestMenu } from './ui/playtest';
+import { FORTIFY } from './sim/fortify';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
 import { rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
 import { DemoOverlay } from './ui/demo';
@@ -112,6 +115,7 @@ class App {
     else if (q.has('eventdemo')) this.startEventDemo();
     else if (q.has('creatures')) this.setScreen(creatureGrid());
     else if (q.has('heart')) this.startHeartDemo(Number(q.get('heart')) || 0);
+    else if (q.has('playtest')) this.showPlaytests();
     else this.showMenu();
     requestAnimationFrame((t) => this.loop(t));
   }
@@ -261,9 +265,58 @@ class App {
       return;
     }
     this.setModal(
-      runMap(run, this.sfx, { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.showRunHub(), save: () => saveRun(run) }, intro),
+      runMap(run, this.sfx, { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.leaveRun(run), save: () => saveRun(run) }, intro),
     );
     this.sfx.setBloom(mapBloom(run));
+  }
+
+  /** Out of a run: back to the run list, or to the playtests a playtest run came from. */
+  private leaveRun(run: RunState): void {
+    if (run.id.startsWith(PLAYTEST)) this.showPlaytests();
+    else this.showRunHub();
+  }
+
+  /** Playtests (?playtest): throwaway runs that open on one feature. Nothing is saved. */
+  private showPlaytests(): void {
+    if (this.game) this.showMenu();
+    this.setModal(playtestMenu({ play: (p) => this.startPlaytest(p), back: () => this.showMenu() }));
+  }
+
+  private startPlaytest(p: Playtest): void {
+    const scene = p.make(loadPrefs().color);
+    if (scene.kind === 'map') return this.showRunMap(scene.run);
+    const run = scene.run;
+    this.runMove(run, scene.node, run.broods.map((b) => b.id));
+    const w = this.game?.world;
+    if (!w || w.citadel < 0) return;
+    const c = w.nests[w.citadel];
+    const human = this.game!.human;
+    if (scene.extra === 'gates') {
+      // Your army, just outside the gate that faces the middle.
+      const dx = w.width / 2 - c.x, dy = w.height / 2 - c.y, d = Math.hypot(dx, dy) || 1;
+      const R = FORTIFY.ringR[run.nodes[scene.node].size] + 70;
+      const gx = c.x + (dx / d) * R, gy = c.y + (dy / d) * R;
+      let k = 0;
+      for (let i = 0; i < w.n; i++) {
+        if (!w.alive[i] || w.owner[i] !== human) continue;
+        const x = gx + ((k % 8) - 3.5) * 9, y = gy + (Math.floor(k / 8) - 2) * 9;
+        w.x[i] = w.px[i] = w.ox[i] = x;
+        w.y[i] = w.py[i] = w.oy[i] = y;
+        k++;
+      }
+      this.camera.open(gx, gy, this.renderer.dpr);
+    } else if (scene.extra === 'fall') {
+      // A few seconds in, its guards fall and the citadel is yours.
+      this.camera.open(c.x, c.y, this.renderer.dpr);
+      const game = this.game;
+      setTimeout(() => {
+        if (this.game !== game || w.over) return;
+        for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === c.owner && Math.hypot(w.x[i] - c.x, w.y[i] - c.y) < 260) w.dmg[i] = 1e9;
+        c.owner = c.controller = human;
+        c.control = 1;
+        this.sfx.citadelFall();
+      }, 4000);
+    }
   }
 
   /** Dev (?heart=N): a throwaway run's finale, the Bloom fed by N nodes. Nothing is saved. */
@@ -291,8 +344,9 @@ class App {
     // A warlord's ground (#66): its sting, and its trait announced and kept on screen.
     const lord = warlordOf(run, id);
     if (lord) {
+      this.game!.warlord = { faction: lord.faction, trait: lord.traitId };
       this.hud?.setWarlord(lord);
-      this.hud?.toast(`♛ ${lord.name}: ${lord.text}`, FACTION_HEX[lord.faction]);
+      this.hud?.toast(lord.citadel ? `♛ ${lord.name}'s stronghold: take the citadel to win` : `♛ ${lord.name}: ${lord.text}`, FACTION_HEX[lord.faction]);
       this.sfx.warlordSting(lord.faction);
     }
   }
@@ -334,7 +388,7 @@ class App {
     this.setModal(
       runDebrief(r.state, r.state.nodes[r.node], report.won, res, {
         next: () => this.showRunMap(r.state, this.runIntro(from, res)),
-        hub: () => this.showRunHub(),
+        hub: () => this.leaveRun(r.state),
       }),
     );
   }

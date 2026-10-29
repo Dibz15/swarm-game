@@ -892,6 +892,7 @@ function how(w: World, human: number): string {
   const face = w.factions.find((f) => f.active && f.id !== NEUTRAL && f.team === w.winnerTeam && !f.eliminated) ?? w.factions.find((f) => f.team === w.winnerTeam);
   const who = mine ? (w.factions.filter((f) => f.active && f.team === w.winnerTeam).length > 1 ? 'Your team' : 'You') : face ? FACTION_NAMES[face.id] : 'A rival';
   if (w.winReason === 'heart') return `${who} destroyed <b>the Bloom's heart</b>`;
+  if (w.winReason === 'citadel') return `${who} took <b>the citadel</b>`;
   return `${who} won by <b>${w.winReason}</b>`;
 }
 

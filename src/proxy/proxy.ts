@@ -27,6 +27,11 @@ import { UNIT_FEEDING, type Nest, type World } from '../sim/world';
 
 /** `goal` while assaulting the Bloom's heart (not a nest id) */
 const HEART_GOAL = -2;
+/** blob size at which the proxy goes for a stronghold's citadel... */
+const CITADEL_BLOB = 60;
+/** ...once it outnumbers the hostile units within CITADEL_R of it this many times over */
+const CITADEL_EDGE = 1.5;
+const CITADEL_R = 300;
 
 export interface ProxyKnobs {
   /** seconds between strategic decisions */
@@ -115,6 +120,8 @@ export interface ProxyOptions {
   skill?: number;
   /** Nova is locked (campaign: a client-side lock the sim doesn't know about) */
   novaLocked?: boolean;
+  /** blob size at which it goes for a stronghold's citadel (default CITADEL_BLOB; low = a rush) */
+  citadelBlob?: number;
 }
 
 type Mode = 'expand' | 'hold' | 'punish' | 'counter';
@@ -134,6 +141,15 @@ export class Proxy {
   /** army weight when the current push started */
   private pushFrom = 0;
   private readonly novaLocked: boolean;
+  private readonly citadelBlob: number;
+
+  /** Hostile units within r of (x, y). */
+  private near(w: World, x: number, y: number, r: number): number {
+    queryRadius(w, x, y, r, scratch);
+    let n = 0;
+    for (const s of scratch) if (w.hostile(w.owner[s], this.f)) n++;
+    return n;
+  }
 
   constructor(
     readonly f: number,
@@ -141,6 +157,7 @@ export class Proxy {
   ) {
     this.k = { ...knobsFor(opts.skill ?? 1), ...opts.knobs };
     this.novaLocked = !!opts.novaLocked;
+    this.citadelBlob = opts.citadelBlob ?? CITADEL_BLOB;
   }
 
   private hostile(w: World, o: number): boolean {
@@ -273,6 +290,22 @@ export class Proxy {
           out.push({ t: 'move', p: me, units: units.map((s) => w.uid[s]), x: hx, y: hy, nest: -1 });
           if (mine.length && this.goal !== HEART_GOAL) out.push({ t: 'rally', p: me, nests: mine.map((n) => n.id), x: hx, y: hy });
           this.goal = HEART_GOAL;
+          this.lastOrder = w.tick;
+        }
+        this.mode = 'counter';
+        this.upgrade(w, mine, army, out);
+        return out;
+      }
+      // A stronghold (#100): taking the citadel wins, so once the blob is big
+      // enough it marches through the gates for it, like a human would.
+      // Only with the upper hand there, though: like a human, it expands until then.
+      const cit = w.citadel >= 0 ? w.nests[w.citadel] : null;
+      if (cit && cit.owner !== me && blob.length >= this.citadelBlob && blob.length >= CITADEL_EDGE * this.near(w, cit.x, cit.y, CITADEL_R)) {
+        if (this.goal !== cit.id || w.tick - this.lastOrder >= this.k.refresh * TICK_HZ) {
+          const units = this.straggle(w, blob, bx, by);
+          out.push({ t: 'move', p: me, units: units.map((s) => w.uid[s]), x: cit.x, y: cit.y, nest: cit.id });
+          if (mine.length && this.goal !== cit.id) out.push({ t: 'rally', p: me, nests: mine.map((n) => n.id), x: cit.x, y: cit.y });
+          this.goal = cit.id;
           this.lastOrder = w.tick;
         }
         this.mode = 'counter';

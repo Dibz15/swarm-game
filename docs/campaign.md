@@ -69,7 +69,7 @@ They are deliberately separate, and each has one job.
   - Placement uses its own seeded stream, so the rest of the map is the same as without warlords.
 - **Domain battles:** the warlord takes the first rival slot and fights with its trait and a fixed personality. The other rivals stay plain bots.
 - **Strongholds and rewards:**
-  - Strongholds are one bot level harder, within the run difficulty's rules.
+  - Strongholds keep the node's bot level but have at most two rivals (the warlord and one more): the fortress is what makes them harder (#100).
   - Biomass: ×1.3 in a domain, ×2 at the stronghold.
   - Rescue odds rise to 50% in a domain.
   - Offers after a win weigh rares 20% in a domain and 40% at the stronghold (10% elsewhere).
@@ -89,6 +89,35 @@ They are deliberately separate, and each has one job.
 | Longspine | Spears reach +20% | Spears reach +10% |
 | Stormcaller | energy +40% | energy +20% |
 | Broodmother | capital +1 level, +2 supply per nest | capital +1 level |
+
+**Stronghold battles** (#100, `src/sim/fortify.ts`).
+- **The map:** the usual generated map, then fortified on its own seeded stream.
+  - The warlord's capital becomes the **citadel**, a normal level-1 capital, inside a ring of walls.
+  - The ring has three gates that face the middle of the map.
+  - Two more of the warlord's nests sit inside: a Bastion and a Forge or Spire. Its starting army is spread over the three (10 + 7 + 7) so a rush can't take the citadel. Those garrisons grow with the army you bring (×1 up to 32 units, then in proportion).
+  - In its stronghold, the warlord turtles: it values nests more than 520 px from the citadel at a third, and spawns at 70% (it starts with three nests).
+  - In the first playtest, a level-3 citadel, 30% kept home and the whole army defending made it near impossible. Neutral inner nests then made it rushable in 30 s.
+  - Anything else in the way is cleared, and there are no caves.
+  - Every other capital must be able to walk in, or the gates widen.
+- **The win:** a human who takes the citadel wins, even with rivals left. A rival taking it wins nothing, and the usual win rules still apply too.
+- **The defence:** the warlord keeps 15% of its army at the citadel, and defends it first, from up to 700 px away.
+- **Shares:** a stronghold always uses the conquest share (80%), even on a domination node. The warlord starts beside its inner nests, so half the map would be a head start.
+- **Readability:**
+  - The citadel is crowned, with an edge marker when it's off screen.
+  - The HUD chip shows "Take the citadel" with a capture bar.
+  - A horn sounds when you reach it, and a fanfare when it falls.
+- **In every domain battle,** the warlord's units have a dark rim plus their trait's look:
+
+| Trait | Look |
+|---|---|
+| Ironhide | plated Shields |
+| Swarmlord | Swarmers pulsing together |
+| Raider-king | long Raider streaks |
+| Longspine | spiked Spears |
+| Stormcaller | sparks |
+| Broodmother | a throbbing capital |
+
+  The warlord's capital wears a crown.
 
 ## Battles
 Each node turns into a `MatchSetup` (`src/sim/setup.ts`) plus an objective. Objectives are checked inside the sim, so battles stay deterministic and testable headless.
