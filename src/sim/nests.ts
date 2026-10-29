@@ -191,7 +191,8 @@ function updateControl(w: World, n: Nest): void {
   n.controller = leadA;
   n.control += rate;
   if (n.control >= 1) {
-    n.control = 1;
+    // Scorched earth: a fresh capture starts part-held and must recover before it spawns.
+    n.control = w.factions[leadA].mods.captureControl;
     n.owner = leadA;
     n.spawnAcc = 0;
     n.rallyX = n.x;
@@ -222,7 +223,7 @@ function spawn(w: World, n: Nest): void {
   const k = nestCount[n.owner];
   const exp = BALANCE.nestExponent + (1 - BALANCE.nestExponent) * L;
   const wide = k > 1 ? dpow(k, exp - 1) : 1;
-  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * wide * upkeep;
+  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * f.mods.spawnRate * wide * upkeep;
   const interval = UNIT_STATS[kind].interval;
   if (n.spawnAcc < interval) return;
   n.spawnAcc -= interval;
@@ -233,7 +234,7 @@ function spawn(w: World, n: Nest): void {
   const atHome = n.rallyX === n.x && n.rallyY === n.y;
   const s = spawnUnit(w, n.owner, kind, sx, sy, n.rallyX, n.rallyY, atHome ? n.r + 14 : 28);
   if (s < 0) return;
-  if (n.level >= 3) {
+  if (n.level >= f.mods.vetLevel) {
     w.vet[s] = 1;
     w.hp[s] *= LEVEL.veteranHp;
   }

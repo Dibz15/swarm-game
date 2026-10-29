@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
 import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
 import { DIFFICULTIES, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
-import { REWARD, modsFor, rollOffer } from '../src/campaign/rewards';
+import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 
 const SEEDS = Array.from({ length: 60 }, (_, i) => `seed-${i}`);
@@ -402,6 +402,20 @@ describe('rewards', () => {
     expect(modsFor([], [dots, { ...dots, id: 9 }]).kind[Kind.Dot].speed).toBeCloseTo(1.15);
     const s = nodeSetup(run, run.nodes[run.start].links[0], false, [dots.id]);
     expect(s.players[0].mods!.kind[Kind.Dot].speed).toBeCloseTo(1.15);
+  });
+
+  it('Feral shuts out power variants and Blood price, and Blood price shuts out Feral', () => {
+    const run = afterWin();
+    run.unlocks.nova = true;
+    expect(offerable(run, REWARD['implode'])).toBe(true);
+    expect(offerable(run, REWARD['blood-price'])).toBe(true);
+    run.perks = ['feral'];
+    expect(offerable(run, REWARD['implode'])).toBe(false);
+    expect(offerable(run, REWARD['mend'])).toBe(false);
+    expect(offerable(run, REWARD['blood-price'])).toBe(false);
+    expect(offerable(run, REWARD['old-blood'])).toBe(true);
+    run.perks = ['blood-price'];
+    expect(offerable(run, REWARD['feral'])).toBe(false);
   });
 
   it('Lone wolf fields one brood at double size; Hunger doubles biomass and speeds the Bloom', () => {

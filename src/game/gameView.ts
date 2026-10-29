@@ -845,7 +845,7 @@ export class GameView {
   surge(): void {
     if (this.blocked('surge')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Surge', '#9aa4c7');
-    if (this.world.factions[this.human].energy < surgeCost(this.world, this.human)) return this.s.sfx.fail();
+    if (this.short(surgeCost(this.world, this.human))) return this.s.sfx.fail();
     this.session.issue({ t: 'surge', p: this.human, units: [...this.selection.units] });
   }
 
@@ -856,7 +856,7 @@ export class GameView {
       return this.s.toast('Nova only hits around your selected dots: wait until the enemy reaches them', '#ffd166');
     }
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');
-    if (this.world.factions[this.human].energy < POWER.novaCost) return this.s.sfx.fail();
+    if (this.short(POWER.novaCost)) return this.s.sfx.fail();
     this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
   }
 
@@ -889,11 +889,17 @@ export class GameView {
       this.s.toast(`Hold a ${NEST_NAMES[POWER_NEST[power]]} to use this`, '#9aa4c7');
       return false;
     }
-    if (this.world.factions[this.human].energy < cost) {
+    if (this.short(cost)) {
       this.s.sfx.fail();
       return false;
     }
     return true;
+  }
+
+  /** Can't pay for a power? Feral (#60) has none; under Blood price (#60) the sim checks the units it costs instead. */
+  private short(cost: number): boolean {
+    const f = this.world.factions[this.human];
+    return f.mods.noPowers || (!f.mods.bloodPrice && f.energy < cost);
   }
 
   fortify(): void {

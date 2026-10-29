@@ -73,6 +73,19 @@ export interface FactionMods {
   thorns: number;
   /** Lockdown Siphon: energy/s drained from a locked nest's owner */
   siphon: number;
+  // Perks and pacts with a rule of their own (#60).
+  /** supply drops land near you and you take them faster (×this), 0 = off */
+  dropFavour: number;
+  /** nests at this level and up spawn veterans */
+  vetLevel: number;
+  /** Blood price: powers cost units instead of energy */
+  bloodPrice: boolean;
+  /** control a nest starts at when you capture it (Scorched earth) */
+  captureControl: number;
+  /** spawn speed at every nest */
+  spawnRate: number;
+  /** Feral: no powers */
+  noPowers: boolean;
 }
 
 export const defaultKindMods = (): KindMods => ({
@@ -117,5 +130,11 @@ export function defaultMods(): FactionMods {
     echo: false,
     thorns: 0,
     siphon: 0,
+    dropFavour: 0,
+    vetLevel: 3,
+    bloodPrice: false,
+    captureControl: 1,
+    spawnRate: 1,
+    noPowers: false,
   };
 }

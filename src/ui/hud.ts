@@ -17,7 +17,7 @@ const WAVE_ICON: Record<WaveKind, string> = {
   pincer: svg('<path d="M1 8l4-4v3h6V4l4 4-4 4V9H5v3z"/>'),
   colossus: svg('<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2.4"/><circle cx="8" cy="8" r="2"/>'),
 };
-import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, surgeCost } from '../sim/index';
+import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, bloodCost, surgeCost } from '../sim/index';
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
@@ -501,31 +501,41 @@ export class Hud {
     this.energyText.textContent = `Energy ${Math.floor(e)}${crystals ? `  ◆ crystal${crystals > 1 ? ` ×${crystals}` : ''}` : ''}`;
     const nUnits = g.selection.units.size;
     const surge = me ? surgeCost(w, g.human) : POWER.surgeCost;
-    this.btn.surge.disabled = e < surge || nUnits === 0;
-    this.btn.surge.querySelector('small')!.textContent = `${Math.round(surge)}`;
+    // Feral (#60) has no powers; Blood price (#60) pays for them in units, not energy.
+    const feral = !!me?.mods.noPowers, blood = !!me?.mods.bloodPrice;
+    (this.energyFill.parentElement as HTMLElement).style.display = feral ? 'none' : '';
+    const army = w.unitCount[g.human] ?? 0;
+    /** Can we pay `cost` from a group of `n` (0: any of the army), keeping `keep`? */
+    const afford = (cost: number, n: number, keep = 1) => (blood ? (n || army) - bloodCost(cost) >= keep : e >= cost);
+    const price = (b: HTMLElement, cost: number) => (b.querySelector('small')!.textContent = blood ? `−${bloodCost(cost)}●` : `${Math.round(cost)}`);
+    this.btn.surge.disabled = !afford(surge, nUnits) || nUnits === 0;
+    price(this.btn.surge, surge);
+    price(this.btn.nova, POWER.novaCost);
     this.btn.nearest.disabled = nUnits === 0;
-    this.btn.nova.disabled = e < POWER.novaCost || nUnits < 4;
-    this.btn.surge.classList.toggle('ready', e >= surge);
+    this.btn.nova.disabled = !afford(POWER.novaCost, nUnits, 4) || nUnits < 4;
+    this.btn.surge.classList.toggle('ready', afford(surge, nUnits || army));
     // Nest powers only show while you hold the matching nest type.
-    const nestPowers: [NestPower, number, boolean][] = [
-      ['fortify', POWER.fortifyCost, nUnits > 0],
-      ['barrage', POWER.barrageCost, true],
-      ['blink', POWER.blinkCost, nUnits > 0],
-      ['lockdown', POWER.lockdownCost, true],
+    const nestPowers: [NestPower, number, boolean, boolean][] = [
+      ['fortify', POWER.fortifyCost, nUnits > 0, true],
+      ['barrage', POWER.barrageCost, true, false],
+      ['blink', POWER.blinkCost, nUnits > 0, true],
+      ['lockdown', POWER.lockdownCost, true, false],
     ];
-    for (const [p, cost, ok] of nestPowers) {
+    for (const [p, cost, ok, group] of nestPowers) {
       const b = this.btn[p];
       const owned = g.canUse(p) && !g.locked.has(p);
       b.style.display = owned ? '' : 'none';
-      b.disabled = e < cost || !ok;
-      b.classList.toggle('ready', e >= cost);
+      const can = afford(cost, group ? nUnits : 0);
+      b.disabled = !can || !ok;
+      b.classList.toggle('ready', group ? afford(cost, nUnits || army) : can);
       b.classList.toggle('aiming', g.aim === p);
+      price(b, cost);
     }
-    this.btn.nova.classList.toggle('ready', e >= POWER.novaCost);
+    this.btn.nova.classList.toggle('ready', afford(POWER.novaCost, nUnits || army, 4));
     const up = g.upgradeInfo();
     this.btn.upgrade.style.display = up && !g.locked.has('upgrade') ? '' : 'none';
-    this.btn.surge.style.display = g.locked.has('surge') ? 'none' : '';
-    this.btn.nova.style.display = g.locked.has('nova') ? 'none' : '';
+    this.btn.surge.style.display = g.locked.has('surge') || feral ? 'none' : '';
+    this.btn.nova.style.display = g.locked.has('nova') || feral ? 'none' : '';
     if (up) {
       (this.btn.upgrade.querySelector('.ucost') as HTMLElement).textContent = `${Math.max(0, up.cost)} dots`;
       (this.btn.upgrade.querySelector('.ulabel') as HTMLElement).textContent = up.repair ? 'Repair' : 'Upgrade';
