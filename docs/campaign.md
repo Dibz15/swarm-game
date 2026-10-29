@@ -94,7 +94,7 @@ They are deliberately separate, and each has one job.
 - **The map:** the usual generated map, then fortified on its own seeded stream.
   - The warlord's capital becomes the **citadel**, a normal level-1 capital, inside a ring of walls.
   - The ring has three gates that face the middle of the map.
-  - Two more of the warlord's nests sit inside: a Bastion and a Forge or Spire. Its starting army is spread over the three (10 + 7 + 7) so a rush can't take the citadel.
+  - Two more of the warlord's nests sit inside: a Bastion and a Forge or Spire. Its starting army is spread over the three (10 + 7 + 7) so a rush can't take the citadel. Those garrisons grow with the army you bring (×1 up to 32 units, then in proportion).
   - In its stronghold, the warlord turtles: it values nests more than 520 px from the citadel at a third, and spawns at 70% (it starts with three nests).
   - In the first playtest, a level-3 citadel, 30% kept home and the whole army defending made it near impossible. Neutral inner nests then made it rushable in 30 s.
   - Anything else in the way is cleared, and there are no caves.

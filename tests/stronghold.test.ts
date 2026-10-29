@@ -109,7 +109,7 @@ describe('stronghold nodes', () => {
   it('are fortresses with the warlord guarding its citadel; other domain nodes are not', () => {
     const [run, id] = hold(1);
     const s = nodeSetup(run, id, false);
-    expect(s.stronghold).toEqual({ player: 1 });
+    expect(s.stronghold).toMatchObject({ player: 1 });
     expect(s.caves).toBe('off');
     expect(s.players[1].bot!.citadel).toBe(true);
     // It turtles there, and its three nests from the start cost it production.
@@ -151,7 +151,7 @@ describe('playtests', () => {
       if (s.kind !== 'battle') continue;
       expect(s.run.nodes[s.run.at].links).toContain(s.node);
       const setup = nodeSetup(s.run, s.node, false);
-      if (p.group.startsWith('Stronghold')) expect(setup.stronghold).toEqual({ player: 1 });
+      if (p.group.startsWith('Stronghold')) expect(setup.stronghold).toMatchObject({ player: 1 });
       else expect(setup.stronghold).toBeUndefined();
       if (p.id.startsWith('domain-') || p.id.startsWith('hold-') && p.id !== 'hold-gates' && p.id !== 'hold-fall') {
         const trait = p.id.replace(/^(domain|hold)-/, '');

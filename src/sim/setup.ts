@@ -50,7 +50,11 @@ export interface MatchSetup {
   /** the Bloom's heart (campaign finale): a rooted boss; strength = nodes the Bloom ate */
   heart?: { strength: number; rule: HeartRule };
   /** a warlord's stronghold (#100): this player's capital is a walled citadel; a human taking it wins */
-  stronghold?: { player: number };
+  stronghold?: {
+    player: number;
+    /** its starting garrisons (citadel and inner nests) are this many times FORTIFY's: matched to the army you bring */
+    scale?: number;
+  };
 }
 
 /** The generator's params for a setup's map (thumbnails use this too, so they match the battle). */
@@ -127,7 +131,8 @@ export function createWorld(setup: MatchSetup): World {
     // A campaign army (broods) replaces it at the player's capital.
     const army = s.player >= 0 && w.nests[id].capital && !s.garrison ? setup.players[s.player].army : undefined;
     const kinds: { kind: number; vet: boolean }[] = army ? army.flatMap((a) => Array.from({ length: a.count }, () => ({ kind: a.kind, vet: !!a.vet }))) : [];
-    const count = army ? kinds.length : s.player >= 0 ? s.garrison || START_UNITS : gk === Kind.Tank ? Math.ceil(s.garrison / 2.2) : s.garrison;
+    const hold = setup.stronghold && s.player === setup.stronghold.player ? (setup.stronghold.scale ?? 1) : 1;
+    const count = army ? kinds.length : s.player >= 0 ? Math.round((s.garrison || START_UNITS) * hold) : gk === Kind.Tank ? Math.ceil(s.garrison / 2.2) : s.garrison;
     if (s.player < 0) w.nests[id].garrison = count;
     for (let k = 0; k < count; k++) {
       const a = (k / count) * TAU + w.rng.next() * 0.4;
