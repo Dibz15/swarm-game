@@ -103,7 +103,7 @@ export const VARIANTS = {
   /** Echo: ghosts per unit blinked (at most `max`), their HP and how long they last */
   echo: { per: 0.25, max: 6, hp: 20, ticks: 4 * 30 },
   /** Siphon: how long Lockdown rests after a siphoning lock ends, so it can't be chained */
-  siphon: { rest: 10 * 30 },
+  siphon: { rest: 5 * 30 },
 };
 
 /** units notice enemies this far beyond their attack range */
