@@ -1,10 +1,10 @@
 import { FACTION_HEX } from '../content/factions';
-import { CAVE_LEVELS, generateMap, type CaveLevel, type MapSize } from '../sim/mapgen';
+import { CAVE_LEVELS, generateMap, MAP_FORMS, type CaveLevel, type MapForm, type MapSize } from '../sim/mapgen';
 import { drawBattleMap } from './runmapfx';
 
 /**
  * Dev grid (`?maps`): 24 generated maps side by side at their true shape, to
- * review how varied they come out (#98): aspect, density, layout.
+ * review how varied they come out (#98): aspect, density, layout, form.
  */
 export function mapGrid(): HTMLDivElement {
   const root = document.createElement('div');
@@ -13,6 +13,7 @@ export function mapGrid(): HTMLDivElement {
   let size: MapSize = 'medium';
   let players = 2;
   let caves: CaveLevel = 'off';
+  let form: MapForm | 'random' = 'random';
   const draw = () => {
     const opts = <T extends string | number>(key: string, list: readonly T[], now: T) =>
       list.map((v) => `<button class="small${v === now ? ' on' : ''}" data-${key}="${v}">${v}</button>`).join('');
@@ -23,13 +24,14 @@ export function mapGrid(): HTMLDivElement {
         ${opts('size', ['small', 'medium', 'large'] as MapSize[], size)}
         ${opts('players', [2, 3, 4, 6], players)}
         ${opts('caves', CAVE_LEVELS, caves)}
+        ${opts('form', ['random', ...MAP_FORMS] as (MapForm | 'random')[], form)}
         <span class="hint">seeds ${base}–${base + 23}</span>
       </header>
       <div class="grid"></div>`;
     const grid = root.querySelector('.grid')!;
     for (let k = 0; k < 24; k++) {
       const seed = base + k;
-      const m = generateMap({ seed, size, players, terrain: 'standard', caves });
+      const m = generateMap({ seed, size, players, terrain: 'standard', caves, form });
       const cell = document.createElement('figure');
       const cv = document.createElement('canvas');
       // Same scale for every map, so size and shape compare at a glance.
@@ -47,7 +49,7 @@ export function mapGrid(): HTMLDivElement {
       }
       cell.appendChild(cv);
       const cap = document.createElement('figcaption');
-      cap.textContent = `${seed} · ${m.layout} · ${m.aspect!.toFixed(1)}:1 · density ${m.density!.toFixed(2)} · ${m.nests.length} nests`;
+      cap.textContent = `${seed} · ${m.form}${m.topology && m.form !== 'caves' ? ` (${m.topology})` : ''} · ${m.layout} · ${m.aspect!.toFixed(1)}:1 · density ${m.density!.toFixed(2)} · ${m.nests.length} nests`;
       cell.appendChild(cap);
       grid.appendChild(cell);
     }
@@ -65,6 +67,7 @@ export function mapGrid(): HTMLDivElement {
     pick('size', (v) => (size = v as MapSize));
     pick('players', (v) => (players = Number(v)));
     pick('caves', (v) => (caves = v as CaveLevel));
+    pick('form', (v) => (form = v as MapForm | 'random'));
   };
   draw();
   return root;
