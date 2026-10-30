@@ -109,7 +109,7 @@ export function updateCombat(w: World): void {
       // Spikes, and Thorns while fortified: some of the damage it takes comes back at whoever struck it.
       const tm = w.factions[w.owner[t]].mods;
       const back = tm.kind[w.kind[t]].spikes + (w.fortify[t] > w.tick ? tm.thorns : 0);
-      if (back > 0) {
+      if (back > 0 && !w.ghost[t]) {
         w.dmg[i] += dmg * taken(w, t) * back;
         w.lastHit[i] = w.owner[t];
       }
@@ -190,6 +190,8 @@ function swarmCall(w: World, i: number): void {
 
 /** Share of a hit unit i actually takes: home armour, Surge, Fortify and Phalanx (not the heart's ward). */
 function taken(w: World, i: number): number {
+  // Echo's ghosts are as frail as they look, whatever they copy.
+  if (w.ghost[i]) return 1;
   const fm = w.factions[w.owner[i]].mods;
   const surged = w.surge[i] > w.tick ? POWER.surgeArmor : 1;
   const fortified = w.fortify[i] > w.tick ? POWER.fortifyArmor * fm.fortifyArmor : 1;

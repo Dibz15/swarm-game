@@ -8,7 +8,7 @@ import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
-import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, surgeCost } from '../sim/commands';
+import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, surgeCost } from '../sim/commands';
 import { inArmy, type Nest, type World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
@@ -931,6 +931,8 @@ export class GameView {
         return this.s.toast('Lockdown needs an enemy nest under the cursor', '#9aa4c7');
       }
       if (!this.power('lockdown', POWER.lockdownCost)) return;
+      const rest = siphonWait(this.world, this.human);
+      if (rest > 0) return this.s.toast(`Siphon: Lockdown is ready again in ${Math.ceil(rest / TICK_HZ)} s`, '#9aa4c7');
       this.session.issue({ t: 'lockdown', p: this.human, nest: n.id });
     }
   }

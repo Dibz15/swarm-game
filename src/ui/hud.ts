@@ -17,7 +17,7 @@ const WAVE_ICON: Record<WaveKind, string> = {
   pincer: svg('<path d="M1 8l4-4v3h6V4l4 4-4 4V9H5v3z"/>'),
   colossus: svg('<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2.4"/><circle cx="8" cy="8" r="2"/>'),
 };
-import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, bloodCost, surgeCost } from '../sim/index';
+import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, bloodCost, siphonWait, surgeCost } from '../sim/index';
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
@@ -530,6 +530,13 @@ export class Hud {
       b.classList.toggle('ready', group ? afford(cost, nUnits || army) : can);
       b.classList.toggle('aiming', g.aim === p);
       price(b, cost);
+    }
+    // Siphon (#60): Lockdown rests between locks, the seconds left on the button.
+    const rest = siphonWait(w, g.human);
+    if (rest > 0) {
+      this.btn.lockdown.disabled = true;
+      this.btn.lockdown.classList.remove('ready');
+      this.btn.lockdown.querySelector('small')!.textContent = `${Math.ceil(rest / TICK_HZ)}s`;
     }
     this.btn.nova.classList.toggle('ready', afford(POWER.novaCost, nUnits || army, 4));
     const up = g.upgradeInfo();

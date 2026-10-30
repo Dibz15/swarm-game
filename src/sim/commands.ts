@@ -108,16 +108,25 @@ function echo(w: World, p: number, slots: number[], cx: number, cy: number): voi
   const E = VARIANTS.echo;
   const n = Math.min(E.max, Math.max(1, Math.round(slots.length * E.per)));
   for (let k = 0; k < n; k++) {
-    const s = slots[k];
-    // Spread them over the group's footprint.
+    // Evenly through the group, so a mixed group leaves a mixed echo, each
+    // ghost in the shape of the unit it copies and spread over the footprint.
+    const s = slots[Math.floor((k * slots.length) / n)];
     const x = (w.x[s] + cx) / 2, y = (w.y[s] + cy) / 2;
-    const g = spawnUnit(w, p, Kind.Dot, x, y, x, y, 4);
+    const g = spawnUnit(w, p, w.kind[s], x, y, x, y, 4);
     if (g < 0) return;
     w.ghost[g] = w.tick + E.ticks;
     w.hp[g] = E.hp;
     w.unitCount[p]--;
     w.ghosts++;
   }
+}
+
+/** Lockdown Siphon (#60): ticks until p may lock again (one siphon at a time, then a rest). */
+export function siphonWait(w: World, p: number): number {
+  if (!w.factions[p].mods.siphon) return 0;
+  let until = 0;
+  for (const n of w.nests) if (n.lockedBy === p) until = Math.max(until, n.lockedUntil + VARIANTS.siphon.rest);
+  return Math.max(0, until - w.tick);
 }
 
 /** Blood price (#60): the units a power costs instead of `energy`. */
@@ -350,7 +359,7 @@ export function applyCommand(w: World, c: Command): void {
     case 'lockdown': {
       if (!hasPower(w, c.p, 'lockdown')) return;
       const n = w.nests[c.nest];
-      if (!n || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, c.p)) return;
+      if (!n || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, c.p) || siphonWait(w, c.p) > 0) return;
       if (!pay(w, c.p, POWER.lockdownCost, null, 1, n.x, n.y)) return;
       n.lockedUntil = w.tick + Math.round(POWER.lockdownTicks * powerBoost(w, c.p, 'lockdown') * f.mods.lockdownTicks);
       n.lockedBy = c.p;

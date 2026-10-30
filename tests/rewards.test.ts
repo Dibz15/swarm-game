@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { REWARD, REWARDS } from '../src/campaign/rewards';
 import { resolveDamage } from '../src/sim/combat';
-import { applyCommand, novaRadius } from '../src/sim/commands';
+import { applyCommand, novaRadius, siphonWait } from '../src/sim/commands';
 import { Kind, NestType, POWER, TRAITS, UNIT_STATS } from '../src/sim/constants';
 import { worldHash } from '../src/sim/hash';
 import { bastionRange, supplyCap } from '../src/sim/nests';
@@ -635,6 +635,35 @@ describe('rewards change the sim (#64)', () => {
     run(a, 600);
     run(b, 600);
     expect(worldHash(a)).toBe(worldHash(b));
+  });
+
+  it('Echo leaves ghosts of every kind in a mixed group', () => {
+    const w = arena('echo');
+    w.nests.push(fakeNest({ type: NestType.Swift }));
+    w.factions[0].energy = 100;
+    // Shields first, as a selection might list them.
+    const us = [Kind.Tank, Kind.Tank, Kind.Tank, Kind.Tank, Kind.Dot, Kind.Dot, Kind.Dot, Kind.Dot, Kind.Lancer, Kind.Lancer, Kind.Lancer, Kind.Lancer].map((k, j) => put(w, 0, k, 200 + j * 3, 800));
+    w.grid.build(w);
+    applyCommand(w, { t: 'blink', p: 0, units: us.map((i) => w.uid[i]), x: 600, y: 800 } as never);
+    const kinds = new Set<number>();
+    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.ghost[i]) kinds.add(w.kind[i]);
+    expect([...kinds].sort()).toEqual([Kind.Dot, Kind.Tank, Kind.Lancer].sort());
+  });
+
+  it('Siphon: Lockdown rests until a while after the last lock ends', () => {
+    const w = mapWorld('siphon');
+    const mine = w.nests.find((n) => n.owner === 0)!;
+    mine.type = NestType.Bastion;
+    const [a, b] = w.nests.filter((n) => n.owner === 1);
+    w.factions[0].energy = 100;
+    applyCommand(w, { t: 'lockdown', p: 0, nest: a.id } as never);
+    expect(siphonWait(w, 0)).toBeGreaterThan(0);
+    // A second lock straight after is refused, and costs nothing.
+    const e = w.factions[0].energy;
+    applyCommand(w, { t: 'lockdown', p: 0, nest: (b ?? a).id } as never);
+    expect(w.factions[0].energy).toBe(e);
+    w.tick += siphonWait(w, 0);
+    expect(siphonWait(w, 0)).toBe(0);
   });
 
   it('a power ordered for units that are gone costs nothing, in energy or (Blood price) in units', () => {

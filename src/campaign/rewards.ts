@@ -93,7 +93,7 @@ export const REWARDS: Reward[] = [
   variant('root', 'Root', 'fortify', 'uncommon', "Fortify: units can't move, but take 40% less damage again", (m) => ((m.fortifyArmor *= 0.6), (m.fortifyRoot = true))),
   variant('thorns', 'Thorns', 'fortify', 'common', 'Fortify: fortified units send 30% of each blow back at the attacker', (m) => (m.thorns = 0.3)),
   variant('long', 'Long', 'lockdown', 'common', 'Lockdown: lasts 50% longer', (m) => (m.lockdownTicks *= 1.5)),
-  variant('siphon', 'Siphon', 'lockdown', 'uncommon', 'Lockdown: 20% shorter, but drains 1.2 energy/s from its owner to you', (m) => ((m.lockdownTicks *= 0.8), (m.siphon = 1.2))),
+  variant('siphon', 'Siphon', 'lockdown', 'uncommon', 'Lockdown: drains 1.2 energy/s from its owner to you, but is 20% shorter and rests 10 s after', (m) => ((m.lockdownTicks *= 0.8), (m.siphon = 1.2))),
   // Nest and economy perks
   { id: 'capital', name: 'Seasoned capital', text: 'Your capital starts at level 2', family: 'perk', tier: 'rare', apply: (m) => (m.capitalLevel += 1) },
   { id: 'bastion-range', name: 'Long watch', text: 'Bastion turrets reach 30% further', family: 'perk', tier: 'common', apply: (m) => (m.bastionRange *= 1.3) },

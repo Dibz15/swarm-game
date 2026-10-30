@@ -2,7 +2,7 @@ export * from './constants';
 export { World, UNIT_FEEDING, UNIT_RETREAT, type Nest, type Faction, type FxEvent } from './world';
 export { step, dominationStatus, type DominationStatus } from './step';
 export { bastionRange, supplyCap } from './nests';
-export { bloodCost, surgeCost } from './commands';
+export { bloodCost, siphonWait, surgeCost } from './commands';
 export { defaultMods, type FactionMods, type KindMods } from './mods';
 export { createWorld, type MatchSetup, type PlayerSetup } from './setup';
 export type { Command } from './commands';
