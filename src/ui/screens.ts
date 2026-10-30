@@ -187,7 +187,7 @@ export function skirmishMenu(h: { quick: (difficulty: number) => void; custom: (
 }
 
 /** Single-player modes beyond skirmish, so the main menu stays short as they grow. */
-export function campaignMenu(p: TutorialProgress, h: { tutorial: () => void; back: () => void }): HTMLDivElement {
+export function campaignMenu(p: TutorialProgress, active: number, h: { tutorial: () => void; run: () => void; back: () => void }): HTMLDivElement {
   const done = MISSIONS.filter((ms) => p.done.includes(ms.id)).length;
   const m = el(`
     <div class="screen modal">
@@ -195,12 +195,13 @@ export function campaignMenu(p: TutorialProgress, h: { tutorial: () => void; bac
         <h2>Campaign</h2>
         <div class="menu-buttons">
           <button class="primary" data-a="tutorial"><b>Tutorial</b><span>${done === MISSIONS.length ? 'Complete ✓ · replay any mission' : `${done} of ${MISSIONS.length} missions · about 10 minutes`}</span></button>
-          <button data-a="run" disabled><b>Procedural campaign</b><span>coming soon</span></button>
+          <button data-a="run"><b>Procedural campaign</b><span>${active ? `${active} run${active > 1 ? 's' : ''} in progress` : 'Cross the map before the Bloom takes it · preview'}</span></button>
         </div>
         <div class="row end"><button data-a="back">Back</button></div>
       </div>
     </div>`);
   m.querySelector('[data-a=tutorial]')!.addEventListener('click', h.tutorial);
+  m.querySelector('[data-a=run]')!.addEventListener('click', h.run);
   m.querySelector('[data-a=back]')!.addEventListener('click', h.back);
   return m;
 }
@@ -820,7 +821,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
   return m;
 }
 
-export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine }): HTMLDivElement {
+export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine; quitLabel?: string }): HTMLDivElement {
   const m = el(`
     <div class="screen modal dim">
       <div class="card">
@@ -828,7 +829,7 @@ export function pauseMenu(h: { resume: () => void; restart: () => void; quit: ()
         <div class="menu-buttons">
           <button class="primary" data-a="resume">Resume</button>
           <button data-a="restart">Restart match</button>
-          <button data-a="quit">Quit to menu</button>
+          <button data-a="quit">${h.quitLabel ?? 'Quit to menu'}</button>
         </div>
         <div class="fields"></div>
         <h3>Controls</h3>
@@ -886,10 +887,14 @@ export function endScreen(
 
 /** "You won by domination", "Magenta won by elimination", ... */
 function how(w: World, human: number): string {
+  if (w.winReason === 'fallen') return 'The line broke: <b>your capital fell</b>';
   if (w.winnerTeam < 0 || !w.winReason) return w.factions[human]?.eliminated ? 'You were eliminated' : 'Match over';
   const mine = w.winnerTeam === w.teamOf[human];
   const face = w.factions.find((f) => f.active && f.id !== NEUTRAL && f.team === w.winnerTeam && !f.eliminated) ?? w.factions.find((f) => f.team === w.winnerTeam);
   const who = mine ? (w.factions.filter((f) => f.active && f.team === w.winnerTeam).length > 1 ? 'Your team' : 'You') : face ? FACTION_NAMES[face.id] : 'A rival';
+  if (w.winReason === 'heart') return `${who} destroyed <b>the Bloom's heart</b>`;
+  if (w.winReason === 'citadel') return `${who} took <b>the citadel</b>`;
+  if (w.winReason === 'held') return `${who} <b>held the line</b>`;
   return `${who} won by <b>${w.winReason}</b>`;
 }
 

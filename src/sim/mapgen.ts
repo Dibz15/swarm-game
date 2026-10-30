@@ -1,3 +1,4 @@
+import { fortify, type FortressInfo } from './fortify';
 import { NEST_RADIUS, NestType } from './constants';
 import { PI, TAU, dcos, dsin } from './mathx';
 import { Rng } from './rng';
@@ -71,6 +72,8 @@ export interface EventParams {
   colossus: number[];
   /** seconds per regrown guard on neutral nests (0 = off) */
   regrow: number;
+  /** the swarms are the Bloom's (campaign): their own cue */
+  bloom?: boolean;
 }
 
 export type EventLevel = 'off' | 'calm' | 'normal' | 'wild';
@@ -116,6 +119,8 @@ export interface MapParams {
   typeWeights?: readonly number[];
   /** how nests are spread (default: picked by the seed) */
   layout?: MapLayout | 'random';
+  /** this player's capital is walled in: a warlord's stronghold (#100), or you, holding the line (#67) */
+  fortress?: number;
 }
 
 export interface NestSpec {
@@ -139,6 +144,8 @@ export interface MapSpec {
   events: EventSpec;
   /** the layout a generated map used */
   layout?: MapLayout;
+  /** a walled-in player's fortress, as it came out (#100, #67) */
+  fortress?: FortressInfo;
 }
 
 /** Hive, Forge, Spire, Den, Bastion */
@@ -409,7 +416,11 @@ export function generateMap(p: MapParams): MapSpec {
   const frame: Frame = { w, h, P, sector, base, pos, nests, polar, size: p.size, centerCrystal: L.center === 'crystal' };
   const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), terrainParams(p.terrain), caveParams(p.caves), frame);
   const events = generateEvents(new Rng(p.seed ^ 0x3c9d17), eventParams(p.events), terrain, frame);
-  return { width: w, height: h, nests, terrain, events, layout };
+  const spec: MapSpec = { width: w, height: h, nests, terrain, events, layout };
+  // A fortress goes up last, on its own stream: the rest is the same map.
+  // Every wild-swarm spawn must reach it too (Hold the line's waves come from them).
+  if (p.fortress !== undefined) spec.fortress = fortify(spec, p.fortress, p.size, new Rng(p.seed ^ 0x51f0a7), events.swarmSpawns) ?? undefined;
+  return spec;
 }
 
 /**

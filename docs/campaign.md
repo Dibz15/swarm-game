@@ -23,11 +23,14 @@ One seed generates everything: map, battles and reward offers. The run is determ
 - **A turn:**
   1. Move to an adjacent node and fight its battle.
   2. The Bloom advances.
-- **The Bloom front:**
-  - A noisy, curved boundary that rolls in from behind your start and sweeps across the whole map toward the heart, a set distance each turn.
-  - It swallows every node it passes, wherever that node is, so it isn't tied to lanes.
+- **The Bloom follows you** (#88):
+  - It waits in a band off the edge behind your start. Every node you leave starts it growing there, a turn later and a set distance each turn. So it spreads from where you came, whichever direction you went: an up-or-down route is as safe as one heading straight for the heart.
+  - It's one body, not a cluster of circles: its parts fuse together, and its whole edge swells toward your trail, less the further away it is.
+  - It swallows every node it reaches, so in time it eats the nodes you skipped.
+  - Winning keeps you ahead. A lost battle leaves you in place while it closes in.
+  - The map shows a dashed outline of where it will reach next turn.
   - Swallowed nodes become Bloom territory and add to its strength.
-  - You can't visit everything: the front closes nodes off behind you and to the sides.
+  - Its speed is set per run: the fastest Bloom the shortest route survives when every hop takes 1 / pace turns, so the easier the run, the more room for lost battles.
 - **Checkpoint:** one node per run. If you lose everything after reaching it, you restart from it once.
 - **Node previews** show a few icons and one line, not a stats dump:
   - battle type;
@@ -46,7 +49,11 @@ They are deliberately separate, and each has one job.
 | **Where it shows** | Bloom pressure in battles near the front, and the finale | Their domain battles along the way |
 | **Rule** | What you skip, it eats, and that's what makes the finale harder | Harder battles, richer rewards; fight through, go around, or let the Bloom take them |
 
-**The Bloom in battle.** It reuses the wild-swarm faction (`src/sim/events.ts`). Nodes near the front get Bloom pressure: more and bigger wild swarms, scaled by the Bloom's strength, attacking every faction alike.
+**The Bloom in battle** (#65). It reuses the wild-swarm faction (`src/sim/events.ts`), and every faction is fair game for it.
+- **Pressure:** the closer the Bloom is to a node (0 far, 1 when it falls next turn), the sooner and more often its swarms come (`bloomEvents` in `src/campaign/battle.ts`). Past 0.2 they're the Bloom's swarms, with their own cue. Far from the front they're the calm preset's wild swarms.
+- **Strength:** every node the Bloom swallowed makes its swarms 6% bigger, up to double.
+- **Previews:** the node card shows how near it is and how big its swarms are.
+- The run-map music darkens with the pressure on the nodes you can move to, and Bloom battles keep it dark.
 
 **Warlords.**
 - **Who:** 2–4 named rival colours per run, each with one **trait**: a small, clear buff such as *Ironhide* (Shields +50% HP), *Swarmlord* (faster spawning, no powers) or *Raider-king* (Raiders capture even faster). Traits are the first slice of the champion modifiers planned for later.
@@ -55,15 +62,108 @@ They are deliberately separate, and each has one job.
 - **The Bloom erodes domains:** each swallowed domain node weakens the warlord, and if the stronghold is swallowed, the warlord is gone. "Let the Bloom deal with that warlord" is a real choice, at the price of a stronger finale.
 - **Warlords don't move.** There is no map AI.
 
+**Warlords as built** (#66, `src/campaign/warlords.ts`). Every number is provisional until #68.
+- **Placement:**
+  - 2–4 strongholds, at least 3 hops apart, in the middle of the map (never the start, the finale or the checkpoint).
+  - Each has 1–3 linked neighbours as its domain.
+  - Placement uses its own seeded stream, so the rest of the map is the same as without warlords.
+- **Domain battles:** the warlord takes the first rival slot and fights with its trait and a fixed personality. The other rivals stay plain bots.
+- **Strongholds and rewards:**
+  - Strongholds keep the node's bot level but have at most two rivals (the warlord and one more): the fortress is what makes them harder (#100).
+  - Biomass: ×1.3 in a domain, ×2 at the stronghold.
+  - Rescue odds rise to 50% in a domain.
+  - Offers after a win weigh rares 20% in a domain and 40% at the stronghold (10% elsewhere).
+- **Erosion:** each domain node the Bloom swallows costs the warlord 10% of its production, down to 50%. If the Bloom swallows the stronghold, the warlord is gone.
+- **Breaking:** taking the stronghold breaks the domain, and its other nodes become ordinary. You also get the warlord's **trophy**, a run perk worth about half its trait.
+- **Finale:** living warlords with a domain node next to the heart take the finale's rival slots.
+- **Readability:**
+  - On the map, domains are washed in the warlord's colour and strongholds are crowned.
+  - The node card names the warlord, its trait and its erosion.
+  - In battle, a sting and a toast play, and a HUD chip shows the warlord until it's eliminated.
+
+| Trait | In battle | Trophy |
+|---|---|---|
+| Ironhide | Shields +50% HP | Shields +25% HP |
+| Swarmlord | spawns 25% faster, no powers | +1 supply per nest |
+| Raider-king | Raiders capture +50%, run +15% | Raiders capture +25% |
+| Longspine | Spears reach +20% | Spears reach +10% |
+| Stormcaller | energy +40% | energy +20% |
+| Broodmother | capital +1 level, +2 supply per nest | capital +1 level |
+
+**Fortress styles** (#67): every fortress (strongholds, and yours when holding the line) rolls its own style.
+
+| Style | Shape |
+|---|---|
+| Ring | lobed, never a perfect circle |
+| Horseshoe | open front behind barricade lanes |
+| Keep | a second inner line |
+| Bastioned | spurs funnel you into each gate |
+| Broken walls | gaps, with cover outside |
+
+Each also rolls its radius (±15%), 2–3 gates (one always facing the middle), the gate width and some cover. Everyone who has to must still be able to walk in, or the gates widen, then fall back to a plain ring. Review them with `?fortress`.
+
+**Stronghold battles** (#100, `src/sim/fortify.ts`).
+- **The map:** the usual generated map, then fortified on its own seeded stream.
+  - The warlord's capital becomes the **citadel**, a normal level-1 capital, inside a ring of walls.
+  - The ring has three gates that face the middle of the map.
+  - Two more of the warlord's nests sit inside: a Bastion and a Forge or Spire. Its starting army is spread over the three (10 + 7 + 7) so a rush can't take the citadel. Those garrisons grow with the army you bring (×1 up to 32 units, then in proportion).
+  - In its stronghold, the warlord turtles: it values nests more than 520 px from the citadel at a third, and spawns at 70% (it starts with three nests).
+  - In the first playtest, a level-3 citadel, 30% kept home and the whole army defending made it near impossible. Neutral inner nests then made it rushable in 30 s.
+  - Anything else in the way is cleared, and there are no caves.
+  - Every other capital must be able to walk in, or the gates widen.
+- **The win:** a human who takes the citadel wins, even with rivals left. A rival taking it wins nothing, and the usual win rules still apply too.
+- **The defence:** the warlord keeps 15% of its army at the citadel, and defends it first, from up to 700 px away.
+- **Shares:** a stronghold always uses the conquest share (80%), even on a domination node. The warlord starts beside its inner nests, so half the map would be a head start.
+- **Readability:**
+  - The citadel is crowned, with an edge marker when it's off screen.
+  - The HUD chip shows "Take the citadel" with a capture bar.
+  - A horn sounds when you reach it, and a fanfare when it falls.
+- **In every domain battle,** the warlord's units have a dark rim plus their trait's look:
+
+| Trait | Look |
+|---|---|
+| Ironhide | plated Shields |
+| Swarmlord | Swarmers pulsing together |
+| Raider-king | long Raider streaks |
+| Longspine | spiked Spears |
+| Stormcaller | sparks |
+| Broodmother | a throbbing capital |
+
+  The warlord's capital wears a crown.
+
 ## Battles
 Each node turns into a `MatchSetup` (`src/sim/setup.ts`) plus an objective. Objectives are checked inside the sim, so battles stay deterministic and testable headless.
 
-- **Conquest:** eliminate the rivals (today's win condition).
+- **Conquest:** eliminate the rivals, or hold 80% of the nests for 30 seconds, so two turtling rivals can't stall it.
 - **Domination:** hold the share of nests (`domShare`) for the countdown. Shorter and racier.
-- **Hold the line (new):**
-  - You start dug in on a sector of a few nests.
-  - Waves (Bloom swarms plus a rival's pushes, through the events director) come for N minutes.
-  - You win if you still hold your capital when the timer runs out.
+- **Hold the line** (#67, `src/sim/siege.ts`):
+  - **Placement:** at most one per depth, past the first, never in a domain. You start dug in behind your own fortress: the same procedural walls as a stronghold, around you.
+  - **The waves:** the Bloom comes in waves on a schedule rolled up front.
+    - Each wave hunts your capital; Raiders go for your outer nests first.
+    - In a siege only, the Bloom's waves tear your nests down to neutral, though they never take them.
+    - **No rival.** In the first playtest, a rival took the whole field while you held the walls.
+    - **Bloom nests:** the field's neutral nests are the Bloom's (ringed red). Waves emerge from them (from the map edge once you've taken them all), and each one it still holds makes every wave 14% bigger, so sallying out between waves to take them thins the waves. A nest left unowned goes back to the Bloom.
+    - **Boons:** every other wave, pick 1 of 3 within 10 s, or the first is taken for you:
+      - Reinforcements: a fresh brood now;
+      - Hatcheries: +20% production;
+      - Surge of power: full energy;
+      - Raise the walls: your capital and inner nests go up a level.
+  - **Win:** your capital is yours when the clock runs out (3–5 minutes by depth). If it falls you have 20 s to retake it; nothing else ends the battle.
+  - **Wave kinds:**
+
+    | Kind | Units | Joins at depth |
+    |---|---|---|
+    | Swarm | Swarmers with a few Raiders | from the start |
+    | Brutes | Shields | from the start |
+    | Raiders | Raiders only | from the start |
+    | Spears | Spears | 0.35 of the way |
+    | Pincer | two half-size swarms from opposite sides | 0.35 of the way |
+    | Colossus | a Colossus with an escort | 0.65 of the way |
+
+    The first wave is always a swarm, and no kind comes twice running. A wave is a quarter to a half again bigger each time.
+  - **HUD:** a walking timeline at the top. Each upcoming wave is an icon (by kind, sized by strength) sliding toward the arrival line. The clock sits at the end, with a red "Retake your capital" countdown if it falls.
+  - **Sounds:** the wave horn, ticks for the final 10 s, a capital alarm, and line held.
+  - **Probe:** `scripts/siege-probe.ts`, with `IDLE=1` to give no orders at all. Over 10 seeds, doing nothing holds 0 and the proxy holds 6. Tune by playtest (#68).
 - **Difficulty** rises with the distance travelled: bot difficulty, rival count, production (`PlayerSetup.prod`) and Bloom pressure.
 - **Later:** team battles (2v2 with an ally) and champion modifiers on any rival.
 
@@ -90,28 +190,37 @@ After every won node, **pick 1 of 3** offers.
 - **Rarity tiers:** common, uncommon and rare.
 - **Where rares come from:** warlord domains and strongholds weight the offers toward rare.
 
-**The full pool is 43 items. v1 ships the 25 numeric ones. The other 18 need new sim behaviour and are left for later.** Both lists live here so nothing is lost.
+**The full pool is 43 items.** v1 shipped the 25 numeric ones. The other 18 add rules to the sim (#60). They're built in three parts: strains, then power variants, then perks and pacts. Items marked *(built)* are in the pool.
 
-| Family | **v1 (25)** | **Later (18)**, needs new behaviour |
+| Family | **v1 (25)** | **Behaviour (18)**, #60 |
 |---|---|---|
-| **Swarmer strain** | *Frenzy* (bigger pack bonus); *Lean* (+speed, −HP); *Thick hide* (+25% HP, −speed) | *Swarm-call* (a dying Swarmer briefly boosts its neighbours) |
-| **Shield strain** | *Plated* (+HP); *Bulwark* (draws fire from further away) | *Spikes* (reflect some damage); *Phalanx* (tougher next to other Shields) |
-| **Spear strain** | *Barbed* (wider splash); *Longshot* (+range, −dps); *Quickdraw* (faster shots) | *Piercing* (shots pass through a line) |
-| **Raider strain** | *Saboteur* (even faster capture); *Fleet* (+speed) | *Skirmish* (retreat when hurt); *Arsonist* (contested nests lose control faster) |
-| **Power variants** (one per power at a time) | Barrage *Heavy shell* (bigger damage budget); Nova *Wide* (wider, weaker); Surge *Overdrive* (longer, cheaper); Blink *Long jump* (+range); Fortify *Root* (can't move, much tougher); Lockdown *Long* (longer duration) | Barrage *Cluster* (three small blasts) and *Scorch* (lingering burn); Nova *Implode* (pulls in); Surge *Mend* (heals instead of speed); Blink *Echo* (leaves a decoy); Fortify *Thorns*; Lockdown *Siphon* (drains energy) |
-| **Nest and economy perks** | capitals start at level 2; Bastion turret +range; +1 supply per nest; crystals charge 25% faster; +15% energy income; faster capture at every nest | supply drops favour you; level-2 nests spawn veterans |
-| **Pacts** (strong, with a drawback) | *Glass swarm* (+30% damage, −20% HP); *Hunger* (double biomass, but the Bloom advances faster); *Lone wolf* (field 1 brood only, but it's huge) | *Blood price* (powers cost units instead of energy); *Scorched earth* (captured nests start half-controlled, you spawn 20% faster); *Feral* (no powers, +25% production) |
+| **Swarmer strain** | *Frenzy* (bigger pack bonus); *Lean* (+speed, −HP); *Thick hide* (+25% HP, −speed) | *Swarm-call* (built: a dying Swarmer rouses Swarmers within 70 px, +25% damage and +20% speed for 2 s) |
+| **Shield strain** | *Plated* (+HP); *Bulwark* (draws fire from further away) | *Spikes* (built: a quarter of each blow comes back at the attacker); *Phalanx* (built: −8% damage taken per Shield beside it, up to 3) |
+| **Spear strain** | *Barbed* (wider splash); *Longshot* (+range, −dps); *Quickdraw* (faster shots) | *Piercing* (built: shots run on 90 px past the target, hitting up to 3 more along the line) |
+| **Raider strain** | *Saboteur* (even faster capture); *Fleet* (+speed) | *Skirmish* (built: below 35% HP a Raider falls back to its nearest nest, heals there, and returns at 90%; new orders don't call it back); *Arsonist* (built: enemy nests with your Raiders on them drain 60% faster) |
+| **Power variants** (one per power at a time) | Barrage *Heavy shell* (bigger damage budget); Nova *Wide* (wider, weaker); Surge *Overdrive* (longer, cheaper); Blink *Long jump* (+range); Fortify *Root* (can't move, much tougher); Lockdown *Long* (longer duration) | Barrage *Cluster* (built: three smaller shells in a triangle round the target, landing one after another) and *Scorch* (built: a weaker blast, then the ground burns for 6 s); Nova *Implode* (built: pulls enemies in, −25% damage); Surge *Mend* (built: heals 35% of HP over the Surge instead of the speed boost); Blink *Echo* (built: see-through ghosts stay behind for 4 s and draw fire like Shields; they never fight, capture or count toward the army); Fortify *Thorns* (built: fortified units send 30% of each blow back); Lockdown *Siphon* (built: 20% shorter, drains 1.2 energy/s from the nest's owner to you) |
+| **Nest and economy perks** | capitals start at level 2; Bastion turret +range; +1 supply per nest; crystals charge 25% faster; +15% energy income; faster capture at every nest | *Kind skies* (built: supply drops land near you instead of the weakest player, and you take them 50% faster); *Old blood* (built: level-2 nests spawn veterans too) |
+| **Pacts** (strong, with a drawback) | *Glass swarm* (+30% damage, −20% HP); *Hunger* (double biomass, but the Bloom advances faster); *Lone wolf* (field 1 brood only, but it's huge) | *Blood price* (built: powers cost one unit per 6 energy instead of energy: a group power pays from its group, others from your units nearest the target); *Scorched earth* (built: captured nests start half-held and must recover before they spawn, but you spawn 20% faster); *Feral* (built: no powers, +25% production; it shuts out power variants and Blood price) |
 
 - **Builds emerge:** a Spear strain plus Heavy-shell Barrage plays very differently from Lean Swarmers plus Overdrive Surge. With 25 items and 3 offers per pick, a run of 8–10 picks sees most of the v1 pool. The later items are what keep runs varied over many plays.
 - **Rarity comes from measurements, not guesses.**
   - A headless reward-impact probe plays the same seeded battles with and without each item, the same A/B method as `scripts/choke-probe.ts`, and reports the win-rate and margin change per item.
   - The most impactful items become rare; the weakest get buffed or made common. Pacts are judged on net impact after their drawback.
-  - Until the probe exists, v1 ships provisional tiers, marked as such in the code.
-- **In the sim:** a deterministic per-faction modifier table (`FactionMods` in `world.ts`), read where stats are used (`combat.ts`, `movement.ts`, `nests.ts`, and the power code in `commands.ts` and `step.ts`). The v1 items are all numeric multipliers. Champion modifiers on enemies will reuse the same table.
+  - The probe is `scripts/reward-probe.ts`: the human proxy against a Brutal rival, with and without each item, and a suggested tier from the thirds. The sweep that sets the tiers is part of #68; until then the tiers are provisional, marked as such in the code.
+- **In the sim:** a deterministic per-faction modifier table (`FactionMods` in `mods.ts`), read where stats are used (`combat.ts`, `movement.ts`, `nests.ts`, and the power code in `commands.ts` and `step.ts`). The v1 items are all numeric multipliers; the behaviour items switch on rules in the same places. Champion modifiers on enemies will reuse the same table.
 
 ## Finale: the Bloom's heart
-- **Map:** a large map overrun by the Bloom: wild-swarm nests, constant swarms, and a Colossus-class heart to destroy.
-- **Strength:** scales with the number of nodes the Bloom ate.
+- **Map:** a large map overrun by the Bloom, with its swarms at full pressure. The heart, a rooted boss (`src/sim/heart.ts`), sits near the centre.
+- **Bloom nests:** the 2–4 neutral nests nearest the heart. While the Bloom holds them, they release swarms and **ward** the heart: each one cuts the damage it takes by 15%. Take them first.
+- **The heart fights back:**
+  - a **pulse:** a telegraphed shockwave (pull back during the wind-up);
+  - **spore lobs** at the thickest crowd;
+  - **defenders** called up when it's pressed;
+  - at **66% and 33%** health, it rages: a burst of defenders, every Bloom nest releases, and its swarms rally home.
+  - Left alone it regrows, but never past a phase it has lost.
+- **Strength:** the nodes the Bloom ate add health to the heart (6% each), more Bloom nests, and bigger swarms.
+- **Winning:** on Gentle, Standard and Hard, your killing blow wins. If a rival lands it, the battle goes on as a normal one. On Brutal, the heart's death only opens the fight: the rivals must be beaten too. Losing all your units and nests still loses.
+- The `?heart=N` dev link jumps straight into a finale, with the Bloom fed by N nodes.
 - **Warlords:** any still alive whose domain borders the heart join as rivals. They suffer the Bloom too.
 
 ## Sound and music

@@ -68,6 +68,44 @@ export const TRAITS = {
   stomp: { radius: 46, damage: 14, every: 2 * 30 },
 };
 
+/**
+ * Behaviour strains (#60): campaign rewards that add a rule, not just a
+ * number. Each is off unless the faction's KindMods turn it on. PROVISIONAL
+ * numbers (#68).
+ */
+export const STRAINS = {
+  /** Swarm-call: a dying Swarmer rouses Swarmers this close for `ticks` (damage +call, speed ×speed) */
+  call: { radius: 70, ticks: 2 * 30, speed: 1.2 },
+  /** Phalanx: Shields count other Shields this close, up to `max` */
+  phalanx: { radius: 26, max: 3 },
+  /** Piercing: Spear shots carry this far past the target, hitting up to `extra` within `width` of the line */
+  line: { reach: 90, width: 10, extra: 3, damage: 0.45 },
+  /** Skirmish: Raiders below `flee` of their HP fall back to a nest, heal there at `heal` hp/s and return at `back` */
+  skirmish: { flee: 0.35, back: 0.9, heal: 6 },
+};
+
+/** Pacts with a rule of their own (#60). PROVISIONAL numbers (#68). */
+export const PACTS = {
+  /** Blood price: a power costs one unit per this much energy it would have cost */
+  bloodPerUnit: 6,
+};
+
+/** Power variants with a rule of their own (#60). PROVISIONAL numbers (#68). */
+export const VARIANTS = {
+  /** Cluster: three shells this far from the aim point, each this much of the radius and budget, landing `stagger` ticks apart */
+  cluster: { spread: 55, r: 0.6, budget: 0.75, stagger: 5 },
+  /** Scorch: the impact's budget share, and a burn of `dps` that lasts `ticks` */
+  scorch: { budget: 0.6, dps: 5, ticks: 6 * 30 },
+  /** Implode: damage share (the knockback pulls in instead) */
+  implode: { damage: 0.75 },
+  /** Mend: share of full HP healed over the Surge */
+  mend: { heal: 0.35 },
+  /** Echo: ghosts per unit blinked (at most `max`), their HP and how long they last */
+  echo: { per: 0.25, max: 6, hp: 20, ticks: 4 * 30 },
+  /** Siphon: how long Lockdown rests after a siphoning lock ends, so it can't be chained */
+  siphon: { rest: 5 * 30 },
+};
+
 /** units notice enemies this far beyond their attack range */
 export const AGGRO_EXTRA = 26;
 /** a unit shot from beyond its notice range turns on its attacker if it's within this much extra */
@@ -84,6 +122,8 @@ export const RETARGET = 6;
 
 export const NestType = { Hive: 0, Forge: 1, Spire: 2, Swift: 3, Bastion: 4 } as const;
 export const NEST_NAMES = ['Hive', 'Forge', 'Spire', 'Den', 'Bastion'] as const;
+/** every nest type unlocked (Faction.nestTypes default) */
+export const ALL_NEST_TYPES = 0b11111;
 /** unit kind spawned by each nest type; -1 = spawns nothing */
 export const NEST_KIND: readonly number[] = [Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift, Kind.Dot];
 /** per-type spawn speed multiplier (Bastion trades production for defense) */

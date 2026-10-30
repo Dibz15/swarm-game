@@ -23,6 +23,8 @@ export interface MusicState {
   escalation: number;
   /** 1 while any team is dominating */
   domination: number;
+  /** 0..1: how close the Bloom is (campaign); darkens the score */
+  bloom?: number;
 }
 
 /** Paused mid-match: music (and the ambience drone) go dull and quiet. */
@@ -142,8 +144,9 @@ export class Music {
   /** Called every frame with the game's state; adjusts layer levels. */
   update(dt: number, s: MusicState): void {
     this.state = s;
+    const bloom = s.bloom ?? 0;
     const target =
-      s.mode === 'menu' ? 0.12 : Math.max(s.tension * 0.9, s.danger * 0.75, s.escalation * 0.85 + s.tension * 0.2);
+      s.mode === 'menu' ? 0.12 + 0.2 * bloom : Math.max(s.tension * 0.9, s.danger * 0.75, s.escalation * 0.85 + s.tension * 0.2);
     // Slow follow so layers don't flicker with every skirmish.
     const rise = target > this.intensity ? 0.6 : 0.18;
     this.intensity += (target - this.intensity) * (1 - Math.exp(-dt * rise));
@@ -153,10 +156,12 @@ export class Music {
 
     set(this.layers.pad, s.mode === 'menu' ? 1 : 0.85);
     set(this.layers.arp, smooth(0.04, 0.3, m) * 0.9 + (s.mode === 'menu' ? 0.35 : 0.15));
-    set(this.layers.bass, smooth(0.25, 0.5, m));
+    // The Bloom near: a low bass drone under the menu's pad.
+    set(this.layers.bass, Math.max(smooth(0.25, 0.5, m), smooth(0.4, 0.9, bloom) * 0.7));
     set(this.layers.drums, Math.max(smooth(0.45, 0.7, m), s.escalation > 0.4 ? 0.55 : 0));
-    set(this.layers.lead, (1 - smooth(0.25, 0.55, m)) * 0.9);
-    this.padFilter.frequency.setTargetAtTime(this.style.pad.cutoff + m * this.style.pad.range, t, 1.5);
+    set(this.layers.lead, (1 - smooth(0.25, 0.55, m)) * 0.9 * (1 - 0.6 * bloom));
+    // ...and a darker pad: the cutoff closes as it nears.
+    this.padFilter.frequency.setTargetAtTime((this.style.pad.cutoff + m * this.style.pad.range) * (1 - 0.5 * bloom), t, 1.5);
 
     // Paused: muffled as if heard through a wall. The score sits mostly below
     // 1 kHz, so the cutoff has to reach well into it to be heard.
@@ -185,6 +190,7 @@ export class Music {
     const s = this.state;
     if (s.mode === 'play' && (s.escalation > 0.3 || s.domination > 0)) return 'drive';
     if (s.mode === 'play' && s.danger > 0.5) return 'tense';
+    if ((s.mode === 'play' || s.mode === 'menu') && (s.bloom ?? 0) > 0.5) return 'tense';
     return 'calm';
   }
 

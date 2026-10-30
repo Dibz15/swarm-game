@@ -1,5 +1,6 @@
-import { MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './constants';
+import { ALL_NEST_TYPES, LEVEL, MAX_UNITS, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, UNIT_STATS } from './constants';
 import { Rng } from './rng';
+import { defaultMods, type FactionMods } from './mods';
 import { Grid } from './spatial';
 import { Terrain, emptyTerrain, type TerrainSpec } from './terrain';
 import type { EventSpec } from './mapgen';
@@ -28,6 +29,8 @@ export interface Nest {
   contested: boolean;
   /** tick until which a Lockdown stops spawning and control recovery */
   lockedUntil: number;
+  /** who cast the Lockdown (Siphon), or -1 */
+  lockedBy?: number;
   /** a player's starting nest: built-in turret + stronger home armor */
   capital: boolean;
   /** neutral guards this nest regrows toward (living-map events) */
@@ -55,6 +58,13 @@ export interface Faction {
   prodMult: number;
   /** hard army limit on top of supply (tutorial opponents); 0 = none */
   unitCap: number;
+  /**
+   * Bitmask of nest types this faction may use (bit = NestType). A locked type
+   * still captures, but spawns Swarmers and grants no power (campaign unlocks).
+   */
+  nestTypes: number;
+  /** campaign rewards and the like; identity by default (see mods.ts) */
+  mods: FactionMods;
   stats: FactionStats;
 }
 
@@ -81,7 +91,18 @@ export type FxType =
   | 'colossusDown'
   | 'stomp'
   | 'domStart'
-  | 'domBreak';
+  | 'domBreak'
+  | 'bloomSwarm'
+  | 'heartWindup'
+  | 'heartPulse'
+  | 'heartPhase'
+  | 'heartDown'
+  | 'siegeWave'
+  | 'capitalLost'
+  | 'capitalRetaken'
+  | 'boonOffer'
+  | 'boonTaken'
+  | 'swarmCall';
 
 export interface FxEvent {
   type: FxType;
@@ -110,6 +131,17 @@ export interface Barrage {
   x0: number;
   y0: number;
   t0: number;
+  /** share of the usual damage budget (Cluster, Scorch) */
+  budget?: number;
+}
+
+/** Scorch (#60): ground still burning after a Barrage. */
+export interface Burn {
+  x: number;
+  y: number;
+  r: number;
+  owner: number;
+  until: number;
 }
 
 /** An energy crystal; `holder` is the faction charging from it, or -1. */
@@ -138,6 +170,9 @@ export interface Swarm {
   uids: number[];
   tx: number;
   ty: number;
+  /** a siege wave (#67): it hunts this faction, whatever else is near: its capital, or (raiders) its nearest other nest */
+  hunt?: number;
+  raid?: boolean;
 }
 
 /** A Colossus walking its path; `leg` is the waypoint it heads for. */
@@ -146,6 +181,8 @@ export interface Colossus {
   path: [number, number][];
   leg: number;
   maxHp: number;
+  /** a siege Colossus (#67): at the end of its path it stays, rather than walking off */
+  stay?: boolean;
 }
 
 /** Runtime state of the map's events (schedule in `spec.params`). */
@@ -163,8 +200,79 @@ export interface EventState {
 
 export const WILD_SWARM = 1;
 export const WILD_COLOSSUS = 2;
+/** the Bloom's heart: a rooted boss (campaign finale, see heart.ts) */
+export const WILD_HEART = 3;
+
+/** How the finale ends: the heart alone, or the heart and then the rivals (Brutal). */
+export type HeartRule = 'heart' | 'heart+rivals';
+
+/** Hold the line (#67): the kinds of Bloom wave. */
+export type WaveKind = 'swarm' | 'brutes' | 'spears' | 'raiders' | 'pincer' | 'colossus';
+
+export interface Wave {
+  /** tick it arrives */
+  at: number;
+  kind: WaveKind;
+  /** units (a Colossus wave: its escort) */
+  size: number;
+  /** spawn indices (into SiegeState.spawns): two for a pincer */
+  from: number[];
+}
+
+/** Hold the line (#67): hold your capital until `until`, against a schedule of waves. */
+export interface SiegeState {
+  until: number;
+  waves: Wave[];
+  /** the next wave to come (index) */
+  next: number;
+  /** the defender and its capital nest */
+  human: number;
+  capital: number;
+  /** tick the capital fell, or -1 */
+  lostAt: number;
+  spawns: [number, number][];
+  /** the field's nests (neutral at the start): each one the Bloom still holds makes the waves bigger */
+  bloomNests: number[];
+  /** a boon on offer between waves: pick one before `until`, or the first is taken for you */
+  offer: { ids: BoonId[]; until: number } | null;
+  /** when the next offer opens (tick), or -1 */
+  offerAt: number;
+  /** boons taken so far */
+  boons: BoonId[];
+}
+
+/** Holding the line (#67): what you can pick between waves. */
+export type BoonId = 'reinforce' | 'production' | 'energy' | 'levels';
+
+/** The Bloom's heart and its nests (campaign finale). */
+export interface HeartState {
+  uid: number;
+  x: number;
+  y: number;
+  maxHp: number;
+  strength: number;
+  rule: HeartRule;
+  /** 0, 1, 2: drops at 66% and 33% hp */
+  phase: number;
+  /** Bloom nests (ids): they release swarms while neutral and ward the heart */
+  nests: number[];
+  /** tick each Bloom nest next releases a swarm */
+  nestNext: number[];
+  nextPulse: number;
+  /** tick the telegraphed pulse lands, or -1 */
+  pulseAt: number;
+  nextLob: number;
+  nextCall: number;
+  /** last tick an enemy was close */
+  threat: number;
+  /** wild swarms rally to the heart until this tick */
+  recall: number;
+  slain: boolean;
+}
 
 export const UNIT_FEEDING = 1;
+/** Skirmish (#60): falling back to a nest to heal */
+export const UNIT_RETREAT = 2;
 
 /**
  * Entire game state. Units live in structure-of-arrays typed arrays indexed
@@ -218,9 +326,17 @@ export class World {
   readonly alertTick = new Int32Array(MAX_UNITS);
   /** nearby friendly Dots last tick (pack bonus) */
   readonly pack = new Uint8Array(MAX_UNITS);
+  /** Swarm-call (#60): tick until which the unit is roused */
+  readonly called = new Int32Array(MAX_UNITS);
+  /** Echo (#60): a ghost's expiry tick, or 0 for a real unit */
+  readonly ghost = new Int32Array(MAX_UNITS);
+  /** Echo ghosts alive (most matches have none) */
+  ghosts = 0;
+  /** Phalanx (#60): nearby friendly Shields last tick */
+  readonly guard = new Uint8Array(MAX_UNITS);
   /** spawned by a level-3 nest: extra HP */
   readonly vet = new Uint8Array(MAX_UNITS);
-  /** neutral event units: WILD_SWARM or WILD_COLOSSUS, else 0 */
+  /** neutral event units: WILD_SWARM, WILD_COLOSSUS or WILD_HEART, else 0 */
   readonly wild = new Uint8Array(MAX_UNITS);
 
   readonly free: number[] = [];
@@ -235,6 +351,12 @@ export class World {
   crystals: Crystal[] = [];
   /** living-map events, or null when they're off */
   events: EventState | null = null;
+  /** the Bloom's heart (campaign finale), or null */
+  heart: HeartState | null = null;
+  /** a stronghold's citadel nest (#100): a human taking it wins; -1 if none */
+  citadel = -1;
+  /** Hold the line (#67), or null */
+  siege: SiegeState | null = null;
   bots: Bot[] = [];
 
   /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
@@ -245,6 +367,8 @@ export class World {
   fx: FxEvent[] = [];
   /** pending Barrage strikes */
   barrages: Barrage[] = [];
+  /** Scorch burns on the ground */
+  burns: Burn[] = [];
 
   /** share of nests a team must hold for DOMINATION.ticks to win */
   domShare = 0.7;
@@ -253,7 +377,7 @@ export class World {
   /** no elimination or domination win (tutorial missions without an opponent) */
   endless = false;
   /** how the match ended */
-  winReason: '' | 'elimination' | 'domination' = '';
+  winReason: '' | 'elimination' | 'domination' | 'heart' | 'citadel' | 'held' | 'fallen' = '';
   /** consecutive ticks each team has held the domination share */
   readonly domTicks = new Int32Array(NEUTRAL_TEAM + 1);
   /** per-faction unit counts sampled once a second */
@@ -278,6 +402,8 @@ export class World {
         eliminatedTick: 0,
         prodMult: 1,
         unitCap: 0,
+        nestTypes: ALL_NEST_TYPES,
+        mods: defaultMods(),
         stats: { spawned: 0, kills: 0, lost: 0, captured: 0, peak: 0 },
       });
       this.teamOf[f] = f === NEUTRAL ? NEUTRAL_TEAM : f;
@@ -313,7 +439,7 @@ export function spawnUnit(
   w.py[i] = y;
   w.vx[i] = 0;
   w.vy[i] = 0;
-  w.hp[i] = UNIT_STATS[kind].hp;
+  w.hp[i] = UNIT_STATS[kind].hp * w.factions[owner].mods.kind[kind].hp;
   w.dmg[i] = 0;
   w.armor[i] = 1;
   w.ox[i] = ox;
@@ -331,6 +457,9 @@ export function spawnUnit(
   w.surge[i] = 0;
   w.fortify[i] = 0;
   w.pack[i] = 0;
+  w.called[i] = 0;
+  w.guard[i] = 0;
+  w.ghost[i] = 0;
   w.wild[i] = 0;
   w.vet[i] = 0;
   w.attacker[i] = -1;
@@ -344,6 +473,20 @@ export function spawnUnit(
   return i;
 }
 
+/** A unit's full HP (it isn't stored: rebuilt from its kind, mods and veterancy). */
+export function maxHp(w: World, i: number): number {
+  const k = w.kind[i];
+  return UNIT_STATS[k].hp * w.factions[w.owner[i]].mods.kind[k].hp * (w.vet[i] ? LEVEL.veteranHp : 1);
+}
+
+/**
+ * A unit that takes orders and counts as army: alive, not walking off to feed
+ * a nest, and not one of Echo's ghosts (#60).
+ */
+export function inArmy(w: World, i: number): boolean {
+  return w.alive[i] === 1 && w.state[i] !== UNIT_FEEDING && !w.ghost[i];
+}
+
 export function removeUnit(w: World, i: number): void {
   if (!w.alive[i]) return;
   if (w.state[i] === UNIT_FEEDING) {
@@ -355,7 +498,9 @@ export function removeUnit(w: World, i: number): void {
   w.uidToSlot.delete(w.uid[i]);
   w.free.push(i);
   w.count--;
-  w.unitCount[w.owner[i]]--;
+  // Ghosts never counted toward the army (supply, elimination).
+  if (w.ghost[i]) w.ghosts--;
+  else w.unitCount[w.owner[i]]--;
 }
 
 export function pushFx(
