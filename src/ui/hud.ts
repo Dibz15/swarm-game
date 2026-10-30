@@ -501,9 +501,9 @@ export class Hud {
     this.energyText.textContent = `Energy ${Math.floor(e)}${crystals ? `  ◆ crystal${crystals > 1 ? ` ×${crystals}` : ''}` : ''}`;
     const nUnits = g.selection.units.size;
     const surge = me ? surgeCost(w, g.human) : POWER.surgeCost;
-    // Feral (#60) has no powers; Blood price (#60) pays for them in units, not energy.
+    // Feral (#60) has no powers; Blood price (#60) pays for them in units, not energy. Either way, no energy bar.
     const feral = !!me?.mods.noPowers, blood = !!me?.mods.bloodPrice;
-    (this.energyFill.parentElement as HTMLElement).style.display = feral ? 'none' : '';
+    (this.energyFill.parentElement as HTMLElement).style.display = feral || blood ? 'none' : '';
     const army = w.unitCount[g.human] ?? 0;
     /** Can we pay `cost` from a group of `n` (0: any of the army), keeping `keep`? */
     const afford = (cost: number, n: number, keep = 1) => (blood ? (n || army) - bloodCost(cost) >= keep : e >= cost);

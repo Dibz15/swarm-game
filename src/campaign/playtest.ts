@@ -249,7 +249,7 @@ export const PLAYTESTS: Playtest[] = [
     id: 'pacts-blood',
     group: 'Rewards',
     title: 'Blood price, Old blood, Kind skies',
-    text: 'Powers cost units (the buttons show −N●) instead of energy, level-2 nests spawn veterans, and supply drops tend to land near you.',
+    text: 'Powers cost units (the buttons show −N●, and the energy bar is gone) instead of energy, level-2 nests spawn veterans, and supply drops tend to land near you.',
     make: (c) => armed('pacts-blood', c, [[Kind.Dot, []], [Kind.Tank, []], [Kind.Lancer, []]], ['blood-price', 'old-blood', 'drops']),
   },
   {
