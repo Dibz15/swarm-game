@@ -146,9 +146,11 @@ describe('terrain mapgen', () => {
     expect(count('standard')).toBeLessThan(count('heavy'));
   });
 
+  // The terrain can change which form the seed picks (a ring needs something
+  // to build its void from), so hold the form still.
   it('terrain does not reshuffle the nests', () => {
-    const a = generateMap({ seed: 31, size: 'large', players: 4 });
-    const b = generateMap({ seed: 31, size: 'large', players: 4, terrain: 'heavy' });
+    const a = generateMap({ seed: 31, size: 'large', players: 4, form: 'classic' });
+    const b = generateMap({ seed: 31, size: 'large', players: 4, terrain: 'heavy', form: 'classic' });
     expect(b.nests).toEqual(a.nests);
   });
 });

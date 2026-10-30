@@ -47,7 +47,14 @@ export interface CaveParams {
   tunnel: [number, number];
   /** odds of each extra loop beyond the spanning tree (alternative routes) */
   loops: number;
+  /** which chambers join (#98): a spanning tree (default), one hub, a single chain, or a tree with many loops */
+  topology?: CaveTopology;
+  /** wide tunnels' radius range, px; `choke` is the odds a tunnel is the narrow `tunnel` instead */
+  wide?: [number, number];
+  choke?: number;
 }
+
+export type CaveTopology = 'tree' | 'hub' | 'chain' | 'ring';
 
 export type CaveLevel = 'off' | 'belt' | 'full';
 export const CAVE_LEVELS: readonly CaveLevel[] = ['off', 'belt', 'full'];
@@ -120,7 +127,22 @@ export interface MapParams {
   layout?: MapLayout | 'random';
   /** this player's capital is walled in: a warlord's stronghold (#100), or you, holding the line (#67) */
   fortress?: number;
+  /** the map's large-scale form (default: picked by the seed, to suit its terrain and caves) */
+  form?: MapForm | 'random';
 }
+
+/**
+ * A map's large-scale form (#98), on top of its layout:
+ * - open maps: `classic` (scattered terrain), `ring` (a solid void in the
+ *   middle), `river` (bands along the sector borders, crossed at fords),
+ *   `spiral` (nests along a curving arm, walls between the arms);
+ * - full caves: `caves` (as #15), `regions` (big chambers, each tunnel a wide
+ *   opening or a choke, joined as a hub, ring, chain or tree), `islands`
+ *   (small chambers on long narrow bridges).
+ */
+export type MapForm = 'classic' | 'ring' | 'river' | 'spiral' | 'caves' | 'regions' | 'islands';
+export const MAP_FORMS: readonly MapForm[] = ['classic', 'ring', 'river', 'spiral', 'caves', 'regions', 'islands'];
+const CAVE_FORMS: readonly MapForm[] = ['caves', 'regions', 'islands'];
 
 export interface NestSpec {
   x: number;
@@ -147,6 +169,9 @@ export interface MapSpec {
   aspect?: number;
   /** a generated map's density, 0 (sparse: few nests, far apart, big) to 1 (packed) */
   density?: number;
+  /** a generated map's large-scale form, and its caves' topology if any */
+  form?: MapForm;
+  topology?: CaveTopology;
   /** a walled-in player's fortress, as it came out (#100, #67) */
   fortress?: FortressInfo;
 }
@@ -204,6 +229,8 @@ interface LayoutCtx {
   capR: number;
   /** px per polar unit, roughly */
   unit: number;
+  /** a river runs along the sector borders: keep pockets off them */
+  river: boolean;
 }
 
 interface LayoutSpec {
@@ -251,7 +278,7 @@ const LAYOUTS: Record<MapLayout, LayoutSpec> = {
     sampler: (rng, c) => {
       // One pocket on each border between neighbors, filled from both sides,
       // so every border holds a dense contested cluster; open ground elsewhere.
-      const r = rng.range(0.52, 0.72), a = (rng.next() < 0.5 ? -1 : 1) * 0.5 * c.sector;
+      const r = rng.range(0.52, 0.72), a = (rng.next() < 0.5 ? -1 : 1) * (c.river ? 0.3 : 0.5) * c.sector;
       return () => {
         const off = rng.range(0.25, 1) * 120, t = rng.range(0, TAU);
         return [r + (off * dcos(t)) / c.unit, a + (off * dsin(t)) / c.unit / r];
@@ -278,6 +305,29 @@ const LAYOUTS: Record<MapLayout, LayoutSpec> = {
     },
   },
 };
+
+/** A form that suits the map's caves and terrain, weighted. */
+function pickForm(rng: Rng, cp: CaveParams | null, tp: TerrainParams): MapForm {
+  const odds: [MapForm, number][] =
+    cp?.mode === 'full'
+      ? [['caves', 2], ['regions', 3], ['islands', 2]]
+      : cp?.mode === 'belt'
+        ? [['classic', 3], ['spiral', 2]]
+        : [
+            ['classic', 3],
+            ['ring', tp.walls > 0 || tp.rifts > 0 || tp.nebula > 0 ? 2 : 0],
+            ['river', tp.walls > 0 || tp.rifts > 0 ? 3 : 0],
+            ['spiral', 2],
+          ];
+  let total = 0;
+  for (const [, o] of odds) total += o;
+  let r = rng.next() * total;
+  for (const [f, o] of odds) {
+    r -= o;
+    if (r < 0) return f;
+  }
+  return odds[0][0];
+}
 
 function pickLayout(rng: Rng): MapLayout {
   let total = 0;
@@ -315,6 +365,18 @@ export function generateMap(p: MapParams): MapSpec {
   // Sparse maps spread the same nests over more ground: long crossings.
   const area = dims.w * dims.h * (1.35 - 0.5 * density) * shape.range(0.95, 1.05);
   const w = Math.round(Math.sqrt(area * aspect)), h = Math.round(area / Math.sqrt(area * aspect));
+  // The form suits the terrain: cave forms need full caves, ring and river need something to build with.
+  const tp = terrainParams(p.terrain);
+  let cp = caveParams(p.caves);
+  const form = p.form && p.form !== 'random' ? p.form : pickForm(shape, cp, tp);
+  if (CAVE_FORMS.includes(form)) {
+    const full = cp?.mode === 'full' ? cp : CAVE_PRESETS.full!;
+    const topology: CaveTopology = form === 'regions' ? shape.pick(['tree', 'hub', 'ring', 'chain'] as const) : form === 'islands' ? shape.pick(['chain', 'tree'] as const) : 'tree';
+    if (form === 'regions') cp = { ...full, chamber: full.chamber * 1.9, tunnel: [22, 28], wide: [46, 62], choke: 0.5, loops: 0.6, topology };
+    else if (form === 'islands') cp = { ...full, chamber: full.chamber * 0.85, tunnel: [22, 26], loops: 0.3, topology };
+    else cp = full;
+  }
+  const ring = form === 'ring', spiral = form === 'spiral';
   const cx = w / 2, cy = h / 2;
 
   // Per-map variety: nests per sector and spacing follow the density (dense:
@@ -327,10 +389,12 @@ export function generateMap(p: MapParams): MapSpec {
   if (!p.nestsPerSector && P === 2) perSector = Math.max(perSector, dims.perSector + (L.center === 'crystal' ? 1 : 0) + Math.max(0, roll));
   const spacing = L.spacing * (1.35 - 0.6 * density) * rng.range(0.92, 1.08);
   const capR = rng.range(0.76, 0.9);
+  // Spiral: each sector's nests follow one arm, curling `twist` (radians) from the middle out.
+  const arm = spiral ? { dir: rng.next() < 0.5 ? -1 : 1, twist: rng.range(0.55, 0.9) * sector } : null;
   const base = PI + rng.range(-0.15, 0.15) * sector; // player 0 starts on the left
   const ax = w * 0.5 * 0.88 * rng.range(0.96, 1.04), ay = h * 0.5 * 0.84 * rng.range(0.96, 1.04);
   const pos = (r: number, a: number): [number, number] => [cx + dcos(a) * r * ax, cy + dsin(a) * r * ay];
-  const ctx: LayoutCtx = { sector, capR, unit: Math.min(w * 0.44, h * 0.42) };
+  const ctx: LayoutCtx = { sector, capR, unit: Math.min(w * 0.44, h * 0.42), river: form === 'river' };
   const minDist = (p.size === 'small' ? 100 : 110) * spacing;
   // Gulfs: on some maps, empty ground in every sector that nests stay out of
   // (a packed core with an empty rim, or pockets with gulfs between).
@@ -357,7 +421,7 @@ export function generateMap(p: MapParams): MapSpec {
       nests.push({ x, y, type: NestType.Hive, level: 1, player: k < players ? k : -1, garrison: k < players ? 0 : 8 });
       polar.push({ r: capR, a: k * sector, sec: k });
     }
-    if (L.center !== 'crystal') {
+    if (L.center !== 'crystal' && !ring) {
       const big = L.center === 'hive2';
       nests.push({ x: cx, y: cy, type: NestType.Hive, level: big ? 2 : 1, player: -1, garrison: big ? 14 + P * 2 : 8 + P });
       polar.push({ r: 0, a: 0, sec: 0 });
@@ -365,7 +429,10 @@ export function generateMap(p: MapParams): MapSpec {
 
     /** `tight` < 1 lets a crowded sector squeeze its last nests in. */
     const fits = (r: number, da: number, tight = 1) => {
-      if (r < 0.12 || r > 1.02) return false;
+      // A ring keeps its middle clear for the void.
+      if (r < (ring ? 0.42 : 0.12) || r > 1.02) return false;
+      // A river keeps its banks clear: nests stay off the sector borders.
+      if (form === 'river' && 0.5 * sector - Math.abs(da) < 75 / (r * ctx.unit)) return false;
       const md = minDist * tight;
       for (let k = 0; k < P; k++) {
         const [x, y] = pos(r, base + da + k * sector);
@@ -375,7 +442,7 @@ export function generateMap(p: MapParams): MapSpec {
         }
       }
       // Clear of the open middle, kept for its crystal.
-      if (L.center === 'crystal' && (pos(r, base + da)[0] - cx) ** 2 + (pos(r, base + da)[1] - cy) ** 2 < 90 * 90) return false;
+      if (L.center === 'crystal' && !ring && (pos(r, base + da)[0] - cx) ** 2 + (pos(r, base + da)[1] - cy) ** 2 < 90 * 90) return false;
       return true;
     };
     const place = (r: number, da: number, type: number, level: number, garrison: number) => {
@@ -421,7 +488,13 @@ export function generateMap(p: MapParams): MapSpec {
       }
     }
 
-    const sample = L.sampler(rng, ctx);
+    const sample = arm
+      ? () => {
+          // Along the arm, a little either side of it.
+          const t = rng.next();
+          return [0.24 + 0.76 * t + rng.range(-0.04, 0.04), arm.dir * arm.twist * (0.5 - t) + rng.range(-0.06, 0.06) * sector] as [number, number];
+        }
+      : L.sampler(rng, ctx);
     for (let tries = 0; tries < 400 && placed < perSector; tries++) {
       const [r, da] = sample();
       // Late tries ignore the gulfs and squeeze closer, so a crowded sector still fills.
@@ -454,10 +527,10 @@ export function generateMap(p: MapParams): MapSpec {
   const { nests, polar } = best;
 
   // Terrain gets its own stream so tuning it never reshuffles the nests.
-  const frame: Frame = { w, h, P, sector, base, pos, nests, polar, size: p.size, centerCrystal: L.center === 'crystal' };
-  const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), terrainParams(p.terrain), caveParams(p.caves), frame);
+  const frame: Frame = { w, h, P, sector, base, pos, nests, polar, size: p.size, centerCrystal: L.center === 'crystal' && !ring, form, arm, unit: ctx.unit };
+  const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), tp, cp, frame);
   const events = generateEvents(new Rng(p.seed ^ 0x3c9d17), eventParams(p.events), terrain, frame);
-  const spec: MapSpec = { width: w, height: h, nests, terrain, events, layout, aspect: w / h, density };
+  const spec: MapSpec = { width: w, height: h, nests, terrain, events, layout, aspect: w / h, density, form, topology: cp?.topology };
   // A fortress goes up last, on its own stream: the rest is the same map.
   // Every wild-swarm spawn must reach it too (Hold the line's waves come from them).
   if (p.fortress !== undefined) spec.fortress = fortify(spec, p.fortress, p.size, new Rng(p.seed ^ 0x51f0a7), events.swarmSpawns) ?? undefined;
@@ -530,6 +603,11 @@ interface Frame {
   size: MapSize;
   /** no center nest: the middle is open, with a crystal when the map has any */
   centerCrystal: boolean;
+  form: MapForm;
+  /** spiral form: the arm the nests follow */
+  arm: { dir: number; twist: number } | null;
+  /** px per polar unit, roughly */
+  unit: number;
 }
 
 interface Polar {
@@ -606,9 +684,9 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
   // ---- walls ----------------------------------------------------------
   // Each candidate feature is added to all sectors at once, then kept only if
   // every nest is still reachable from every other.
-  const tryWalls = (parts: PolarCapsule[], gap: number): boolean => {
+  const tryWalls = (parts: PolarCapsule[], gap: number, pad = 30): boolean => {
     const caps = parts.flatMap(rotate);
-    if (!caps.every((c) => inMap(c, 30) && clearOfNests(c, gap) && clearOfCrystals(c, 16))) return false;
+    if (!caps.every((c) => inMap(c, pad) && clearOfNests(c, gap) && clearOfCrystals(c, 16))) return false;
     const next = [...spec.walls, ...caps];
     if (!new Terrain({ walls: next, fields: [], crystals: [], cave: spec.cave }, w, h).connected(points)) return false;
     spec.walls = next;
@@ -622,9 +700,64 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
     return out;
   };
 
+  // ---- forms (#98) ----------------------------------------------------
+  // Placed before the scattered terrain, which then has to keep them connected.
+  // Rock if the map has walls, else the strongest field it has.
+  const material = (): 'wall' | 'rift' | 'nebula' | null => (tp.walls > 0 ? 'wall' : tp.rifts > 0 ? 'rift' : tp.nebula > 0 ? 'nebula' : null);
+  /** Put down one form piece in every sector: walls must keep the map connected; fields just keep off the nests. */
+  const formPiece = (parts: PolarCapsule[], kind: 'wall' | 'rift' | 'nebula', gap: number): boolean => {
+    if (kind === 'wall') return tryWalls(parts, gap, 200);
+    const caps = parts.flatMap(rotate);
+    if (!caps.every((c) => clearOfNests(c, gap) && clearOfCrystals(c, 10))) return false;
+    for (const c of caps) spec.fields.push({ ...c, kind });
+    return true;
+  };
+  if (f.form === 'ring') {
+    // A solid void in the middle that everyone has to go round.
+    const kind = material();
+    if (kind) {
+      // One disc at the center (shared, so it's placed once), plus lobes so it isn't perfectly round.
+      const R = rng.range(0.24, 0.3);
+      const rad = R * f.unit * (kind === 'nebula' ? 1.3 : 1);
+      const c: Capsule = { x1: w / 2, y1: h / 2, x2: w / 2, y2: h / 2, r: rad };
+      if (kind === 'wall') {
+        const next = [...spec.walls, c];
+        if (clearOfNests(c, 30) && new Terrain({ walls: next, fields: [], crystals: [], cave: spec.cave }, w, h).connected(points)) spec.walls = next;
+      } else if (clearOfNests(c, 30)) spec.fields.push({ ...c, kind });
+      formPiece([{ r1: R * 0.6, a1: rng.range(-0.3, 0.3) * sector, r2: R * 0.6, a2: rng.range(-0.3, 0.3) * sector, rad: rad * 0.55 }], kind, 30);
+    }
+  } else if (f.form === 'river') {
+    // Bands along every sector border, from near the middle out past the
+    // edge, crossed at 2-3 fords: rock, or a rift you can wade through.
+    const kind = tp.walls > 0 && (tp.rifts <= 0 || rng.next() < 0.5) ? 'wall' : 'rift';
+    const segs = 8, r0 = 0.2, r1 = 1.14;
+    const fords = new Set<number>();
+    const nf = 2 + rng.int(2);
+    while (fords.size < nf) fords.add(1 + rng.int(segs - 1));
+    const wob = () => (0.5 + rng.range(-0.04, 0.04)) * sector;
+    let pa = wob();
+    for (let k = 0; k < segs; k++) {
+      const a = wob();
+      const ra = r0 + ((r1 - r0) * k) / segs, rb = r0 + ((r1 - r0) * (k + 1)) / segs;
+      if (!fords.has(k)) formPiece([{ r1: ra, a1: pa, r2: rb, a2: a, rad: (kind === 'wall' ? 24 : 15) * scale }], kind, 24);
+      pa = a;
+    }
+  } else if (f.form === 'spiral' && tp.walls > 0 && f.arm) {
+    // Walls between the arms: the arm's curve, half a sector over, with gaps.
+    const { dir, twist } = f.arm;
+    const segs = 6;
+    const curve = (t: number): [number, number] => [0.3 + 0.66 * t, dir * twist * (0.5 - (0.3 + 0.66 * t - 0.24) / 0.76) + 0.5 * sector];
+    for (let k = 0; k < segs; k++) {
+      if (rng.next() < 0.3) continue;
+      const [ra, aa] = curve(k / segs), [rb, ab] = curve((k + 0.8) / segs);
+      formPiece([{ r1: ra, a1: aa, r2: rb, a2: ab, rad: rng.range(15, 20) * scale }], 'wall', 34);
+    }
+  }
+
   // Full caves are all walls already: only scattered outcrops go on top.
   const fullCave = cp?.mode === 'full';
-  if (tp.walls > 0 && !fullCave) {
+  // Forms bring their own structure: no bulwark or border ridges to blur it.
+  if (tp.walls > 0 && !fullCave && f.form === 'classic') {
     // Center bulwark: an arc in each sector around the middle nest, with gaps
     // between sectors that become the chokepoints into the center.
     if (rng.next() < 0.55 + 0.35 * tp.walls) {
@@ -647,7 +780,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
   }
   if (tp.walls > 0) {
     // Outcrops: scattered rocks, some elongated. In caves, fewer: cover inside chambers.
-    const rocks = Math.round(tp.walls * rng.range(2.5, 4.5) * (fullCave ? 0.4 : 1));
+    const rocks = Math.round(tp.walls * rng.range(2.5, 4.5) * (fullCave ? 0.4 : f.form !== 'classic' ? 0.6 : 1));
     for (let k = 0, tries = 0; k < rocks && tries < 60; tries++) {
       const r = rng.range(0.3, 0.95);
       const a = rng.range(-0.5, 0.5) * sector;
@@ -790,23 +923,51 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
   }
   edges.sort((a, b) => a.len - b.len || a.i - b.i || a.j - b.j);
 
-  // Spanning tree (Kruskal) inside the sector; the center joins the sectors.
+  // Join the sector's chambers (#98): a spanning tree (Kruskal), a chain (the
+  // same, but no chamber with more than two tunnels), or a hub (one chamber,
+  // the one nearest all the others, tunnels to every other). Ring is a tree
+  // with many loops. The center joins the sectors.
+  const topology = cp.topology ?? 'tree';
   const parent = nodes.map((_, i) => i);
   const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const degree = nodes.map(() => 0);
   const chosen: Edge[] = [];
-  for (const e of edges) {
-    if (e.cross) continue;
-    const a = find(e.i), b = find(e.j);
-    if (a === b) continue;
-    parent[a] = b;
-    chosen.push(e);
+  const inner = edges.filter((e) => !e.cross);
+  if (topology === 'hub') {
+    let hub = 0, hd = Infinity;
+    nodes.forEach((_, i) => {
+      const d = inner.filter((e) => e.i === i || e.j === i).reduce((t, e) => t + e.len, 0);
+      if (d < hd) {
+        hd = d;
+        hub = i;
+      }
+    });
+    for (const e of inner) if (e.i === hub || e.j === hub) chosen.push(e);
+  } else {
+    for (const e of inner) {
+      const a = find(e.i), b = find(e.j);
+      if (a === b || (topology === 'chain' && (degree[e.i] >= 2 || degree[e.j] >= 2))) continue;
+      parent[a] = b;
+      degree[e.i]++;
+      degree[e.j]++;
+      chosen.push(e);
+    }
+    // A chain can strand a chamber whose neighbors are full: join it anyway.
+    if (topology === 'chain') {
+      for (const e of inner) {
+        const a = find(e.i), b = find(e.j);
+        if (a === b) continue;
+        parent[a] = b;
+        chosen.push(e);
+      }
+    }
   }
   const longest = Math.max(...chosen.map((e) => e.len));
   // Neighbors always share a border tunnel: the shortest one.
   const border = edges.find((e) => e.cross);
   if (border) chosen.push(border);
-  // Loops: a few more short tunnels, for flanks and second routes.
-  const maxLoops = 1 + Math.round(cp.loops * 3);
+  // Loops: a few more short tunnels, for flanks and second routes (a ring: many; a chain or hub: none).
+  const maxLoops = topology === 'ring' ? 4 + nodes.length : topology === 'tree' ? 1 + Math.round(cp.loops * 3) : 0;
   for (let k = 0, e = 0; e < edges.length && k < maxLoops; e++) {
     const c = edges[e];
     if (chosen.includes(c) || c.len > longest * 1.5) continue;
@@ -820,6 +981,8 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
     // A tunnel into the center comes straight in from its other end.
     if (r1 === 0) a1 = a2;
     if (r2 === 0) a2 = a1;
+    // Regions: each tunnel is a wide opening or a narrow choke.
+    const [lo, hi] = cp.wide && rng.next() >= (cp.choke ?? 0) ? cp.wide : cp.tunnel;
     const segs = Math.max(2, Math.round(dist(r1, a1, r2, a2) / 70));
     let pr = r1, pa = a1;
     for (let s = 1; s <= segs; s++) {
@@ -830,7 +993,7 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
         r += (rng.range(-1, 1) * 22) / unit;
         if (r > 0.05) a += (rng.range(-1, 1) * 22) / unit / r;
       }
-      rotate(pr, pa, r, a, rng.range(cp.tunnel[0], cp.tunnel[1]) * scale);
+      rotate(pr, pa, r, a, rng.range(lo, hi) * scale);
       pr = r;
       pa = a;
     }
