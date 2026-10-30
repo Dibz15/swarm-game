@@ -138,7 +138,7 @@ export function fbm(x: number, y: number, seed: number, octaves = 4): number {
   return sum / norm;
 }
 
-/** Ridged noise in [0, 1): high along thin ridges, where fBm crosses its middle. */
+/** Ridged noise in [0, 1] (1 exactly where fBm is 0.5): high along thin ridges, where fBm crosses its middle. */
 export function ridged(x: number, y: number, seed: number, octaves = 4): number {
   return 1 - Math.abs(2 * fbm(x, y, seed, octaves) - 1);
 }

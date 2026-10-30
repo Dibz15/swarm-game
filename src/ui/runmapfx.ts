@@ -185,6 +185,9 @@ export function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: 
     r.globalCompositeOperation = 'destination-out';
     r.strokeStyle = '#000';
     for (const c of cave.carves) capsule(c, r);
+    r.globalCompositeOperation = 'source-over';
+    r.strokeStyle = 'rgba(70, 85, 150, 0.55)';
+    for (const c of cave.fill ?? []) capsule(c, r);
     g.drawImage(rock, 0, 0);
   }
   if (detail) {

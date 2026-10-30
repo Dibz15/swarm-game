@@ -155,10 +155,12 @@ describe('noise terrain (#98)', () => {
     expect(vnoise(0, 0, 1)).toMatchInlineSnapshot(`0.5421679092105478`);
     for (let k = 0; k < 200; k++) {
       const x = k * 0.37, y = k * 0.91;
-      for (const v of [vnoise(x, y, 3), fbm(x, y, 3), ridged(x, y, 3)]) {
+      for (const v of [vnoise(x, y, 3), fbm(x, y, 3)]) {
         expect(v).toBeGreaterThanOrEqual(0);
         expect(v).toBeLessThan(1);
       }
+      expect(ridged(x, y, 3)).toBeGreaterThanOrEqual(0);
+      expect(ridged(x, y, 3)).toBeLessThanOrEqual(1);
     }
   });
 
@@ -171,6 +173,7 @@ describe('noise terrain (#98)', () => {
           const t = new Terrain(m.terrain, m.width, m.height);
           expect(t.connected(m.nests.map((n) => [n.x, n.y])), `${form} ${players}p`).toBe(true);
           for (const n of m.nests) expect(t.clearance(n.x, n.y)).toBeGreaterThan(NEST_RADIUS[n.type]);
+          // The rock grows the same in every sector (the fill for cut-off ground is per tile).
           expect(m.terrain.cave!.zone!.length % players).toBe(0);
         }
       }
@@ -193,6 +196,23 @@ describe('noise terrain (#98)', () => {
         for (const cap of m.nests.slice(0, 3)) for (const [x, y] of points) expect(Number.isFinite(t.pathDist(x, y, cap.x, cap.y, 0)), `${form} ${s}`).toBe(true);
       }
     }
+  });
+
+  it('leaves no open ground cut off by the rock, on every shape', () => {
+    for (const [form, fill] of [['warrens', undefined], ['classic', 'noise'], ['river', 'noise']] as const) {
+      for (let s = 0; s < 8; s++) {
+        const m = generateMap({ seed: 500 + s, size: s % 2 ? 'large' : 'medium', players: 2 + (s % 3), form, fill, terrain: 'standard' });
+        const t = new Terrain({ walls: [], fields: [], crystals: [], cave: m.terrain.cave }, m.width, m.height);
+        expect(t.cutOff(m.nests[0].x, m.nests[0].y), `${form} ${s} ${m.aspect!.toFixed(1)}:1`).toEqual([]);
+      }
+    }
+  });
+
+  it('an asked-for fill applies to any open form, even over a cave belt', () => {
+    const m = generateMap({ seed: 3, size: 'medium', players: 2, form: 'classic', fill: 'noise', caves: 'belt', terrain: 'standard' });
+    expect(m.fill).toBe('noise');
+    expect(m.terrain.cave!.zone!.length).toBeGreaterThan(0);
+    expect(generateMap({ seed: 3, size: 'medium', players: 2, form: 'warrens', fill: 'noise', terrain: 'standard' }).fill).toBeUndefined();
   });
 
   it('generates quickly, even the heaviest forms', () => {
