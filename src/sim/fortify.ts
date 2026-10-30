@@ -100,6 +100,8 @@ export function fortify(spec: MapSpec, player: number, size: MapSize, rng: Rng, 
   t.walls = t.walls.filter((c) => capsuleDist(c, citadel.x, citadel.y) > R * 1.25 + 30);
   t.fields = t.fields.filter((c) => capsuleDist(c, citadel.x, citadel.y) > R * 1.25 + 30);
   t.crystals = t.crystals.filter((c) => !near(c.x, c.y, c.r + 30));
+  // Cave or noise rock too (#98): carve the fortress ground out of it.
+  if (t.cave) t.cave = { ...t.cave, carves: [...t.cave.carves, { x1: citadel.x, y1: citadel.y, x2: citadel.x, y2: citadel.y, r: R * 1.25 + 30 }] };
   spec.nests = spec.nests.filter((n) => n === citadel || n.player >= 0 || !near(n.x, n.y, NEST_RADIUS[n.type] + FORTIFY.wallR + 24));
 
   // The inner works: either side of the capital, toward its gates.

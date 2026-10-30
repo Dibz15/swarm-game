@@ -19,7 +19,8 @@ for (const [size, players] of [['small', 2], ['medium', 4], ['medium', 3], ['lar
   for (let s = 0; s < SEEDS; s++) {
     const m = generateMap({ seed: s, size, players, terrain: 'standard' });
     mix.set(m.layout!, (mix.get(m.layout!) ?? 0) + 1);
-    forms.set(m.form!, (forms.get(m.form!) ?? 0) + 1);
+    const tag = m.form! + (m.fill === 'noise' ? '+noise' : '');
+    forms.set(tag, (forms.get(tag) ?? 0) + 1);
     aspects.set(m.aspect!.toFixed(1), (aspects.get(m.aspect!.toFixed(1)) ?? 0) + 1);
     area.push((m.width * m.height) / 1000);
     density.push(m.density! * 100);

@@ -1,7 +1,7 @@
 import { DOMINATION, Kind, LEVEL, MAX_LEVEL, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
 import { defaultMods, type FactionMods } from './mods';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
-import { generateMap, type MapParams, type MapSpec, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapLayout, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
+import { generateMap, type MapParams, type MapSpec, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapFill, type MapForm, type MapLayout, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
 import { initEvents } from './events';
 import { initHeart } from './heart';
 import { initSiege, type SiegeSetup } from './siege';
@@ -40,6 +40,9 @@ export interface MatchSetup {
   events?: EventLevel | EventParams;
   /** how nests are spread (default: picked by the seed) */
   layout?: MapLayout | 'random';
+  /** the map's large-scale form and fill (default: picked by the seed, #98) */
+  form?: MapForm | 'random';
+  fill?: MapFill | 'random';
   /** a hand-authored map (tutorial missions); replaces generation from the fields above */
   map?: MapSpec;
   /** nobody wins by elimination or domination: the mission script ends the match */
@@ -68,6 +71,8 @@ export function mapParamsOf(setup: MatchSetup): MapParams {
     caves: setup.caves,
     events: setup.events,
     layout: setup.layout,
+    form: setup.form,
+    fill: setup.fill,
     fortress: setup.stronghold?.player ?? (setup.siege ? setup.players.findIndex((p) => p.human) : undefined),
   };
 }

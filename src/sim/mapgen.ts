@@ -1,6 +1,6 @@
 import { fortify, type FortressInfo } from './fortify';
 import { NEST_RADIUS, NestType } from './constants';
-import { PI, TAU, dcos, dsin } from './mathx';
+import { PI, TAU, dcos, dsin, fbm, ridged } from './mathx';
 import { Rng } from './rng';
 import { Terrain, capsuleDist, emptyTerrain, type Capsule, type CaveSpec, type FieldSpec, type TerrainSpec } from './terrain';
 
@@ -40,7 +40,8 @@ export const TERRAIN_PRESETS: Record<TerrainLevel, TerrainParams> = {
  * crossed by the same tunnels; the rest of the map stays open.
  */
 export interface CaveParams {
-  mode: 'full' | 'belt';
+  /** 'noise' and 'ca' (#98): rock masses from a noise field or a cellular automaton, with the same chambers and tunnels cut through */
+  mode: 'full' | 'belt' | 'noise' | 'ca';
   /** px of chamber around each nest */
   chamber: number;
   /** tunnel radius range, px */
@@ -52,6 +53,8 @@ export interface CaveParams {
   /** wide tunnels' radius range, px; `choke` is the odds a tunnel is the narrow `tunnel` instead */
   wide?: [number, number];
   choke?: number;
+  /** 'noise' mode: which noise, where it turns to rock, how big its features are, how much it's warped */
+  field?: { kind: 'fbm' | 'ridged'; threshold: number; scale: number; warp: number };
 }
 
 export type CaveTopology = 'tree' | 'hub' | 'chain' | 'ring';
@@ -129,6 +132,8 @@ export interface MapParams {
   fortress?: number;
   /** the map's large-scale form (default: picked by the seed, to suit its terrain and caves) */
   form?: MapForm | 'random';
+  /** what fills an open form (default: picked by the seed) */
+  fill?: MapFill | 'random';
 }
 
 /**
@@ -138,11 +143,15 @@ export interface MapParams {
  *   `spiral` (nests along a curving arm, walls between the arms);
  * - full caves: `caves` (as #15), `regions` (big chambers, each tunnel a wide
  *   opening or a choke, joined as a hub, ring, chain or tree), `islands`
- *   (small chambers on long narrow bridges).
+ *   (small chambers on long narrow bridges), `warrens` (organic caverns grown
+ *   by a cellular automaton).
  */
-export type MapForm = 'classic' | 'ring' | 'river' | 'spiral' | 'caves' | 'regions' | 'islands';
-export const MAP_FORMS: readonly MapForm[] = ['classic', 'ring', 'river', 'spiral', 'caves', 'regions', 'islands'];
-const CAVE_FORMS: readonly MapForm[] = ['caves', 'regions', 'islands'];
+export type MapForm = 'classic' | 'ring' | 'river' | 'spiral' | 'caves' | 'regions' | 'islands' | 'warrens';
+export const MAP_FORMS: readonly MapForm[] = ['classic', 'ring', 'river', 'spiral', 'caves', 'regions', 'islands', 'warrens'];
+const CAVE_FORMS: readonly MapForm[] = ['caves', 'regions', 'islands', 'warrens'];
+
+/** What fills an open form between its nests (#98): scattered rocks, or rock masses from a warped noise field. */
+export type MapFill = 'sprinkle' | 'noise';
 
 export interface NestSpec {
   x: number;
@@ -172,6 +181,7 @@ export interface MapSpec {
   /** a generated map's large-scale form, and its caves' topology if any */
   form?: MapForm;
   topology?: CaveTopology;
+  fill?: MapFill;
   /** a walled-in player's fortress, as it came out (#100, #67) */
   fortress?: FortressInfo;
 }
@@ -310,7 +320,7 @@ const LAYOUTS: Record<MapLayout, LayoutSpec> = {
 function pickForm(rng: Rng, cp: CaveParams | null, tp: TerrainParams): MapForm {
   const odds: [MapForm, number][] =
     cp?.mode === 'full'
-      ? [['caves', 2], ['regions', 3], ['islands', 2]]
+      ? [['caves', 2], ['regions', 3], ['islands', 2], ['warrens', 2]]
       : cp?.mode === 'belt'
         ? [['classic', 3], ['spiral', 2]]
         : [
@@ -374,7 +384,20 @@ export function generateMap(p: MapParams): MapSpec {
     const topology: CaveTopology = form === 'regions' ? shape.pick(['tree', 'hub', 'ring', 'chain'] as const) : form === 'islands' ? shape.pick(['chain', 'tree'] as const) : 'tree';
     if (form === 'regions') cp = { ...full, chamber: full.chamber * 1.9, tunnel: [22, 28], wide: [46, 62], choke: 0.5, loops: 0.6, topology };
     else if (form === 'islands') cp = { ...full, chamber: full.chamber * 0.85, tunnel: [22, 26], loops: 0.3, topology };
+    else if (form === 'warrens') cp = { mode: 'ca', chamber: full.chamber * 0.9, tunnel: [24, 30], loops: 0.6 };
     else cp = full;
+  }
+  // Open forms on a walled map: scattered rocks, or (about a third) rock masses from warped noise.
+  const fill: MapFill | undefined = CAVE_FORMS.includes(form) || cp
+    ? undefined
+    : p.fill && p.fill !== 'random'
+      ? p.fill
+      : tp.walls > 0 && shape.next() < 0.35
+        ? 'noise'
+        : 'sprinkle';
+  if (fill === 'noise') {
+    const kind = shape.next() < 0.6 ? 'fbm' : 'ridged';
+    cp = { mode: 'noise', chamber: 36, tunnel: [26, 34], loops: 0.7, field: { kind, threshold: kind === 'fbm' ? shape.range(0.6, 0.66) : shape.range(0.84, 0.9), scale: shape.range(3, 5), warp: shape.range(0, 0.6) } };
   }
   const ring = form === 'ring', spiral = form === 'spiral';
   const cx = w / 2, cy = h / 2;
@@ -530,7 +553,7 @@ export function generateMap(p: MapParams): MapSpec {
   const frame: Frame = { w, h, P, sector, base, pos, nests, polar, size: p.size, centerCrystal: L.center === 'crystal' && !ring, form, arm, unit: ctx.unit };
   const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), tp, cp, frame);
   const events = generateEvents(new Rng(p.seed ^ 0x3c9d17), eventParams(p.events), terrain, frame);
-  const spec: MapSpec = { width: w, height: h, nests, terrain, events, layout, aspect: w / h, density, form, topology: cp?.topology };
+  const spec: MapSpec = { width: w, height: h, nests, terrain, events, layout, aspect: w / h, density, form, topology: cp?.topology, fill };
   // A fortress goes up last, on its own stream: the rest is the same map.
   // Every wild-swarm spawn must reach it too (Hold the line's waves come from them).
   if (p.fortress !== undefined) spec.fortress = fortify(spec, p.fortress, p.size, new Rng(p.seed ^ 0x51f0a7), events.swarmSpawns) ?? undefined;
@@ -561,15 +584,27 @@ function generateEvents(rng: Rng, params: EventParams, terrain: TerrainSpec, f: 
   const t = new Terrain(terrain, w, h);
   const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
+  // A free point that can walk to the first capital: rock (#98) can wall off
+  // a pocket, so step in toward the middle until the ground connects.
+  const cap0 = nests[0];
+  const reachable = (x: number, y: number, clear: number): [number, number] => {
+    const fx = x, fy = y;
+    for (let k = 0; k <= 12; k++) {
+      const p = t.freePoint(fx + ((w / 2 - fx) * k) / 12, fy + ((h / 2 - fy) * k) / 12, clear);
+      if (Number.isFinite(t.pathDist(p[0], p[1], cap0.x, cap0.y, 0))) return p;
+    }
+    return t.freePoint(x, y, clear);
+  };
   // Swarm entries: one per sector border, pushed to the map edge.
   for (let k = 0; k < P; k++) {
     const [x, y] = pos(1.08, base + (k + 0.5) * sector);
-    spec.swarmSpawns.push(t.freePoint(clamp(x, 30, w - 30), clamp(y, 30, h - 30), 20));
+    spec.swarmSpawns.push(reachable(clamp(x, 30, w - 30), clamp(y, 30, h - 30), 20));
   }
   // The Colossus enters at one border and leaves by the one across the map.
+  const mid = reachable(w / 2, h / 2, 30);
   for (let k = 0; k < P; k++) {
     const to = spec.swarmSpawns[(k + Math.floor(P / 2)) % P];
-    spec.colossusPaths.push([spec.swarmSpawns[k], t.freePoint(w / 2, h / 2, 30), to]);
+    spec.colossusPaths.push([spec.swarmSpawns[k], mid, to]);
   }
 
   // Drop spots: open ground, scored by how evenly far it is from every start.
@@ -755,7 +790,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
   }
 
   // Full caves are all walls already: only scattered outcrops go on top.
-  const fullCave = cp?.mode === 'full';
+  const fullCave = cp?.mode === 'full' || cp?.mode === 'ca';
   // Forms bring their own structure: no bulwark or border ridges to blur it.
   if (tp.walls > 0 && !fullCave && f.form === 'classic') {
     // Center bulwark: an arc in each sector around the middle nest, with gaps
@@ -780,7 +815,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
   }
   if (tp.walls > 0) {
     // Outcrops: scattered rocks, some elongated. In caves, fewer: cover inside chambers.
-    const rocks = Math.round(tp.walls * rng.range(2.5, 4.5) * (fullCave ? 0.4 : f.form !== 'classic' ? 0.6 : 1));
+    const rocks = Math.round(tp.walls * rng.range(2.5, 4.5) * (fullCave ? 0.4 : cp?.mode === 'noise' ? 0.3 : f.form !== 'classic' ? 0.6 : 1));
     for (let k = 0, tries = 0; k < rocks && tries < 60; tries++) {
       const r = rng.range(0.3, 0.95);
       const a = rng.range(-0.5, 0.5) * sector;
@@ -869,13 +904,14 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
   // Polar units are fractions of the map ellipse; this converts px to them (roughly).
   const unit = Math.min(w * 0.44, h * 0.42);
   const carves: Capsule[] = [];
-  const rotate = (r1: number, a1: number, r2: number, a2: number, rad: number) => {
+  const rotateCaps = (out: Capsule[], r1: number, a1: number, r2: number, a2: number, rad: number) => {
     for (let k = 0; k < P; k++) {
       const [x1, y1] = pos(r1, base + a1 + k * sector);
       const [x2, y2] = pos(r2, base + a2 + k * sector);
-      carves.push({ x1, y1, x2, y2, r: rad });
+      out.push({ x1, y1, x2, y2, r: rad });
     }
   };
+  const rotate = (r1: number, a1: number, r2: number, a2: number, rad: number) => rotateCaps(carves, r1, a1, r2, a2, rad);
 
   // Sector 0's chambers. The center nest (r = 0) is shared by every sector.
   type Node = { r: number; a: number; R: number };
@@ -1004,7 +1040,9 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
   }
 
   let zone: Capsule[] | null = null;
-  if (cp.mode === 'full') {
+  if (cp.mode === 'noise' || cp.mode === 'ca') {
+    zone = fieldZone(rng, cp, f, rotateCaps);
+  } else if (cp.mode === 'full') {
     // The deep: a tunnel in from the map edge on each border, where wild swarms enter.
     const ea = 0.5 * sector;
     let best = 0, bd = Infinity;
@@ -1035,3 +1073,107 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
   }
   return { carves, zone };
 }
+
+/**
+ * Rock masses for the 'noise' and 'ca' cave modes (#98), as capsules: a polar
+ * grid over player 0's sector whose angle wraps round (the next sector is the
+ * same grid turned), so every sector gets the same rock and the borders join
+ * up without a seam. 'noise' thresholds warped fBm or ridged noise, sampled
+ * round a circle so it wraps too; 'ca' grows caverns with a cellular
+ * automaton. Runs of rock cells become capsules; the caller carves chambers
+ * and tunnels through them, which keeps the map connected.
+ */
+function fieldZone(rng: Rng, cp: CaveParams, f: Frame, rotate: (out: Capsule[], r1: number, a1: number, r2: number, a2: number, rad: number) => void): Capsule[] {
+  const { sector, unit } = f;
+  const cell = 22;
+  const r0 = 0.12, r1 = cp.mode === 'ca' ? 1.22 : 1.1;
+  const rows = Math.ceil(((r1 - r0) * unit) / cell);
+  const cols = Math.max(8, Math.round((sector * unit) / cell));
+  const rock = new Uint8Array(rows * cols);
+  const rAt = (i: number) => r0 + ((i + 0.5) * (r1 - r0)) / rows;
+  if (cp.mode === 'noise' && cp.field) {
+    const { kind, threshold, scale, warp } = cp.field;
+    const seed = rng.int(0x7fffffff);
+    /** Warped noise at polar (r, a), on a true circle so features come out round. */
+    const at = (r: number, a: number) => {
+      let x = r * dcos(a) * scale, y = r * dsin(a) * scale;
+      if (warp > 0) {
+        const wx = fbm(x + 5.2, y + 1.3, seed + 7, 3), wy = fbm(x + 1.7, y + 9.2, seed + 11, 3);
+        x += (wx - 0.5) * warp * 4;
+        y += (wy - 0.5) * warp * 4;
+      }
+      return kind === 'fbm' ? fbm(x, y, seed) : ridged(x, y, seed);
+    };
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        // Near a border, blend in the noise from the far side of the sector:
+        // at the border both sides read the same mix, so there's no seam.
+        const a = ((j + 0.5) / cols - 0.5) * sector, r = rAt(i);
+        const e = Math.min(1, Math.max(0, (Math.abs(a) / sector - 0.3) / 0.2));
+        const wt = 0.5 * e * e * (3 - 2 * e);
+        const v = wt > 0 ? (1 - wt) * at(r, a) + wt * at(r, a - Math.sign(a) * sector) : at(r, a);
+        rock[i * cols + j] = v > threshold ? 1 : 0;
+      }
+    }
+  } else {
+    // Caverns: random fill, then a few rounds of "rock if most neighbors are".
+    for (let k = 0; k < rock.length; k++) rock[k] = rng.next() < 0.47 ? 1 : 0;
+    const next = new Uint8Array(rock.length);
+    for (let it = 0; it < 4; it++) {
+      for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+          let n = 0;
+          for (let di = -1; di <= 1; di++) {
+            for (let dj = -1; dj <= 1; dj++) {
+              if (!di && !dj) continue;
+              const ii = i + di;
+              // Off the outside counts as rock; the middle as open.
+              if (ii >= rows) n++;
+              else if (ii >= 0) n += rock[ii * cols + ((j + dj + cols) % cols)];
+            }
+          }
+          const k = i * cols + j;
+          next[k] = n >= 5 || (rock[k] && n >= 4) ? 1 : 0;
+        }
+      }
+      rock.set(next);
+    }
+  }
+  // Fill enclosed pockets: open ground walled off from both the middle and
+  // the rim would be unreachable (tunnels are only cut between chambers).
+  const seen = new Uint8Array(rock.length);
+  const stack: number[] = [];
+  for (let j = 0; j < cols; j++) for (const i of [0, rows - 1]) if (!rock[i * cols + j]) stack.push(i * cols + j);
+  for (const k of stack) seen[k] = 1;
+  while (stack.length) {
+    const k = stack.pop()!;
+    const i = Math.floor(k / cols), j = k % cols;
+    for (const [ii, jj] of [[i + 1, j], [i - 1, j], [i, (j + 1) % cols], [i, (j + cols - 1) % cols]]) {
+      if (ii < 0 || ii >= rows) continue;
+      const n = ii * cols + jj;
+      if (rock[n] || seen[n]) continue;
+      seen[n] = 1;
+      stack.push(n);
+    }
+  }
+  for (let k = 0; k < rock.length; k++) if (!rock[k] && !seen[k]) rock[k] = 1;
+  // Runs of up to 3 rock cells along each ring become one capsule.
+  const out: Capsule[] = [];
+  const rad = cell * 0.78;
+  for (let i = 0; i < rows; i++) {
+    const r = rAt(i);
+    for (let j = 0; j < cols; ) {
+      if (!rock[i * cols + j]) {
+        j++;
+        continue;
+      }
+      let e = j;
+      while (e + 1 < cols && e - j < 2 && rock[i * cols + e + 1]) e++;
+      const a1 = ((j + 0.5) / cols - 0.5) * sector, a2 = ((e + 0.5) / cols - 0.5) * sector;
+      rotate(out, r, a1, r, a2, rad);
+      j = e + 1;
+    }
+  }
+  return out;
+}
+

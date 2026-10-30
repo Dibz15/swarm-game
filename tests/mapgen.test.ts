@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { NEST_RADIUS } from '../src/sim/constants';
 import { Terrain } from '../src/sim/terrain';
 import { expansionSpread, generateMap, MAP_FORMS, MAP_LAYOUTS, type MapForm, type MapSize } from '../src/sim/mapgen';
+import { fbm, ridged, vnoise } from '../src/sim/mathx';
 
 describe('map layouts (#38)', () => {
   it('every layout keeps nests apart, on the map, and reachable, with terrain and caves', () => {
@@ -127,7 +128,7 @@ describe('map forms (#98)', () => {
       return [...out].sort();
     };
     expect(seen('off')).toEqual(['classic', 'river', 'ring', 'spiral'].sort());
-    expect(seen('full')).toEqual(['caves', 'islands', 'regions'].sort());
+    expect(seen('full')).toEqual(['caves', 'islands', 'regions', 'warrens'].sort());
     // No terrain at all: nothing to build a ring or river from.
     for (let s = 0; s < 40; s++) expect(['classic', 'spiral']).toContain(generateMap({ seed: s, size: 'medium', players: 2 }).form);
   });
@@ -146,3 +147,59 @@ describe('map forms (#98)', () => {
     }
   });
 });
+
+describe('noise terrain (#98)', () => {
+  it('noise is deterministic and in range', () => {
+    // Pinned values: the noise must never drift between builds or browsers.
+    expect(vnoise(1.25, 3.5, 7)).toBe(vnoise(1.25, 3.5, 7));
+    expect(vnoise(0, 0, 1)).toMatchInlineSnapshot(`0.5421679092105478`);
+    for (let k = 0; k < 200; k++) {
+      const x = k * 0.37, y = k * 0.91;
+      for (const v of [vnoise(x, y, 3), fbm(x, y, 3), ridged(x, y, 3)]) {
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThan(1);
+      }
+    }
+  });
+
+  it('noise fill works with every open form: connected, nests clear, every sector alike', () => {
+    for (const form of ['classic', 'ring', 'river', 'spiral'] as const) {
+      for (const players of [2, 3, 5]) {
+        for (const alt of [0, 1]) {
+          const m = generateMap({ seed: 11 + players + alt * 53, size: 'medium', players, form, fill: 'noise', terrain: 'standard' });
+          expect(m.fill).toBe('noise');
+          const t = new Terrain(m.terrain, m.width, m.height);
+          expect(t.connected(m.nests.map((n) => [n.x, n.y])), `${form} ${players}p`).toBe(true);
+          for (const n of m.nests) expect(t.clearance(n.x, n.y)).toBeGreaterThan(NEST_RADIUS[n.type]);
+          expect(m.terrain.cave!.zone!.length % players).toBe(0);
+        }
+      }
+    }
+  });
+
+  it('the seed mixes fills: some open maps get noise, walled ones only', () => {
+    const fills = new Set<string>();
+    for (let s = 0; s < 60; s++) fills.add(generateMap({ seed: s, size: 'medium', players: 2, terrain: 'standard' }).fill ?? 'none');
+    expect(fills.has('noise') && fills.has('sprinkle')).toBe(true);
+    for (let s = 0; s < 30; s++) expect(generateMap({ seed: s, size: 'medium', players: 2, terrain: { walls: 0, nebula: 1, rifts: 1, crystals: 1 } }).fill).not.toBe('noise');
+  });
+
+  it('wild swarms, drops and the Colossus can always reach every start, however the rock falls', () => {
+    for (const [form, fill] of [['warrens', undefined], ['classic', 'noise'], ['ring', 'noise'], ['islands', undefined]] as const) {
+      for (let s = 0; s < 6; s++) {
+        const m = generateMap({ seed: 300 + s, size: s % 2 ? 'large' : 'small', players: 3, form, fill, terrain: 'standard', events: 'normal' });
+        const t = new Terrain(m.terrain, m.width, m.height);
+        const points = [...m.events.swarmSpawns, ...m.events.dropSpots, ...m.events.colossusPaths.flat()];
+        for (const cap of m.nests.slice(0, 3)) for (const [x, y] of points) expect(Number.isFinite(t.pathDist(x, y, cap.x, cap.y, 0)), `${form} ${s}`).toBe(true);
+      }
+    }
+  });
+
+  it('generates quickly, even the heaviest forms', () => {
+    const t0 = performance.now();
+    for (const form of ['warrens', 'regions'] as const) for (let s = 0; s < 4; s++) generateMap({ seed: s, size: 'large', players: 4, form, terrain: 'standard' });
+    for (let s = 0; s < 4; s++) generateMap({ seed: s, size: 'large', players: 4, form: 'ring', fill: 'noise', terrain: 'standard' });
+    expect((performance.now() - t0) / 12).toBeLessThan(400);
+  });
+});
+

@@ -102,3 +102,43 @@ export function dpow(a: number, b: number): number {
   if (a === 1) return 1;
   return dexp(b * dlog(a));
 }
+
+// Deterministic value noise (#98): integer hashing (Math.imul is exact) and
+// smoothstep blending, so mapgen's noise terrain is the same everywhere.
+
+/** Hash of a lattice point and a seed to [0, 1). */
+function lattice(ix: number, iy: number, seed: number): number {
+  let h = Math.imul(ix, 0x27d4eb2d) ^ Math.imul(iy, 0x165667b1) ^ Math.imul(seed, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+/** Smooth value noise in [0, 1). */
+export function vnoise(x: number, y: number, seed: number): number {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = lattice(ix, iy, seed), b = lattice(ix + 1, iy, seed);
+  const c = lattice(ix, iy + 1, seed), d = lattice(ix + 1, iy + 1, seed);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+
+/** Fractal (fBm) value noise in [0, 1): `octaves` layers, each twice as fine and half as strong. */
+export function fbm(x: number, y: number, seed: number, octaves = 4): number {
+  let sum = 0, amp = 0.5, norm = 0;
+  for (let o = 0; o < octaves; o++) {
+    sum += amp * vnoise(x, y, seed + o * 1013);
+    norm += amp;
+    x *= 2;
+    y *= 2;
+    amp *= 0.5;
+  }
+  return sum / norm;
+}
+
+/** Ridged noise in [0, 1): high along thin ridges, where fBm crosses its middle. */
+export function ridged(x: number, y: number, seed: number, octaves = 4): number {
+  return 1 - Math.abs(2 * fbm(x, y, seed, octaves) - 1);
+}
