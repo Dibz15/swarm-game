@@ -364,10 +364,12 @@ describe('rewards', () => {
     takeReward(run, 'overdrive');
     expect(run.perks).toEqual(['wide', 'overdrive']);
     expect(modsFor(run.perks, []).novaRadius).toBeGreaterThan(1);
-    // Another Nova variant would take Wide's place (only Wide exists in v1, so fake the offer).
-    run.perks = ['wide'];
-    offerOf(run, ['wide']);
-    expect(takeReward(run, 'wide')).toBe(false); // already held
+    // Another Nova variant takes Wide's place.
+    offerOf(run, ['implode']);
+    expect(takeReward(run, 'implode')).toBe(true);
+    expect(run.perks).toEqual(['overdrive', 'implode']);
+    offerOf(run, ['implode']);
+    expect(takeReward(run, 'implode')).toBe(false); // already held
   });
 
   it('rerolls cost 10, then 5 more each time, and never overspend', () => {

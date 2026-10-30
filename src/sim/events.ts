@@ -251,6 +251,7 @@ function updateDrops(w: World): void {
     queryRadius(w, d.x, d.y, EVENTS.dropRadius, scratch);
     let team = -1, lead = -1, mixed = false, total = 0;
     for (const s of scratch) {
+      if (w.ghost[s]) continue;
       const o = w.owner[s];
       if (team >= 0 && w.teamOf[o] !== team) mixed = true;
       if (team < 0) team = w.teamOf[o];

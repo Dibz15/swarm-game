@@ -1,8 +1,8 @@
-import { LEVEL, MAX_LEVEL, NEUTRAL, POWER, POWER_NEST, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, TICK_HZ, type NestPower } from './constants';
+import { Kind, LEVEL, MAX_LEVEL, NEUTRAL, POWER, POWER_NEST, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, TICK_HZ, VARIANTS, type NestPower } from './constants';
 import { clamp } from './mathx';
 import { takeBoon } from './siege';
 import { queryRadius } from './spatial';
-import { pushFx, removeUnit, UNIT_FEEDING, type Nest, type World } from './world';
+import { inArmy, pushFx, removeUnit, spawnUnit, UNIT_FEEDING, type Nest, type World } from './world';
 
 /**
  * Everything a player (human, bot, or later a remote peer) can do.
@@ -72,7 +72,7 @@ function resolve(w: World, p: number, uids: number[]): number[] {
   const out: number[] = [];
   for (const u of uids) {
     const s = w.uidToSlot.get(u);
-    if (s === undefined || !w.alive[s] || w.owner[s] !== p || w.state[s] === UNIT_FEEDING) continue;
+    if (s === undefined || w.owner[s] !== p || !inArmy(w, s)) continue;
     out.push(s);
   }
   return out;
@@ -97,6 +97,26 @@ export const surgeCost = (w: World, p: number): number => POWER.surgeCost * w.fa
 
 export function groupArrive(n: number): number {
   return 6 + Math.sqrt(n) * 4.2;
+}
+
+/**
+ * Blink Echo (#60): harmless ghosts stay behind where the group was. They draw
+ * fire like Shields, never fight or capture, and don't count toward the army.
+ */
+function echo(w: World, p: number, slots: number[], cx: number, cy: number): void {
+  const E = VARIANTS.echo;
+  const n = Math.min(E.max, Math.max(1, Math.round(slots.length * E.per)));
+  for (let k = 0; k < n; k++) {
+    const s = slots[k];
+    // Spread them over the group's footprint.
+    const x = (w.x[s] + cx) / 2, y = (w.y[s] + cy) / 2;
+    const g = spawnUnit(w, p, Kind.Dot, x, y, x, y, 4);
+    if (g < 0) return;
+    w.ghost[g] = w.tick + E.ticks;
+    w.hp[g] = E.hp;
+    w.unitCount[p]--;
+    w.ghosts++;
+  }
 }
 
 export function applyCommand(w: World, c: Command): void {
@@ -144,7 +164,7 @@ export function applyCommand(w: World, c: Command): void {
       queryRadius(w, n.x, n.y, UPGRADE_PICK_RADIUS, scratch);
       const cand: number[] = [];
       for (const s of scratch) {
-        if (w.owner[s] === c.p && w.state[s] !== UNIT_FEEDING) cand.push(s);
+        if (w.owner[s] === c.p && inArmy(w, s)) cand.push(s);
       }
       if (cand.length < need) {
         pushFx(w, 'upgradeFail', n.x, n.y, c.p, need - cand.length, n.id);
@@ -209,10 +229,13 @@ export function applyCommand(w: World, c: Command): void {
         const dx = w.x[j] - cx, dy = w.y[j] - cy;
         const d = Math.sqrt(dx * dx + dy * dy) || 1;
         const fall = 1 - 0.5 * (d / R);
-        w.dmg[j] += POWER.novaDamage * f.mods.novaDamage * fall * (UNIT_STATS[w.kind[j]].hp > 20 ? 1.6 : 1);
+        // Implode: weaker, and it pulls them in instead of throwing them out.
+        const implode = f.mods.implode;
+        w.dmg[j] += POWER.novaDamage * f.mods.novaDamage * fall * (UNIT_STATS[w.kind[j]].hp > 20 ? 1.6 : 1) * (implode ? VARIANTS.implode.damage : 1);
         w.lastHit[j] = c.p;
-        w.vx[j] += (dx / d) * POWER.novaKnock * fall;
-        w.vy[j] += (dy / d) * POWER.novaKnock * fall;
+        const knock = POWER.novaKnock * fall * (implode ? -1 : 1);
+        w.vx[j] += (dx / d) * knock;
+        w.vy[j] += (dy / d) * knock;
       }
       pushFx(w, 'nova', cx, cy, c.p, R);
       return;
@@ -238,8 +261,22 @@ export function applyCommand(w: World, c: Command): void {
       f.energy -= POWER.barrageCost;
       const r = POWER.barrageRadius * powerBoost(w, c.p, 'barrage');
       const impact = w.tick + barrageFlight(x - from.x, y - from.y);
-      w.barrages.push({ x, y, owner: c.p, impact, r, x0: from.x, y0: from.y, t0: w.tick });
-      pushFx(w, 'barrage', x, y, c.p, r);
+      if (f.mods.cluster) {
+        // Cluster: three smaller shells in a triangle round the aim point, one after another.
+        const C = VARIANTS.cluster;
+        const dx = x - from.x, dy = y - from.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const ux = dx / d, uy = dy / d;
+        const at: [number, number][] = [
+          [ux, uy],
+          [-ux * 0.5 - uy * 0.87, -uy * 0.5 + ux * 0.87],
+          [-ux * 0.5 + uy * 0.87, -uy * 0.5 - ux * 0.87],
+        ];
+        at.forEach(([ox, oy], k) => {
+          const bx = clamp(x + ox * C.spread, 0, w.width), by = clamp(y + oy * C.spread, 0, w.height);
+          w.barrages.push({ x: bx, y: by, owner: c.p, impact: impact + k * C.stagger, r: r * C.r, x0: from.x, y0: from.y, t0: w.tick, budget: C.budget });
+        });
+      } else w.barrages.push({ x, y, owner: c.p, impact, r, x0: from.x, y0: from.y, t0: w.tick });
+      pushFx(w, 'barrage', x, y, c.p, f.mods.cluster ? r + VARIANTS.cluster.spread : r);
       return;
     }
 
@@ -257,6 +294,7 @@ export function applyCommand(w: World, c: Command): void {
         dy *= range / d;
       }
       const ar = groupArrive(slots.length);
+      if (f.mods.echo) echo(w, c.p, slots, cx, cy);
       // Blink jumps walls, but nobody lands inside one.
       const tr = w.terrain;
       for (const s of slots) {
@@ -280,6 +318,7 @@ export function applyCommand(w: World, c: Command): void {
       if (!n || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, c.p)) return;
       f.energy -= POWER.lockdownCost;
       n.lockedUntil = w.tick + Math.round(POWER.lockdownTicks * powerBoost(w, c.p, 'lockdown') * f.mods.lockdownTicks);
+      n.lockedBy = c.p;
       pushFx(w, 'lockdown', n.x, n.y, c.p, n.r, n.id, n.owner);
       return;
     }

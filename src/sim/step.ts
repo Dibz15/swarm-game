@@ -1,11 +1,11 @@
 import { siegeVictory } from './siege';
-import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, POWER, TERRAIN, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
+import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, POWER, TERRAIN, VARIANTS, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
 import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
 import { updateNests } from './nests';
 import { updateEvents } from './events';
-import { pushFx, type World } from './world';
+import { pushFx, removeUnit, type World } from './world';
 import { queryRadius } from './spatial';
 
 /**
@@ -27,10 +27,13 @@ export function step(w: World, commands: readonly Command[]): void {
 
   updateNests(w);
   resolveBarrages(w);
+  updateBurns(w);
   updateCombat(w);
   resolveDamage(w);
   updateMovement(w);
   updateCrystals(w);
+  expireGhosts(w);
+  siphon(w);
 
   // Energy: factions behind the biggest army charge faster.
   let leader = 1;
@@ -65,7 +68,7 @@ function updateCrystals(w: World): void {
       let lead = -1, team = -1, mixed = false;
       for (const s of blast) {
         const o = w.owner[s];
-        if (o === NEUTRAL) continue;
+        if (o === NEUTRAL || w.ghost[s]) continue;
         if (team < 0) {
           team = w.teamOf[o];
           lead = o;
@@ -107,7 +110,8 @@ function resolveBarrages(w: World): void {
       hits.push({ j, d: Math.sqrt((w.x[j] - b.x) ** 2 + (w.y[j] - b.y) ** 2) });
     }
     hits.sort((p, q) => p.d - q.d || p.j - q.j);
-    let budget = POWER.barrageBudget * (b.r / POWER.barrageRadius) * w.factions[b.owner].mods.barrageBudget;
+    const fm = w.factions[b.owner].mods;
+    let budget = POWER.barrageBudget * (b.r / POWER.barrageRadius) * fm.barrageBudget * (b.budget ?? 1) * (fm.scorch ? VARIANTS.scorch.budget : 1);
     for (const { j, d } of hits) {
       if (budget <= 0) break;
       const dmg = Math.min(budget, POWER.barrageDamage * (1 - 0.4 * (d / b.r)));
@@ -116,8 +120,42 @@ function resolveBarrages(w: World): void {
       budget -= dmg;
     }
     pushFx(w, 'barrageHit', b.x, b.y, b.owner, b.r);
+    if (fm.scorch) w.burns.push({ x: b.x, y: b.y, r: b.r, owner: b.owner, until: w.tick + VARIANTS.scorch.ticks });
   }
   w.barrages = keep;
+}
+
+/** Scorch (#60): burning ground hurts every hostile standing in it. */
+function updateBurns(w: World): void {
+  if (w.burns.length === 0) return;
+  w.burns = w.burns.filter((b) => b.until > w.tick);
+  for (const b of w.burns) {
+    queryRadius(w, b.x, b.y, b.r, blast);
+    for (const j of blast) {
+      if (!w.hostile(w.owner[j], b.owner)) continue;
+      w.dmg[j] += VARIANTS.scorch.dps * DT;
+      w.lastHit[j] = b.owner;
+    }
+  }
+}
+
+/** Echo (#60): ghosts fade when their time is up. */
+function expireGhosts(w: World): void {
+  if (w.ghosts === 0) return;
+  for (let i = 0; i < w.n; i++) if (w.alive[i] && w.ghost[i] && w.ghost[i] <= w.tick) removeUnit(w, i);
+}
+
+/** Lockdown Siphon (#60): a locked nest's owner bleeds energy to whoever locked it. */
+function siphon(w: World): void {
+  for (const n of w.nests) {
+    // Only while an enemy holds it: a nest that changed hands to the caster's side stops paying.
+    if (n.lockedUntil <= w.tick || n.lockedBy === undefined || n.lockedBy < 0 || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, n.lockedBy)) continue;
+    const to = w.factions[n.lockedBy], from = w.factions[n.owner];
+    if (!to.mods.siphon) continue;
+    const take = Math.min(from.energy, to.mods.siphon * DT);
+    from.energy -= take;
+    to.energy = Math.min(ENERGY.max, to.energy + take);
+  }
 }
 
 const nestsByTeam = new Int32Array(NEUTRAL_TEAM + 1);

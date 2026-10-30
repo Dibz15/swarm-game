@@ -232,6 +232,20 @@ export const PLAYTESTS: Playtest[] = [
     make: (c) => armed('strains-raid', c, [[Kind.Swift, ['skirmish', 'arsonist']], [Kind.Swift, []], [Kind.Dot, []]]),
   },
   {
+    id: 'variants-a',
+    group: 'Rewards',
+    title: 'Cluster, Implode, Mend, Thorns',
+    text: 'Every nest type unlocked. Barrage drops three shells, Nova pulls enemies in, Surge heals (a green glow) instead of speeding up, and fortified units hurt to hit.',
+    make: (c) => armed('variants-a', c, [[Kind.Dot, []], [Kind.Tank, []], [Kind.Lancer, []]], ['cluster', 'implode', 'mend', 'thorns']),
+  },
+  {
+    id: 'variants-b',
+    group: 'Rewards',
+    title: 'Scorch, Echo, Siphon',
+    text: 'Barrage leaves the ground burning, Blink leaves see-through ghosts that draw fire, and Lockdown drains its owner’s energy into yours.',
+    make: (c) => armed('variants-b', c, [[Kind.Dot, []], [Kind.Swift, []], [Kind.Lancer, []]], ['scorch', 'echo', 'siphon']),
+  },
+  {
     id: 'finale-lords',
     group: 'Finale',
     title: 'The heart, with warlords',
