@@ -88,9 +88,9 @@ function autopilot(w: World, me: number, run: MissionRun, locked: Set<Lock>): Co
 describe('tutorial (#17)', () => {
   const times: string[] = [];
   for (const [i, m] of MISSIONS.entries()) {
-    for (const portrait of [false, true]) {
-      it(`mission ${i + 1} "${m.title}"${portrait ? ' (portrait)' : ''} can be finished by plain play`, () => {
-        const w = createWorld(m.setup(portrait));
+    {
+      it(`mission ${i + 1} "${m.title}" can be finished by plain play`, () => {
+        const w = createWorld(m.setup());
         const me = 0;
         const run = new MissionRun(m, i);
         const log: TimedCommand[] = [];
@@ -108,7 +108,7 @@ describe('tutorial (#17)', () => {
             run.current?.status?.({ w, human: me, log });
           }
         }
-        if (!portrait) times.push(`${m.id} ${(w.tick / TICK_HZ).toFixed(0)}s`);
+        times.push(`${m.id} ${(w.tick / TICK_HZ).toFixed(0)}s`);
         expect(run.step, `stuck on step ${run.step + 1}: ${run.current?.text.desktop}`).toBe(m.steps.length);
         expect(w.factions[me].eliminated).toBe(false);
         // The last lesson is domination: it should be how the mission is won.
@@ -122,8 +122,8 @@ describe('tutorial (#17)', () => {
 describe('tutorial bots', () => {
   it('the mission 3 bot never comes for an idle player, and stays small', () => {
     const m = MISSIONS.find((x) => x.id === 'fight')!;
-    for (const portrait of [false, true]) {
-      const w = createWorld(m.setup(portrait));
+    {
+      const w = createWorld(m.setup());
       const before = w.nests.filter((n) => n.owner === 0).length;
       let lowest = before, biggest = 0;
       while (w.tick < 3 * 60 * TICK_HZ) {
@@ -135,7 +135,7 @@ describe('tutorial bots', () => {
       }
       expect(lowest).toBe(before);
       // ...and stays small, so taking its home is quick however long you took.
-      expect(biggest).toBeLessThanOrEqual(m.setup(portrait).players[1].unitCap!);
+      expect(biggest).toBeLessThanOrEqual(m.setup().players[1].unitCap!);
       expect(w.factions[0].eliminated).toBe(false);
     }
   });
@@ -145,7 +145,7 @@ describe('tutorial pacing', () => {
   it('mission 4: the swarm shows up a few seconds after the Nova step begins, not on a fixed clock', () => {
     const i = MISSIONS.findIndex((x) => x.id === 'powers');
     const m = MISSIONS[i];
-    const w = createWorld(m.setup(false));
+    const w = createWorld(m.setup());
     const run = new MissionRun(m, i);
     const log: TimedCommand[] = [];
     // Dawdle: jump straight to the Nova step only after a minute and a half.

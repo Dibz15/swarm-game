@@ -1,5 +1,6 @@
-// GLSL ES 3.00 shaders. All passes share u_cam = (cx, cy, sx, sy):
-// clip = (world - c) * s. u_px = world units per device pixel.
+// GLSL ES 3.00 shaders. All passes share u_cam = (cx, cy, sx, sy) and the
+// camera's quarter turn u_rot = (cos, sin) (#98): clip = rot(world - c) * s.
+// u_px = world units per device pixel.
 
 export const BG_VS = `#version 300 es
 layout(location=0) in vec2 a_q;
@@ -9,6 +10,7 @@ export const BG_FS = `#version 300 es
 precision highp float;
 uniform vec2 u_res;
 uniform vec3 u_view; // cx, cy, world units per pixel
+uniform vec2 u_rot;  // the camera's turn: cos, sin
 uniform vec2 u_map;
 uniform float u_time;
 uniform sampler2D u_ter;
@@ -27,7 +29,8 @@ float gridLine(vec2 w, float step, float px){
 }
 void main(){
   vec2 fc = gl_FragCoord.xy - u_res * 0.5;
-  vec2 w = u_view.xy + vec2(fc.x, -fc.y) * u_view.z;
+  vec2 so = vec2(fc.x, -fc.y) * u_view.z;
+  vec2 w = u_view.xy + vec2(u_rot.x * so.x + u_rot.y * so.y, -u_rot.y * so.x + u_rot.x * so.y);
   float px = u_view.z;
   vec2 dB = min(w, u_map - w);
   float db = min(dB.x, dB.y);
@@ -82,6 +85,7 @@ layout(location=1) in vec3 a_i;   // x, y, size
 layout(location=2) in vec2 a_s;   // shape (+10 = fortified), heading angle
 layout(location=3) in vec4 a_c;
 uniform vec4 u_cam;
+uniform vec2 u_rot;
 uniform float u_px;
 out vec2 v_p;
 out vec2 v_s;
@@ -93,7 +97,8 @@ void main(){
   v_p = a_q * G;
   v_s = a_s;
   v_c = a_c;
-  gl_Position = vec4((wp - u_cam.xy) * u_cam.zw, 0., 1.);
+  vec2 cd = wp - u_cam.xy;
+  gl_Position = vec4(vec2(u_rot.x * cd.x - u_rot.y * cd.y, u_rot.y * cd.x + u_rot.x * cd.y) * u_cam.zw, 0., 1.);
 }`;
 
 // Shapes: 0 Dot = filled square, 1 Tank = hollow square, 2 Lancer = long
@@ -139,6 +144,7 @@ layout(location=1) in vec4 a_ab;  // x1 y1 x2 y2
 layout(location=2) in float a_w;  // width in pixels
 layout(location=3) in vec4 a_c;
 uniform vec4 u_cam;
+uniform vec2 u_rot;
 uniform float u_px;
 out float v_v;
 out vec4 v_c;
@@ -152,7 +158,8 @@ void main(){
   vec2 wp = mix(a, b, t) + nrm * a_q.y * wdt;
   v_v = a_q.y;
   v_c = a_c;
-  gl_Position = vec4((wp - u_cam.xy) * u_cam.zw, 0., 1.);
+  vec2 cd = wp - u_cam.xy;
+  gl_Position = vec4(vec2(u_rot.x * cd.x - u_rot.y * cd.y, u_rot.y * cd.x + u_rot.x * cd.y) * u_cam.zw, 0., 1.);
 }`;
 
 export const BEAM_FS = `#version 300 es
@@ -172,6 +179,7 @@ layout(location=2) in vec4 a_par;  // shape, progress, rotation, extra
 layout(location=3) in vec4 a_c1;
 layout(location=4) in vec4 a_c2;
 uniform vec4 u_cam;
+uniform vec2 u_rot;
 uniform float u_px;
 out vec2 v_p;
 out vec4 v_par;
@@ -181,12 +189,15 @@ out float v_px;
 const float EXT = 1.35;
 void main(){
   vec2 wp = a_pr.xy + a_q * a_pr.z * EXT;
-  v_p = a_q * EXT;
+  // Local coords as the screen shows them, so shapes and arcs stay upright on a turned view.
+  vec2 q = a_q * EXT;
+  v_p = vec2(u_rot.x * q.x - u_rot.y * q.y, u_rot.y * q.x + u_rot.x * q.y);
   v_par = a_par;
   v_c1 = a_c1;
   v_c2 = a_c2;
   v_px = u_px / a_pr.z;
-  gl_Position = vec4((wp - u_cam.xy) * u_cam.zw, 0., 1.);
+  vec2 cd = wp - u_cam.xy;
+  gl_Position = vec4(vec2(u_rot.x * cd.x - u_rot.y * cd.y, u_rot.y * cd.x + u_rot.x * cd.y) * u_cam.zw, 0., 1.);
 }`;
 
 export const SHAPE_FS = `#version 300 es

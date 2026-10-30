@@ -539,7 +539,6 @@ export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
     caves: p.caves,
     layout: p.layout,
     events: p.events,
-    portrait: window.innerHeight > window.innerWidth * 1.15,
     players: [
       { faction: p.color, team: 0, human: true },
       ...p.bots.map((b, i) => ({

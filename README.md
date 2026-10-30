@@ -177,7 +177,7 @@ src/sim/      deterministic simulation — no DOM, no Math.random, no clock
   commands.ts   the only way to change the world: move / rally / upgrade / surge / nova
   ai/bot.ts     bot players — run inside the sim and issue the same Commands as humans
   ai/chokes.ts  tunnel-mouth map bots read: where chambers narrow, where to stage an attack
-  mapgen.ts     MapParams → MapSpec: rotationally symmetric nests + terrain from a seed (portrait variant for phones)
+  mapgen.ts     MapParams → MapSpec: rotationally symmetric nests + terrain from a seed; the seed also picks the shape and density (the camera turns the map to fit the screen)
   terrain.ts    walls/fields as capsules + cave rock as a distance grid; tile flags, collision, line of sight, cached flow fields
   events.ts     living-map director: wild swarms, supply drops, the Colossus, garrison regrowth
   mathx.ts      table-based deterministic sin/cos

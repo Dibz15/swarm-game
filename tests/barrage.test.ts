@@ -104,12 +104,10 @@ describe('Barrage (#41)', () => {
     expect(run(3)).toBeLessThan(4);
   });
 
-  it('tutorial mission 4: the Bastion is in reach of the Spire, in both orientations', () => {
+  it('tutorial mission 4: the Bastion is in reach of the Spire', () => {
     const m = MISSIONS.find((x) => x.id === 'powers')!;
-    for (const portrait of [false, true]) {
-      const w = createWorld(m.setup(portrait));
-      const bastion = w.nests.find((n) => n.type === NestType.Bastion)!;
-      expect(barrageLaunch(w, 0, bastion.x, bastion.y)).not.toBeNull();
-    }
+    const w = createWorld(m.setup());
+    const bastion = w.nests.find((n) => n.type === NestType.Bastion)!;
+    expect(barrageLaunch(w, 0, bastion.x, bastion.y)).not.toBeNull();
   });
 });

@@ -32,8 +32,6 @@ export interface MatchSetup {
   seed: number;
   size: MapSize;
   players: PlayerSetup[];
-  /** tall map for portrait screens */
-  portrait?: boolean;
   /** terrain preset or explicit amounts (default: none) */
   terrain?: TerrainLevel | TerrainParams;
   /** cave layout preset or explicit params (default: open map) */
@@ -61,12 +59,11 @@ export interface MatchSetup {
 }
 
 /** The generator's params for a setup's map (thumbnails use this too, so they match the battle). */
-export function mapParamsOf(setup: MatchSetup, portrait = setup.portrait): MapParams {
+export function mapParamsOf(setup: MatchSetup): MapParams {
   return {
     seed: setup.seed,
     size: setup.size,
     players: setup.players.length,
-    portrait,
     terrain: setup.terrain,
     caves: setup.caves,
     events: setup.events,

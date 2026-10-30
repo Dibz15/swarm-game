@@ -108,15 +108,15 @@ describe('stronghold nodes', () => {
 
   it('are fortresses with the warlord guarding its citadel; other domain nodes are not', () => {
     const [run, id] = hold(1);
-    const s = nodeSetup(run, id, false);
+    const s = nodeSetup(run, id);
     expect(s.stronghold).toMatchObject({ player: 1 });
     expect(s.caves).toBe('off');
     expect(s.players[1].bot!.citadel).toBe(true);
     // It turtles there, and its three nests from the start cost it production.
     expect(s.players[1].bot!.personality).toBe('turtler');
-    expect(s.players[1].prod).toBeLessThan(nodeSetup(run, run.warlords![0].nodes[1] ?? id, false).players[1].prod ?? 2);
+    expect(s.players[1].prod).toBeLessThan(nodeSetup(run, run.warlords![0].nodes[1] ?? id).players[1].prod ?? 2);
     for (const other of run.warlords![0].nodes.slice(1)) {
-      const o = nodeSetup(run, other, false);
+      const o = nodeSetup(run, other);
       expect(o.stronghold).toBeUndefined();
       expect(o.players[1].bot!.citadel).toBeUndefined();
     }
@@ -129,7 +129,7 @@ describe('stronghold nodes', () => {
       const [run, id] = hold(k);
       run.nodes[id].difficulty = 1;
       for (const b of run.broods) b.size = 16;
-      const w = createWorld(nodeSetup(run, id, false, run.broods.map((b) => b.id)));
+      const w = createWorld(nodeSetup(run, id, run.broods.map((b) => b.id)));
       const proxy = new Proxy(run.color, { skill: 1 });
       while (!w.over && w.tick < 12 * 60 * TICK_HZ) {
         step(w, proxy.think(w));
@@ -150,7 +150,7 @@ describe('playtests', () => {
       expect(s.run.nodes[s.run.at].links).toBeDefined();
       if (s.kind !== 'battle') continue;
       expect(s.run.nodes[s.run.at].links).toContain(s.node);
-      const setup = nodeSetup(s.run, s.node, false);
+      const setup = nodeSetup(s.run, s.node);
       if (p.group.startsWith('Stronghold')) expect(setup.stronghold).toMatchObject({ player: 1 });
       else expect(setup.stronghold).toBeUndefined();
       expect(!!setup.siege).toBe(p.group === 'Hold the line');

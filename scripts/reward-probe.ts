@@ -36,7 +36,7 @@ function battle(k: number, id: string | null): { won: boolean; secs: number } {
   else if (r) run.perks.push(r.id);
   const node = run.nodes[run.start].links.find((l) => run.nodes[l].kind === 'conquest' && !run.nodes[l].domain) ?? run.nodes[run.start].links[0];
   Object.assign(run.nodes[node], { difficulty: DIFF, rivals: 1 });
-  const w = createWorld(nodeSetup(run, node, false, run.fielded));
+  const w = createWorld(nodeSetup(run, node, run.fielded));
   const proxy = new Proxy(run.color, { skill: 1 });
   while (!w.over && w.tick < CAP) {
     step(w, proxy.think(w));

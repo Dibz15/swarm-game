@@ -64,7 +64,7 @@ const ART = new Map<number, NodeArt>();
 function artFor(run: RunState, n: RunNode): NodeArt {
   let a = ART.get(n.seed);
   if (!a) {
-    const s = nodeSetup(run, n.id, false);
+    const s = nodeSetup(run, n.id);
     a = { rivals: s.players.slice(1).map((p) => p.faction), map: null };
     ART.set(n.seed, a);
   }
@@ -80,8 +80,7 @@ function mapFor(run: RunState, n: RunNode): MapSpec | null {
   const a = artFor(run, n);
   if (!a.map && mapBudget > 0) {
     mapBudget--;
-    const s = nodeSetup(run, n.id, false);
-    a.map = generateMap(mapParamsOf(s, false));
+    a.map = cardMap(run, n);
   }
   return a.map;
 }
@@ -222,14 +221,12 @@ export function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: 
 
 const CARD_MAPS = new Map<string, MapSpec>();
 
-/** A node's battle map as the card shows it (cached): the same orientation the battle will use. */
+/** A node's battle map as the card shows it (cached): the seed alone decides its shape (#98). */
 export function cardMap(run: RunState, n: RunNode): MapSpec {
-  const portrait = window.innerHeight > window.innerWidth * 1.15;
-  const key = `${n.seed}:${portrait}`;
+  const key = `${n.seed}`;
   let m = CARD_MAPS.get(key);
   if (!m) {
-    const st = nodeSetup(run, n.id, portrait);
-    m = generateMap(mapParamsOf(st, portrait));
+    m = generateMap(mapParamsOf(nodeSetup(run, n.id)));
     CARD_MAPS.set(key, m);
   }
   return m;
