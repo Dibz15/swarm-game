@@ -21,6 +21,18 @@ export interface KindMods {
   pack: number;
   /** Raider capture weight */
   capture: number;
+  /** Swarm-call (#60): damage bonus a dying Swarmer gives its neighbours, 0 = off */
+  call: number;
+  /** Spikes (#60): share of the damage a unit is dealt that hits its attacker back */
+  spikes: number;
+  /** Phalanx (#60): less damage taken per nearby Shield */
+  phalanx: number;
+  /** Piercing (#60): Spear shots hit along a line instead of a splash */
+  pierceLine: boolean;
+  /** Skirmish (#60): badly hurt Raiders fall back to heal */
+  skirmish: boolean;
+  /** Arsonist (#60): drain on enemy nests with Raiders on them */
+  arson: number;
 }
 
 export interface FactionMods {
@@ -48,7 +60,22 @@ export interface FactionMods {
   captureRate: number;
 }
 
-export const defaultKindMods = (): KindMods => ({ hp: 1, speed: 1, dps: 1, range: 1, splash: 1, taunt: 1, pack: 1, capture: 1 });
+export const defaultKindMods = (): KindMods => ({
+  hp: 1,
+  speed: 1,
+  dps: 1,
+  range: 1,
+  splash: 1,
+  taunt: 1,
+  pack: 1,
+  capture: 1,
+  call: 0,
+  spikes: 0,
+  phalanx: 0,
+  pierceLine: false,
+  skirmish: false,
+  arson: 1,
+});
 
 export function defaultMods(): FactionMods {
   return {

@@ -1,5 +1,5 @@
 export * from './constants';
-export { World, UNIT_FEEDING, type Nest, type Faction, type FxEvent } from './world';
+export { World, UNIT_FEEDING, UNIT_RETREAT, type Nest, type Faction, type FxEvent } from './world';
 export { step, dominationStatus, type DominationStatus } from './step';
 export { bastionRange, supplyCap } from './nests';
 export { surgeCost } from './commands';

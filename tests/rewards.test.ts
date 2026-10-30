@@ -83,6 +83,23 @@ const PROBES: Record<string, [string, (w: World) => number, 'more' | 'less'][]> 
     ['speed', speed(Kind.Dot), 'more'],
     ['HP', hp(Kind.Dot), 'less'],
   ],
+  'swarm-call': [
+    [
+      'damage after a Swarmer falls',
+      (w) => {
+        freeze(w);
+        put(w, 0, Kind.Dot, 800, 800, true);
+        const t = put(w, 1, Kind.Tank, 815, 800, true);
+        const v = put(w, 0, Kind.Dot, 795, 800);
+        w.grid.build(w);
+        w.dmg[v] = 1e3;
+        resolveDamage(w);
+        run(w, 20);
+        return 1e6 - w.hp[t];
+      },
+      'more',
+    ],
+  ],
   'thick-hide': [
     ['HP', hp(Kind.Dot), 'more'],
     ['speed', speed(Kind.Dot), 'less'],
@@ -99,6 +116,48 @@ const PROBES: Record<string, [string, (w: World) => number, 'more' | 'less'][]> 
         const shield = put(w, 0, Kind.Tank, 800 - Math.sqrt(225 / 0.8 / (TRAITS.taunt * TRAITS.taunt)), 800, true);
         run(w, 8);
         return w.tgt[a] === shield ? 1 : 0;
+      },
+      'more',
+    ],
+  ],
+  spikes: [
+    [
+      'damage back at the attacker',
+      (w) => {
+        freeze(w);
+        const a = put(w, 1, Kind.Dot, 800, 800, true);
+        put(w, 0, Kind.Tank, 815, 800, true);
+        run(w, 20);
+        return 1e6 - w.hp[a];
+      },
+      'more',
+    ],
+  ],
+  phalanx: [
+    [
+      'damage taken in a line of Shields',
+      (w) => {
+        freeze(w);
+        const mid = [0, 1, 2].map((k) => put(w, 0, Kind.Tank, 800 + k * 12, 800, true))[1];
+        run(w, 2);
+        w.dmg[mid] = 10;
+        resolveDamage(w);
+        return 1e6 - w.hp[mid];
+      },
+      'less',
+    ],
+  ],
+  piercing: [
+    [
+      'hits far behind the target',
+      (w) => {
+        freeze(w);
+        const r = UNIT_STATS[Kind.Lancer].range;
+        put(w, 0, Kind.Lancer, 800, 800, true);
+        put(w, 1, Kind.Tank, 800 + r * 0.8, 800, true);
+        const s = put(w, 1, Kind.Tank, 800 + r * 0.8 + 60, 800, true);
+        run(w, 20);
+        return 1e6 - w.hp[s];
       },
       'more',
     ],
@@ -125,6 +184,47 @@ const PROBES: Record<string, [string, (w: World) => number, 'more' | 'less'][]> 
   quickdraw: [['damage', damage(Kind.Lancer), 'more']],
   saboteur: [['Raider capture', (w) => capture(w, Kind.Swift), 'more']],
   fleet: [['speed', speed(Kind.Swift), 'more']],
+  skirmish: [
+    [
+      'a hurt Raider falls back to its nest',
+      (w) => {
+        clearUnits(w);
+        const n = w.nests.find((o) => o.owner === 0)!;
+        const x = n.x + (n.x < w.width / 2 ? 250 : -250);
+        const i = put(w, 0, Kind.Swift, x, n.y);
+        w.hp[i] = UNIT_STATS[Kind.Swift].hp * 0.3;
+        run(w, 30);
+        return 250 - Math.abs(w.x[i] - n.x);
+      },
+      'more',
+    ],
+    [
+      'and heals there',
+      (w) => {
+        clearUnits(w);
+        const n = w.nests.find((o) => o.owner === 0)!;
+        const i = put(w, 0, Kind.Swift, n.x + 5, n.y);
+        w.hp[i] = UNIT_STATS[Kind.Swift].hp * 0.3;
+        run(w, 15);
+        return w.hp[i];
+      },
+      'more',
+    ],
+  ],
+  arsonist: [
+    [
+      'drain on an enemy nest',
+      (w) => {
+        clearUnits(w);
+        freeze(w);
+        const n = w.nests.find((o) => o.owner === 1)!;
+        put(w, 0, Kind.Swift, n.x, n.y, true);
+        run(w, 20);
+        return n.owner === 1 ? 1 - n.control : 1;
+      },
+      'more',
+    ],
+  ],
   'heavy-shell': [
     [
       'Barrage damage',
@@ -255,7 +355,15 @@ const PROBES: Record<string, [string, (w: World) => number, 'more' | 'less'][]> 
 };
 
 /** Probes that need a real map (nests). */
-const NEEDS_MAP = new Set(['saboteur', 'capture', 'supply']);
+const NEEDS_MAP = new Set(['saboteur', 'capture', 'supply', 'skirmish', 'arsonist']);
+
+function clearUnits(w: World): void {
+  for (let i = 0; i < w.n; i++) w.alive[i] = 0;
+  w.free.length = 0;
+  w.n = 0;
+  w.unitCount.fill(0);
+  w.count = 0;
+}
 
 function modsOf(id: string) {
   const w = arena(id);
@@ -264,9 +372,7 @@ function modsOf(id: string) {
 
 /** Control a lone unit of `kind` builds on an empty, unowned nest in a second. */
 function capture(w: World, kind: number): number {
-  for (let i = 0; i < w.n; i++) w.alive[i] = 0;
-  w.free.length = 0;
-  w.n = 0;
+  clearUnits(w);
   const n = w.nests.find((o) => !o.capital)!;
   Object.assign(n, { owner: -1, controller: -1, control: 0, garrison: 0 });
   freeze(w);
@@ -295,7 +401,7 @@ function surge(w: World): number {
 describe('rewards change the sim (#64)', () => {
   it('every reward with a sim effect has a probe', () => {
     const runLevel = ['hunger', 'lone-wolf'];
-    expect(REWARDS.length).toBe(25);
+    expect(REWARDS.length).toBe(31);
     expect(REWARDS.map((r) => r.id).filter((id) => !runLevel.includes(id)).sort()).toEqual(Object.keys(PROBES).sort());
   });
 
@@ -317,6 +423,24 @@ describe('rewards change the sim (#64)', () => {
       size: 'small',
       players: [
         { faction: 0, team: 0, human: false, bot: { difficulty: 2, personality: 'rusher' }, mods: modsOf('glass') },
+        { faction: 1, team: 1, human: false, bot: { difficulty: 2, personality: 'expander' } },
+      ],
+    });
+    const a = createWorld(setup());
+    const b = createWorld(setup());
+    run(a, 600);
+    run(b, 600);
+    expect(worldHash(a)).toBe(worldHash(b));
+  });
+
+  it('a match with the behaviour strains is deterministic', () => {
+    const mods = modsOf('swarm-call');
+    for (const id of ['spikes', 'phalanx', 'piercing', 'skirmish', 'arsonist']) REWARD[id].apply(mods);
+    const setup = (): MatchSetup => ({
+      seed: 34,
+      size: 'small',
+      players: [
+        { faction: 0, team: 0, human: false, bot: { difficulty: 2, personality: 'rusher' }, mods: structuredClone(mods) },
         { faction: 1, team: 1, human: false, bot: { difficulty: 2, personality: 'expander' } },
       ],
     });

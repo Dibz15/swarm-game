@@ -1,5 +1,5 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
+import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_RETREAT, UNIT_STATS, UPGRADE_COST } from '../sim/index';
 import { HEART, heartSlot, standingNests } from '../sim/heart';
 import { WILD_HEART, type World } from '../sim/world';
 import type { Renderer } from './renderer';
@@ -247,6 +247,8 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
       size *= 1.15;
     }
     if (w.state[i] === UNIT_FEEDING) alpha = 190;
+    // Skirmish: falling back, faded.
+    else if (w.state[i] === UNIT_RETREAT) alpha = 150;
     // Veterans from level-3 nests: a touch bigger and brighter.
     if (w.vet[i]) {
       size *= 1.15;
