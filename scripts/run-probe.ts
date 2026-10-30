@@ -94,7 +94,7 @@ function spend(run: RunState, bought: Record<string, number>): void {
 // ---- a battle ------------------------------------------------------------------
 
 function fight(run: RunState, id: number, fielded: number[]): { won: boolean; capped: boolean; report: ReturnType<typeof battleReport>; army: number } {
-  const setup = nodeSetup(run, id, false, fielded);
+  const setup = nodeSetup(run, id, fielded);
   const me = setup.players[0];
   const w = createWorld(setup);
   const proxy = new Proxy(me.faction, { skill, knobs, novaLocked: !run.unlocks.nova });

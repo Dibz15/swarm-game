@@ -21,6 +21,7 @@ import { battleReport, nodeSetup, warlordOf } from './campaign/battle';
 import { PLAYTEST, type Playtest } from './campaign/playtest';
 import { playtestMenu } from './ui/playtest';
 import { fortressGrid } from './ui/fortressGrid';
+import { mapGrid } from './ui/mapGrid';
 import { FORTIFY } from './sim/fortify';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
 import { rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
@@ -116,6 +117,7 @@ class App {
     else if (q.has('eventdemo')) this.startEventDemo();
     else if (q.has('creatures')) this.setScreen(creatureGrid());
     else if (q.has('fortress')) this.setScreen(fortressGrid());
+    else if (q.has('maps')) this.setScreen(mapGrid());
     else if (q.has('heart')) this.startHeartDemo(Number(q.get('heart')) || 0);
     else if (q.has('playtest')) this.showPlaytests();
     else this.showMenu();
@@ -344,7 +346,7 @@ class App {
     const run = newRun(`heart-${strength}`, loadPrefs().color, 'swarm', Date.now());
     run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, strength).map((n) => n.id);
     for (const b of run.broods) b.size = 20;
-    this.startGame(nodeSetup(run, run.heart, window.innerHeight > window.innerWidth * 1.15, run.broods.map((b) => b.id)), { scenario: 'campaign: finale (dev)' });
+    this.startGame(nodeSetup(run, run.heart, run.broods.map((b) => b.id)), { scenario: 'campaign: finale (dev)' });
   }
 
   /** Move to a node: fight for it, or march through a node already taken. */
@@ -358,7 +360,7 @@ class App {
       return;
     }
     const node = run.nodes[id];
-    this.startGame(nodeSetup(run, id, window.innerHeight > window.innerWidth * 1.15, fielded), { scenario: `campaign: ${node.kind}` });
+    this.startGame(nodeSetup(run, id, fielded), { scenario: `campaign: ${node.kind}` });
     this.run = { state: run, node: id, fielded };
     if (!run.unlocks.nova) this.game!.lock('nova', 'Unlock Nova at the camp');
     // A warlord's ground (#66): its sting, and its trait announced and kept on screen.
@@ -430,7 +432,7 @@ class App {
 
   private playMission(i: number, prevEnd: EndReason = 'quit'): void {
     const m = MISSIONS[i];
-    this.startGame(m.setup(window.innerHeight > window.innerWidth * 1.15), { scenario: `tutorial: ${m.title}` }, prevEnd);
+    this.startGame(m.setup(), { scenario: `tutorial: ${m.title}` }, prevEnd);
     const g = this.game!;
     g.mission = new MissionRun(m, i);
     g.locked = new Set(m.locked);
@@ -509,7 +511,6 @@ class App {
       size: 'medium',
       terrain: 'standard',
       events: 'normal',
-      portrait: window.innerHeight > window.innerWidth * 1.15,
       players: Array.from({ length: n }, (_, i) => ({
         faction: [0, 1, 2, 3, 4, 5][(i + seed) % 6],
         team: i,

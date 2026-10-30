@@ -12,13 +12,13 @@ import { botMatch } from './helpers';
 const CAVES = CAVE_LEVELS.filter((c) => c !== 'off') as CaveLevel[];
 
 describe('cave mapgen', () => {
-  it('every nest sits in open ground and reaches every other, on all sizes and in portrait', () => {
+  it('every nest sits in open ground and reaches every other, on all sizes and shapes', () => {
     for (const caves of CAVES) {
       for (const size of ['small', 'medium', 'large'] as MapSize[]) {
         for (const players of [2, 3, 5]) {
-          for (const portrait of [false, true]) {
+          for (const alt of [0, 1]) {
             for (let s = 0; s < 3; s++) {
-              const m = generateMap({ seed: 300 + s, size, players, portrait, terrain: 'standard', caves });
+              const m = generateMap({ seed: 300 + s + alt * 97, size, players, terrain: 'standard', caves });
               const t = new Terrain(m.terrain, m.width, m.height);
               expect(t.connected(m.nests.map((n) => [n.x, n.y]))).toBe(true);
               for (const n of m.nests) expect(t.clearance(n.x, n.y)).toBeGreaterThan(NEST_RADIUS[n.type] + 10);
@@ -52,7 +52,8 @@ describe('cave mapgen', () => {
         for (const size of ['small', 'medium', 'large'] as MapSize[]) {
           const m = generateMap({ seed: 11 + players, size, players, caves });
           const t = new Terrain(m.terrain, m.width, m.height);
-          const c = m.nests[players];
+          // The middle of the map (a center nest, or open ground on crystal-center layouts).
+          const c = { x: m.width / 2, y: m.height / 2 };
           const d = m.nests.slice(0, players).map((n) => t.pathDist(n.x, n.y, c.x, c.y, 0) / Math.hypot(n.x - c.x, n.y - c.y));
           expect(Math.max(...d) / Math.min(...d)).toBeLessThan(1.25);
         }
