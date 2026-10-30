@@ -93,7 +93,7 @@ export const REWARDS: Reward[] = [
   variant('root', 'Root', 'fortify', 'uncommon', "Fortify: units can't move, but take 40% less damage again", (m) => ((m.fortifyArmor *= 0.6), (m.fortifyRoot = true))),
   variant('thorns', 'Thorns', 'fortify', 'common', 'Fortify: fortified units send 30% of each blow back at the attacker', (m) => (m.thorns = 0.3)),
   variant('long', 'Long', 'lockdown', 'common', 'Lockdown: lasts 50% longer', (m) => (m.lockdownTicks *= 1.5)),
-  variant('siphon', 'Siphon', 'lockdown', 'uncommon', 'Lockdown: 20% shorter, but drains 1.2 energy/s from its owner to you', (m) => ((m.lockdownTicks *= 0.8), (m.siphon = 1.2))),
+  variant('siphon', 'Siphon', 'lockdown', 'uncommon', 'Lockdown: drains 1.2 energy/s from its owner to you, but is 20% shorter and rests 5 s after', (m) => ((m.lockdownTicks *= 0.8), (m.siphon = 1.2))),
   // Nest and economy perks
   { id: 'capital', name: 'Seasoned capital', text: 'Your capital starts at level 2', family: 'perk', tier: 'rare', apply: (m) => (m.capitalLevel += 1) },
   { id: 'bastion-range', name: 'Long watch', text: 'Bastion turrets reach 30% further', family: 'perk', tier: 'common', apply: (m) => (m.bastionRange *= 1.3) },
@@ -101,6 +101,15 @@ export const REWARDS: Reward[] = [
   { id: 'crystals', name: 'Crystal sense', text: 'Crystals charge 25% faster', family: 'perk', tier: 'common', apply: (m) => (m.crystalRate *= 1.25) },
   { id: 'energy', name: 'Rich blood', text: '+15% energy income', family: 'perk', tier: 'uncommon', apply: (m) => (m.energyRate *= 1.15) },
   { id: 'capture', name: 'Quick claim', text: 'Capture every nest 25% faster', family: 'perk', tier: 'common', apply: (m) => (m.captureRate *= 1.25) },
+  {
+    id: 'drops',
+    name: 'Kind skies',
+    text: 'Supply drops usually land near you, and you take them 50% faster',
+    family: 'perk',
+    tier: 'uncommon',
+    apply: (m) => (m.dropFavour = 1.5),
+  },
+  { id: 'old-blood', name: 'Old blood', text: 'Level-2 nests spawn veterans (+35% HP), not just level 3', family: 'perk', tier: 'rare', apply: (m) => (m.vetLevel = 2) },
   // Pacts: strong, with a drawback
   {
     id: 'glass',
@@ -112,6 +121,23 @@ export const REWARDS: Reward[] = [
   },
   { id: 'hunger', name: 'Hunger', text: 'Double biomass from battles, but the Bloom advances 25% faster', family: 'pact', tier: 'rare', apply: () => {} },
   { id: 'lone-wolf', name: 'Lone wolf', text: 'Field only one brood, but it fights twice as large', family: 'pact', tier: 'rare', apply: () => {} },
+  {
+    id: 'blood-price',
+    name: 'Blood price',
+    text: 'Powers cost no energy, but one of your units for every 6 energy they would have cost',
+    family: 'pact',
+    tier: 'rare',
+    apply: (m) => (m.bloodPrice = true),
+  },
+  {
+    id: 'scorched-earth',
+    name: 'Scorched earth',
+    text: 'Nests you capture start half-held and must recover before they spawn, but every nest spawns 20% faster',
+    family: 'pact',
+    tier: 'rare',
+    apply: (m) => ((m.captureControl = 0.5), (m.spawnRate *= 1.2)),
+  },
+  { id: 'feral', name: 'Feral', text: 'No powers at all, but every nest spawns 25% faster', family: 'pact', tier: 'rare', apply: (m) => ((m.noPowers = true), (m.spawnRate *= 1.25)) },
 ];
 
 export const REWARD: Record<string, Reward> = Object.fromEntries(REWARDS.map((r) => [r.id, r]));
@@ -139,7 +165,11 @@ export function offerable(run: OfferRun, r: Reward): boolean {
     return run.broods.some((b) => b.kind === r.kind && !b.strains.includes(r.id));
   }
   if (run.perks.includes(r.id)) return false;
-  if (r.power) return powerOpen(run, r.power);
+  // Feral gives up powers: no variants, and no paying for them in blood.
+  const feral = run.perks.includes('feral');
+  if (r.power) return !feral && powerOpen(run, r.power);
+  if (r.id === 'blood-price') return !feral;
+  if (r.id === 'feral') return !run.perks.includes('blood-price');
   return true;
 }
 

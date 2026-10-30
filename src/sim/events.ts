@@ -191,8 +191,10 @@ function spawnDrop(w: World): void {
   const spots = ev.spec.dropSpots;
   // Usually land near whoever is weakest, so drops pull the leader out of
   // its turtle instead of feeding it. Never the same spot twice in a row.
+  // A faction the drops favour (a campaign perk, #60) takes the weakest's place.
   let k = ev.rng.int(spots.length);
-  const weak = weakestHome(w);
+  const fav = favoured(w);
+  const weak = fav >= 0 ? homeOf(w, fav) : weakestHome(w);
   if (weak && ev.rng.next() < EVENTS.dropNearWeakest) {
     let bd = Infinity;
     for (let j = 0; j < spots.length; j++) {
@@ -210,6 +212,16 @@ function spawnDrop(w: World): void {
   pushFx(w, 'dropIncoming', x, y, NEUTRAL, EVENTS.dropRadius);
 }
 
+/** The active faction drops favour most, or -1. */
+function favoured(w: World): number {
+  let best = -1;
+  for (let f = 0; f < NEUTRAL; f++) {
+    const fa = w.factions[f];
+    if (fa.active && !fa.eliminated && fa.mods.dropFavour > 0 && (best < 0 || fa.mods.dropFavour > w.factions[best].mods.dropFavour)) best = f;
+  }
+  return best;
+}
+
 /** Nest centroid of the active player with the smallest army, or null. */
 function weakestHome(w: World): [number, number] | null {
   let weak = -1;
@@ -218,9 +230,14 @@ function weakestHome(w: World): [number, number] | null {
     if (!fa.active || fa.eliminated) continue;
     if (weak < 0 || w.unitCount[f] < w.unitCount[weak]) weak = f;
   }
+  return homeOf(w, weak);
+}
+
+/** Nest centroid of faction f, or null. */
+function homeOf(w: World, f: number): [number, number] | null {
   let x = 0, y = 0, n = 0;
   for (const nest of w.nests) {
-    if (nest.owner !== weak) continue;
+    if (nest.owner !== f) continue;
     x += nest.x;
     y += nest.y;
     n++;
@@ -260,7 +277,7 @@ function updateDrops(w: World): void {
       total += w.kind[s] === Kind.Swift ? TRAITS.raidCapture : 1;
     }
     if (mixed || lead < 0 || lead === NEUTRAL) return true;
-    const rate = (EVENTS.dropBase + EVENTS.dropPerUnit * Math.min(total, 20)) * DT * STEP;
+    const rate = (EVENTS.dropBase + EVENTS.dropPerUnit * Math.min(total, 20)) * DT * STEP * Math.max(1, w.factions[lead].mods.dropFavour);
     if (d.holder >= 0 && w.teamOf[d.holder] !== w.teamOf[lead]) {
       // Someone else's progress drains first, twice as fast.
       d.progress -= rate * 2;

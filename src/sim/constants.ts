@@ -84,6 +84,12 @@ export const STRAINS = {
   skirmish: { flee: 0.35, back: 0.9, heal: 6 },
 };
 
+/** Pacts with a rule of their own (#60). PROVISIONAL numbers (#68). */
+export const PACTS = {
+  /** Blood price: a power costs one unit per this much energy it would have cost */
+  bloodPerUnit: 6,
+};
+
 /** Power variants with a rule of their own (#60). PROVISIONAL numbers (#68). */
 export const VARIANTS = {
   /** Cluster: three shells this far from the aim point, each this much of the radius and budget, landing `stagger` ticks apart */
@@ -96,6 +102,8 @@ export const VARIANTS = {
   mend: { heal: 0.35 },
   /** Echo: ghosts per unit blinked (at most `max`), their HP and how long they last */
   echo: { per: 0.25, max: 6, hp: 20, ticks: 4 * 30 },
+  /** Siphon: how long Lockdown rests after a siphoning lock ends, so it can't be chained */
+  siphon: { rest: 5 * 30 },
 };
 
 /** units notice enemies this far beyond their attack range */

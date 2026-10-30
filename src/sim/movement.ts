@@ -121,7 +121,7 @@ export function updateMovement(w: World): void {
       }
     }
 
-    const refuge = w.state[i] !== UNIT_FEEDING && fm.kind[w.kind[i]].skirmish ? skirmish(w, i) : null;
+    const refuge = w.state[i] !== UNIT_FEEDING && !w.ghost[i] && fm.kind[w.kind[i]].skirmish ? skirmish(w, i) : null;
     if (refuge) {
       // Falling back: straight for the nest, through the fight.
       const dx = refuge.x - x, dy = refuge.y - y;

@@ -246,6 +246,20 @@ export const PLAYTESTS: Playtest[] = [
     make: (c) => armed('variants-b', c, [[Kind.Dot, []], [Kind.Swift, []], [Kind.Lancer, []]], ['scorch', 'echo', 'siphon']),
   },
   {
+    id: 'pacts-blood',
+    group: 'Rewards',
+    title: 'Blood price, Old blood, Kind skies',
+    text: 'Powers cost units (the buttons show −N●, and the energy bar is gone) instead of energy, level-2 nests spawn veterans, and supply drops tend to land near you.',
+    make: (c) => armed('pacts-blood', c, [[Kind.Dot, []], [Kind.Tank, []], [Kind.Lancer, []]], ['blood-price', 'old-blood', 'drops']),
+  },
+  {
+    id: 'pacts-feral',
+    group: 'Rewards',
+    title: 'Feral and Scorched earth',
+    text: 'No powers at all (the power buttons and energy bar are gone), nests spawn much faster, and nests you capture start half-held.',
+    make: (c) => armed('pacts-feral', c, [[Kind.Dot, []], [Kind.Swift, []], [Kind.Tank, []]], ['feral', 'scorched-earth']),
+  },
+  {
     id: 'finale-lords',
     group: 'Finale',
     title: 'The heart, with warlords',

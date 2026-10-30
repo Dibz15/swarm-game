@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { REWARD, REWARDS } from '../src/campaign/rewards';
 import { resolveDamage } from '../src/sim/combat';
-import { applyCommand, novaRadius } from '../src/sim/commands';
+import { applyCommand, novaRadius, siphonWait } from '../src/sim/commands';
 import { Kind, NestType, POWER, TRAITS, UNIT_STATS } from '../src/sim/constants';
 import { worldHash } from '../src/sim/hash';
 import { bastionRange, supplyCap } from '../src/sim/nests';
@@ -39,6 +39,7 @@ function mapWorld(reward?: string): World {
   const setup: MatchSetup = {
     seed: 21,
     size: 'small',
+    events: 'calm',
     players: [
       { faction: 0, team: 0, human: true },
       { faction: 1, team: 1, human: true },
@@ -446,6 +447,77 @@ const PROBES: Record<string, [string, (w: World) => number, 'more' | 'less'][]> 
     ],
   ],
   capture: [['capture', (w) => capture(w, Kind.Dot), 'more']],
+  drops: [
+    [
+      'drop pickup speed',
+      (w) => {
+        clearUnits(w);
+        freeze(w);
+        const n = w.nests.find((o) => o.owner === 0)!;
+        w.events!.drops.push({ x: n.x + 60, y: n.y, lands: w.tick, expires: w.tick + 1e6, progress: 0, holder: -1 });
+        put(w, 0, Kind.Dot, n.x + 60, n.y, true);
+        run(w, 30);
+        return w.events!.drops[0]?.progress ?? 1;
+      },
+      'more',
+    ],
+    ['drops landing near you', (w) => dropsNear(w), 'more'],
+  ],
+  'old-blood': [
+    [
+      'veterans from a level-2 nest',
+      (w) => {
+        clearUnits(w);
+        for (const n of w.nests) if (n.owner === 0) n.level = 2;
+        run(w, 150);
+        let vets = 0;
+        for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === 0 && w.vet[i]) vets++;
+        return vets;
+      },
+      'more',
+    ],
+  ],
+  'blood-price': [
+    ['energy a Surge costs', (w) => (surge(w), 100 - w.factions[0].energy), 'less'],
+    [
+      'units a Surge costs',
+      (w) => {
+        w.factions[0].energy = 100;
+        const us = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => put(w, 0, Kind.Dot, 800 + k * 3, 800));
+        w.grid.build(w);
+        applyCommand(w, { t: 'surge', p: 0, units: us.map((i) => w.uid[i]) } as never);
+        return us.filter((i) => !w.alive[i]).length;
+      },
+      'more',
+    ],
+  ],
+  'scorched-earth': [
+    [
+      'control of a fresh capture',
+      (w) => {
+        clearUnits(w);
+        freeze(w);
+        const n = w.nests.find((o) => !o.capital && o.owner !== 0)!;
+        Object.assign(n, { owner: -1, controller: 0, control: 0.99, garrison: 0 });
+        put(w, 0, Kind.Dot, n.x, n.y, true);
+        run(w, 6);
+        return n.owner === 0 ? n.control : 1;
+      },
+      'less',
+    ],
+    ['spawning', (w) => spawned(w), 'more'],
+  ],
+  feral: [
+    [
+      'Surge',
+      (w) => {
+        const s = surge(w);
+        return w.surge[s] > w.tick ? 1 : 0;
+      },
+      'less',
+    ],
+    ['spawning', (w) => spawned(w), 'more'],
+  ],
   glass: [
     ['HP', hp(Kind.Dot), 'less'],
     ['damage', damage(Kind.Dot), 'more'],
@@ -453,7 +525,7 @@ const PROBES: Record<string, [string, (w: World) => number, 'more' | 'less'][]> 
 };
 
 /** Probes that need a real map (nests). */
-const NEEDS_MAP = new Set(['saboteur', 'capture', 'supply', 'skirmish', 'arsonist', 'siphon']);
+const NEEDS_MAP = new Set(['saboteur', 'capture', 'supply', 'skirmish', 'arsonist', 'siphon', 'drops', 'old-blood', 'scorched-earth', 'feral']);
 
 function clearUnits(w: World): void {
   for (let i = 0; i < w.n; i++) w.alive[i] = 0;
@@ -488,6 +560,30 @@ function nova(w: World, at: number): number {
   return w.dmg[t];
 }
 
+/** Units your nests spawn in 10 s, from a clear field. */
+function spawned(w: World): number {
+  clearUnits(w);
+  run(w, 300);
+  return w.unitCount[0];
+}
+
+/** Of 12 drops, how many land nearer your capital than the rival's. */
+function dropsNear(w: World): number {
+  const home = (f: number) => w.nests.find((n) => n.owner === f && n.capital)!;
+  const [a, b] = [home(0), home(1)];
+  const ev = w.events!;
+  // You have the bigger army, so the drops' usual pull goes to the rival.
+  for (let k = 0; k < 10; k++) put(w, 0, Kind.Dot, a.x, a.y, true);
+  let near = 0;
+  for (let k = 0; k < 12; k++) {
+    ev.nextDrop = w.tick + 1;
+    run(w, 1);
+    const d = ev.drops[ev.drops.length - 1];
+    if ((d.x - a.x) ** 2 + (d.y - a.y) ** 2 < (d.x - b.x) ** 2 + (d.y - b.y) ** 2) near++;
+  }
+  return near;
+}
+
 /** How hard a Nova throws a nearby enemy outward (negative: pulled in). */
 function novaPush(w: World): number {
   w.factions[0].energy = 100;
@@ -509,7 +605,7 @@ function surge(w: World): number {
 describe('rewards change the sim (#64)', () => {
   it('every reward with a sim effect has a probe', () => {
     const runLevel = ['hunger', 'lone-wolf'];
-    expect(REWARDS.length).toBe(38);
+    expect(REWARDS.length).toBe(43);
     expect(REWARDS.map((r) => r.id).filter((id) => !runLevel.includes(id)).sort()).toEqual(Object.keys(PROBES).sort());
   });
 
@@ -541,9 +637,50 @@ describe('rewards change the sim (#64)', () => {
     expect(worldHash(a)).toBe(worldHash(b));
   });
 
-  it('a match with the behaviour strains and power variants is deterministic', () => {
+  it('Echo leaves ghosts of every kind in a mixed group', () => {
+    const w = arena('echo');
+    w.nests.push(fakeNest({ type: NestType.Swift }));
+    w.factions[0].energy = 100;
+    // Shields first, as a selection might list them.
+    const us = [Kind.Tank, Kind.Tank, Kind.Tank, Kind.Tank, Kind.Dot, Kind.Dot, Kind.Dot, Kind.Dot, Kind.Lancer, Kind.Lancer, Kind.Lancer, Kind.Lancer].map((k, j) => put(w, 0, k, 200 + j * 3, 800));
+    w.grid.build(w);
+    applyCommand(w, { t: 'blink', p: 0, units: us.map((i) => w.uid[i]), x: 600, y: 800 } as never);
+    const kinds = new Set<number>();
+    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.ghost[i]) kinds.add(w.kind[i]);
+    expect([...kinds].sort()).toEqual([Kind.Dot, Kind.Tank, Kind.Lancer].sort());
+  });
+
+  it('Siphon: Lockdown rests until a while after the last lock ends', () => {
+    const w = mapWorld('siphon');
+    const mine = w.nests.find((n) => n.owner === 0)!;
+    mine.type = NestType.Bastion;
+    const [a, b] = w.nests.filter((n) => n.owner === 1);
+    w.factions[0].energy = 100;
+    applyCommand(w, { t: 'lockdown', p: 0, nest: a.id } as never);
+    expect(siphonWait(w, 0)).toBeGreaterThan(0);
+    // A second lock straight after is refused, and costs nothing.
+    const e = w.factions[0].energy;
+    applyCommand(w, { t: 'lockdown', p: 0, nest: (b ?? a).id } as never);
+    expect(w.factions[0].energy).toBe(e);
+    w.tick += siphonWait(w, 0);
+    expect(siphonWait(w, 0)).toBe(0);
+  });
+
+  it('a power ordered for units that are gone costs nothing, in energy or (Blood price) in units', () => {
+    for (const reward of [undefined, 'blood-price']) {
+      const w = arena(reward);
+      w.factions[0].energy = 100;
+      for (let k = 0; k < 8; k++) put(w, 0, Kind.Dot, 800 + k * 3, 800);
+      w.grid.build(w);
+      applyCommand(w, { t: 'surge', p: 0, units: [999999] } as never);
+      expect(w.factions[0].energy).toBe(100);
+      expect(w.unitCount[0]).toBe(8);
+    }
+  });
+
+  it('a match with every behaviour reward is deterministic', () => {
     const mods = modsOf('swarm-call');
-    for (const id of ['spikes', 'phalanx', 'piercing', 'skirmish', 'arsonist', 'scorch', 'implode', 'mend', 'echo', 'thorns', 'siphon']) REWARD[id].apply(mods);
+    for (const id of ['spikes', 'phalanx', 'piercing', 'skirmish', 'arsonist', 'scorch', 'implode', 'mend', 'echo', 'thorns', 'siphon', 'drops', 'old-blood', 'blood-price', 'scorched-earth']) REWARD[id].apply(mods);
     const setup = (): MatchSetup => ({
       seed: 34,
       size: 'small',

@@ -8,7 +8,7 @@ import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
-import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, surgeCost } from '../sim/commands';
+import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, surgeCost } from '../sim/commands';
 import { inArmy, type Nest, type World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
@@ -845,7 +845,7 @@ export class GameView {
   surge(): void {
     if (this.blocked('surge')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Surge', '#9aa4c7');
-    if (this.world.factions[this.human].energy < surgeCost(this.world, this.human)) return this.s.sfx.fail();
+    if (this.short(surgeCost(this.world, this.human))) return this.s.sfx.fail();
     this.session.issue({ t: 'surge', p: this.human, units: [...this.selection.units] });
   }
 
@@ -856,7 +856,7 @@ export class GameView {
       return this.s.toast('Nova only hits around your selected dots: wait until the enemy reaches them', '#ffd166');
     }
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');
-    if (this.world.factions[this.human].energy < POWER.novaCost) return this.s.sfx.fail();
+    if (this.short(POWER.novaCost)) return this.s.sfx.fail();
     this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
   }
 
@@ -889,11 +889,17 @@ export class GameView {
       this.s.toast(`Hold a ${NEST_NAMES[POWER_NEST[power]]} to use this`, '#9aa4c7');
       return false;
     }
-    if (this.world.factions[this.human].energy < cost) {
+    if (this.short(cost)) {
       this.s.sfx.fail();
       return false;
     }
     return true;
+  }
+
+  /** Can't pay for a power? Feral (#60) has none; under Blood price (#60) the sim checks the units it costs instead. */
+  private short(cost: number): boolean {
+    const f = this.world.factions[this.human];
+    return f.mods.noPowers || (!f.mods.bloodPrice && f.energy < cost);
   }
 
   fortify(): void {
@@ -925,6 +931,8 @@ export class GameView {
         return this.s.toast('Lockdown needs an enemy nest under the cursor', '#9aa4c7');
       }
       if (!this.power('lockdown', POWER.lockdownCost)) return;
+      const rest = siphonWait(this.world, this.human);
+      if (rest > 0) return this.s.toast(`Siphon: Lockdown is ready again in ${Math.ceil(rest / TICK_HZ)} s`, '#9aa4c7');
       this.session.issue({ t: 'lockdown', p: this.human, nest: n.id });
     }
   }
