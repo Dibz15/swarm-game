@@ -73,8 +73,12 @@ void main(){
     float he = hexEdge(w / HEX, hid);
     float hexOn = smoothstep(HEX / 5.0, HEX / 9.0, px);
     float lattice = (1.0 - smoothstep(0.0, px * 1.4 / HEX + 0.02, he)) * hexOn;
-    float sweep = 0.5 + 0.5 * sin(dot(w, vec2(0.012, 0.007)) - u_time * 1.6);
-    float bands = smoothstep(0.75, 1.0, sweep);
+    // Ripples, not straight bands: the sweep's phase is bent by slow noise,
+    // so the fronts curve and break up, and they're soft and faint.
+    float bend = vnoise(w * 0.0035 + vec2(u_time * 0.02, 0.0)) * 9.0 + vnoise(w * 0.009 - vec2(0.0, u_time * 0.03)) * 3.0;
+    float sweep = 0.5 + 0.5 * sin(dot(w, vec2(0.006, 0.0035)) + bend - u_time * 0.9);
+    float bands = smoothstep(0.55, 1.0, sweep);
+    bands *= bands * 0.6;
     float shimmer = vnoise(w * 0.006 + vec2(u_time * 0.07, -u_time * 0.05));
     float flick = 0.6 + 0.4 * sin(u_time * 2.3 + hash(hid) * 6.2832);
     float rimGlow = exp(-depth / 16.0);
