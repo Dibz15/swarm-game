@@ -23,6 +23,16 @@ float vnoise(vec2 p){
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
 }
+// Distance from p to the nearest hex cell edge (cells 1 unit across the flats), and the cell's id.
+float hexEdge(vec2 p, out vec2 id){
+  const vec2 s = vec2(1.0, 1.7320508);
+  vec4 hc = floor(vec4(p, p - vec2(0.5, 1.0)) / s.xyxy) + 0.5;
+  vec4 h = vec4(p - hc.xy * s, p - (hc.zw + 0.5) * s);
+  bool a = dot(h.xy, h.xy) < dot(h.zw, h.zw);
+  vec2 q = abs(a ? h.xy : h.zw);
+  id = a ? hc.xy : hc.zw + 0.5;
+  return 0.5 - max(dot(q, s * 0.5), q.x);
+}
 float gridLine(vec2 w, float step, float px){
   vec2 g = abs(fract(w / step - 0.5) - 0.5) * step / px;
   return 1.0 - min(min(g.x, g.y), 1.0);
@@ -47,17 +57,33 @@ void main(){
     vec4 t = texture(u_ter, w * u_texel.xy + u_texel.zw);
     float wd = t.r * 64.0 - 24.0;
     float neb = t.g;
-    float rd = t.b * 32.0 - 16.0;
+    float rd = t.b * 64.0 - 48.0;
     float n1 = vnoise(w * 0.011 + vec2(u_time * 0.025, 0.0));
     float n2 = vnoise(w * 0.029 - vec2(0.0, u_time * 0.04));
     // Nebula: drifting violet haze.
     col += vec3(0.15, 0.07, 0.28) * neb * (0.35 + 0.5 * n1 + 0.3 * n2);
     col += vec3(0.30, 0.20, 0.55) * neb * smoothstep(0.82, 0.95, n2) * 0.25;
-    // Rift: a glowing red seam with embers flowing along it.
+    // Rift: a red energy shield. A see-through field with a crisp bright
+    // rim, a faint hex lattice, slow light bands sweeping across it and a
+    // glow that's strongest near the rim (#98).
     float rin = 1.0 - smoothstep(-px, px, rd);
-    float flow = vnoise(vec2(w.x * 0.05 + u_time * 1.2, w.y * 0.05 - u_time * 0.8));
-    col = mix(col, vec3(0.10, 0.012, 0.025), rin * 0.85);
-    col += vec3(0.85, 0.14, 0.10) * (rin * (0.12 + 0.45 * flow * flow) + exp(-abs(rd) / (px * 2.0 + 1.2)) * 0.55);
+    float depth = max(-rd, 0.0);
+    vec2 hid;
+    const float HEX = 26.0;
+    float he = hexEdge(w / HEX, hid);
+    float hexOn = smoothstep(HEX / 5.0, HEX / 9.0, px);
+    float lattice = (1.0 - smoothstep(0.0, px * 1.4 / HEX + 0.02, he)) * hexOn;
+    float sweep = 0.5 + 0.5 * sin(dot(w, vec2(0.012, 0.007)) - u_time * 1.6);
+    float bands = smoothstep(0.75, 1.0, sweep);
+    float shimmer = vnoise(w * 0.006 + vec2(u_time * 0.07, -u_time * 0.05));
+    float flick = 0.6 + 0.4 * sin(u_time * 2.3 + hash(hid) * 6.2832);
+    float rimGlow = exp(-depth / 16.0);
+    vec3 shield = vec3(0.20, 0.015, 0.03) * (0.75 + 0.5 * shimmer)
+      + vec3(1.0, 0.22, 0.18) * (lattice * (0.10 + 0.25 * bands) * flick + bands * 0.06 + rimGlow * 0.22);
+    col = mix(col, col * 0.45 + shield, rin);
+    // The rim itself: a hot thin line with a soft halo outside.
+    col += vec3(1.0, 0.30, 0.24) * exp(-abs(rd) / (px * 1.1 + 0.5)) * 0.9;
+    col += vec3(0.65, 0.08, 0.08) * exp(-max(rd, 0.0) / 7.0) * (1.0 - rin) * 0.35;
     // Walls: dark slate rock, hatched, with a beveled cool rim and a drop shadow.
     float win = 1.0 - smoothstep(-px, px, wd);
     col *= 1.0 - 0.45 * exp(-max(wd, 0.0) / 9.0) * (1.0 - win);
