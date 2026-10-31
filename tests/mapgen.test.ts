@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NEST_RADIUS } from '../src/sim/constants';
-import { Terrain, capsuleDist } from '../src/sim/terrain';
-import { expansionSpread, generateMap, MAP_FORMS, MAP_LAYOUTS, type MapForm, type MapSize } from '../src/sim/mapgen';
+import { Terrain, capsuleDist, segDist2, type FieldSpec } from '../src/sim/terrain';
+import { expansionSpread, generateMap, groundHeight, MAP_FORMS, MAP_LAYOUTS, type MapForm, type MapSize, type MapSpec } from '../src/sim/mapgen';
 import { fbm, ridged, vnoise } from '../src/sim/mathx';
 
 describe('map layouts (#38)', () => {
@@ -222,7 +222,8 @@ describe('noise terrain (#98)', () => {
     }
     const c = generateMap({ seed: 600, size: 'medium', players: 2, form: 'islands', caves: 'full', terrain: 'standard' });
     expect(c.terrain.cave).toBeTruthy();
-    expect(c.terrain.fields.filter((f) => f.kind === 'rift').length).toBeLessThan(10);
+    // A couple of shaped rifts (a few capsules each, #114), not a sea.
+    expect(c.terrain.fields.filter((f) => f.kind === 'rift').length).toBeLessThan(30);
   });
 
   it('warrens spread their nests out through the caverns, not just the middle', () => {
@@ -252,3 +253,144 @@ describe('noise terrain (#98)', () => {
   });
 });
 
+/** Fields that touch, grouped: one feature each (a rift chain, a nebula cloud). */
+function features(fs: FieldSpec[]): FieldSpec[][] {
+  const root = fs.map((_, i) => i);
+  const find = (i: number): number => (root[i] === i ? i : (root[i] = find(root[i])));
+  for (let i = 0; i < fs.length; i++) {
+    for (let j = i + 1; j < fs.length; j++) {
+      const a = fs[i], b = fs[j];
+      const d2 = Math.min(segDist2(a.x1, a.y1, b.x1, b.y1, b.x2, b.y2), segDist2(a.x2, a.y2, b.x1, b.y1, b.x2, b.y2), segDist2(b.x1, b.y1, a.x1, a.y1, a.x2, a.y2), segDist2(b.x2, b.y2, a.x1, a.y1, a.x2, a.y2));
+      if (d2 < (a.r + b.r) ** 2) root[find(i)] = find(j);
+    }
+  }
+  const groups = new Map<number, FieldSpec[]>();
+  fs.forEach((f, i) => groups.set(find(i), [...(groups.get(find(i)) ?? []), f]));
+  return [...groups.values()];
+}
+
+/** The walking lines from every nest to its two nearest, on the ground alone. */
+function routes(m: MapSpec): number[][] {
+  const t = new Terrain({ ...m.terrain, fields: [] }, m.width, m.height);
+  return m.nests.flatMap((a, i) =>
+    m.nests
+      .map((b, j) => ({ j, d: (a.x - b.x) ** 2 + (a.y - b.y) ** 2 }))
+      .filter((o) => o.j !== i)
+      .sort((p, q) => p.d - q.d)
+      .slice(0, 2)
+      .map(({ j }) => t.trace(a.x, a.y, m.nests[j].x, m.nests[j].y, 0)),
+  );
+}
+
+describe('feature placement (#114)', () => {
+  it("every start's walk to its nearest crystal is about as long", () => {
+    const spreads: number[] = [];
+    for (const players of [2, 3, 4]) {
+      for (const size of ['small', 'medium', 'large'] as MapSize[]) {
+        for (let s = 0; s < 12; s++) {
+          const m = generateMap({ seed: 900 + s, size, players, terrain: 'standard' });
+          // The middle one is everyone's, as far as the shape puts it.
+          const own = m.terrain.crystals.filter((c) => c.x !== m.width / 2 || c.y !== m.height / 2);
+          expect(own.length, `${s} ${size} ${players}p`).toBeGreaterThanOrEqual(players);
+          const t = new Terrain({ ...m.terrain, fields: [] }, m.width, m.height);
+          const d = m.nests.slice(0, players).map((n) => Math.min(...own.map((c) => t.pathDist(c.x, c.y, n.x, n.y, 0))));
+          spreads.push(Math.max(...d) / Math.min(...d));
+        }
+      }
+    }
+    spreads.sort((a, b) => a - b);
+    expect(spreads[Math.floor(spreads.length / 2)]).toBeLessThan(1.1);
+    expect(spreads[Math.floor(spreads.length * 0.9)]).toBeLessThan(1.25);
+    expect(spreads[spreads.length - 1]).toBeLessThan(1.7);
+  });
+
+  it('sparse maps have fewer, richer crystals; dense ones a contested and a safe one each', () => {
+    let sparse = 0, dense = 0;
+    for (let s = 0; s < 40; s++) {
+      const m = generateMap({ seed: s, size: 'medium', players: 3, form: 'classic', terrain: 'standard' });
+      const own = m.terrain.crystals.filter((c) => c.x !== m.width / 2 || c.y !== m.height / 2);
+      if (m.density! < 0.35) {
+        sparse++;
+        expect(own.length).toBe(3);
+        for (const c of own) expect(c.value).toBe(1.5);
+      } else if (m.density! > 0.6 && own.length === 6) {
+        dense++;
+        for (const c of own) expect(c.value).toBe(0.75);
+      }
+    }
+    expect(sparse).toBeGreaterThan(3);
+    expect(dense).toBeGreaterThan(3);
+  });
+
+  it('many rifts and most nebula lie across the walking lines between nests', () => {
+    // On scattered rock: noise maps put some nebula in the valleys instead (tested below).
+    const on = { nebula: [0, 0], rift: [0, 0] };
+    for (const fill of ['sprinkle'] as const) {
+      for (const players of [2, 3, 4]) {
+        for (let s = 0; s < 10; s++) {
+          const m = generateMap({ seed: 700 + s, size: 'medium', players, form: 'classic', fill, terrain: 'standard' });
+          const lines = routes(m);
+          for (const kind of ['nebula', 'rift'] as const) {
+            for (const f of features(m.terrain.fields.filter((o) => o.kind === kind))) {
+              on[kind][1]++;
+              // Across a route: its core on the line, not just grazing it.
+              if (f.some((c) => lines.some((p) => p.some((_, k) => k % 2 === 0 && capsuleDist(c, p[k], p[k + 1]) < c.r * 0.5)))) on[kind][0]++;
+            }
+          }
+        }
+      }
+    }
+    // Placed at random (before #114) these seeds gave nebula 0.63 and rifts 0.26; now 0.73 and 0.39.
+    expect(on.nebula[0] / on.nebula[1]).toBeGreaterThan(0.68);
+    expect(on.rift[0] / on.rift[1]).toBeGreaterThan(0.33);
+  });
+
+  it('noise and warrens maps put nebula in the valleys and crystals on high ground', () => {
+    for (const form of ['classic', 'warrens'] as const) {
+      let lower = 0, maps = 0;
+      for (const players of [2, 3]) {
+        for (let s = 0; s < 8; s++) {
+          const m = generateMap({ seed: 800 + s, size: 'medium', players, form, fill: form === 'classic' ? 'noise' : undefined, terrain: 'standard' });
+          const H = groundHeight.get(m.terrain)!;
+          const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length;
+          const neb = m.terrain.fields.filter((f) => f.kind === 'nebula').map((f) => H(f.x1, f.y1)).filter((v) => v >= 0);
+          const cry = m.terrain.crystals.filter((c) => c.x !== m.width / 2 || c.y !== m.height / 2).map((c) => H(c.x, c.y)).filter((v) => v >= 0);
+          if (!neb.length || !cry.length) continue;
+          maps++;
+          if (mean(neb) < mean(cry)) lower++;
+        }
+      }
+      expect(lower / maps, form).toBeGreaterThan(0.85);
+    }
+  });
+
+  it('rifts come in shapes: curves, forks and pools, not just straight strips', () => {
+    let curves = 0, forks = 0, pools = 0;
+    for (let s = 0; s < 20; s++) {
+      const m = generateMap({ seed: 40 + s, size: 'medium', players: 2, form: 'classic', fill: 'sprinkle', terrain: 'heavy' });
+      for (const f of features(m.terrain.fields.filter((o) => o.kind === 'rift'))) {
+        if (f.some((c) => c.r > 16)) pools++;
+        else if (f.length >= 6) forks++;
+        else if (f.length >= 3) {
+          // Bent: the pieces don't all point the same way.
+          const dir = f.map((c) => [c.x2 - c.x1, c.y2 - c.y1].map((v) => v / Math.max(1e-6, Math.sqrt((c.x2 - c.x1) ** 2 + (c.y2 - c.y1) ** 2))));
+          if (dir.some(([x, y]) => Math.abs(x * dir[0][0] + y * dir[0][1]) < 0.97)) curves++;
+        }
+      }
+    }
+    expect(curves).toBeGreaterThan(3);
+    expect(forks).toBeGreaterThan(0);
+    expect(pools).toBeGreaterThan(0);
+  });
+
+  it('no rift is ever the only way: treated as rock, the nests still connect, on every form', () => {
+    for (const form of MAP_FORMS) {
+      for (const players of [2, 3, 4]) {
+        const m = generateMap({ seed: 60 + players, size: 'medium', players, form, terrain: 'heavy' });
+        const rifts = m.terrain.fields.filter((f) => f.kind === 'rift');
+        const dry = new Terrain({ ...m.terrain, walls: [...m.terrain.walls, ...rifts], fields: [] }, m.width, m.height);
+        expect(dry.connected(m.nests.map((n) => [n.x, n.y])), `${form} ${players}p`).toBe(true);
+      }
+    }
+  });
+});

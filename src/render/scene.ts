@@ -50,10 +50,11 @@ function drawCrystals(r: Renderer, w: World, o: SceneOpts): void {
     // Zone ring: dim when free, the holder's color while charging.
     r.shape(false, c.x, c.y, c.r, 0, 1, 0, 0.025, col, held ? Math.round(110 + 70 * pulse) : 55);
     r.shape(false, c.x, c.y, c.r, 7, 1, 0, 0, col, held ? 22 : 10);
-    // Core: a slow hex with shards orbiting it.
+    // Core: a slow hex with shards orbiting it, more of them the more it pays (#114).
     r.shape(false, c.x, c.y, 9, 1, 0, o.time * 0.6 + k, 0.6, col, 230);
-    for (let s = 0; s < 3; s++) {
-      const a = o.time * (held ? 1.6 : 0.5) + (s * Math.PI * 2) / 3 + k;
+    const shards = c.value > 1 ? 4 : c.value < 1 ? 2 : 3;
+    for (let s = 0; s < shards; s++) {
+      const a = o.time * (held ? 1.6 : 0.5) + (s * Math.PI * 2) / shards + k;
       const d = 14 + 2 * Math.sin(o.time * 2 + s);
       r.unit(c.x + Math.cos(a) * d, c.y + Math.sin(a) * d, 4.2, col[0], col[1], col[2], 235, 2, a + Math.PI / 2);
     }

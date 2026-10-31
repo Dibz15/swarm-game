@@ -106,6 +106,17 @@ describe('fields', () => {
     for (let t = 0; t < 8; t++) step(w, []);
     expect(w.crystals[0].holder).toBe(-1);
   });
+
+  it("a crystal's value scales what it pays (#114)", () => {
+    const gain = (value?: number) => {
+      const w = walled({ walls: [], crystals: [{ x: 400, y: 250, r: 30, value }] });
+      spawnUnit(w, 0, Kind.Tank, 400, 250, 400, 250, 2);
+      spawnUnit(w, 1, Kind.Dot, 790, 490, 790, 490, 2);
+      for (let t = 0; t < 2 * TICK_HZ; t++) step(w, []);
+      return w.factions[0].energy - w.factions[1].energy;
+    };
+    expect(gain(1.5) / gain()).toBeCloseTo(1.5, 1);
+  });
 });
 
 describe('terrain mapgen', () => {
