@@ -62,9 +62,10 @@ describe('cave mapgen', () => {
   });
 
   it('caves do not reshuffle the nests', () => {
-    // Cave forms never move nests; open forms like ring and river can, so compare with classic.
+    // Cave forms never move nests; open forms like ring and river can, so
+    // compare with classic. (Islands and warrens place their own nests.)
     const a = generateMap({ seed: 31, size: 'large', players: 4, form: 'classic' });
-    for (const form of ['caves', 'regions', 'islands'] as const) expect(generateMap({ seed: 31, size: 'large', players: 4, caves: 'full', form }).nests).toEqual(a.nests);
+    for (const form of ['caves', 'regions'] as const) expect(generateMap({ seed: 31, size: 'large', players: 4, caves: 'full', form }).nests).toEqual(a.nests);
     const b = generateMap({ seed: 31, size: 'large', players: 4, caves: 'full', form: 'caves' });
     expect(b.nests).toEqual(a.nests);
   });

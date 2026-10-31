@@ -1,12 +1,14 @@
 import { FACTION_HEX } from '../content/factions';
 import { CAVE_LEVELS, generateMap, MAP_FORMS, type CaveLevel, type MapForm, type MapSize } from '../sim/mapgen';
+import type { MatchSetup } from '../sim/setup';
 import { drawBattleMap } from './runmapfx';
 
 /**
  * Dev grid (`?maps`): 24 generated maps side by side at their true shape, to
- * review how varied they come out (#98): aspect, density, layout, form.
+ * review how varied they come out (#98): aspect, density, layout, form. Click
+ * one to play it against Normal bots.
  */
-export function mapGrid(): HTMLDivElement {
+export function mapGrid(play: (setup: MatchSetup) => void): HTMLDivElement {
   const root = document.createElement('div');
   root.className = 'creature-grid fortress-grid';
   let base = 0;
@@ -49,8 +51,21 @@ export function mapGrid(): HTMLDivElement {
       }
       cell.appendChild(cv);
       const cap = document.createElement('figcaption');
-      cap.textContent = `${seed} · ${m.form}${m.topology && m.form !== 'caves' ? ` (${m.topology})` : ''} · ${m.layout} · ${m.aspect!.toFixed(1)}:1 · density ${m.density!.toFixed(2)} · ${m.nests.length} nests`;
+      cap.textContent = `${seed} · ${m.form}${m.topology && m.form !== 'caves' ? ` (${m.topology})` : ''}${m.fill === 'noise' ? ' + noise' : ''} · ${m.layout} · ${m.aspect!.toFixed(1)}:1 · density ${m.density!.toFixed(2)} · ${m.nests.length} nests`;
       cell.appendChild(cap);
+      cell.style.cursor = 'pointer';
+      cell.title = 'Play this map';
+      cell.addEventListener('click', () =>
+        play({
+          seed,
+          size,
+          terrain: 'standard',
+          caves,
+          form,
+          events: 'calm',
+          players: Array.from({ length: players }, (_, k) => (k === 0 ? { faction: 0, team: 0, human: true } : { faction: k, team: k, human: false, bot: { difficulty: 1, personality: 'expander' } })),
+        }),
+      );
       grid.appendChild(cell);
     }
     root.querySelector('[data-a=reroll]')!.addEventListener('click', () => {
