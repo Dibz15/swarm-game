@@ -32,7 +32,7 @@ describe('cave mapgen', () => {
 
   it('full caves are mostly rock; the belt leaves the rim open', () => {
     const share = (caves: CaveLevel) => {
-      const m = generateMap({ seed: 5, size: 'medium', players: 4, caves });
+      const m = generateMap({ seed: 5, size: 'medium', players: 4, caves, form: caves === 'full' ? 'caves' : 'classic' });
       const t = new Terrain(m.terrain, m.width, m.height);
       let rock = 0, n = 0;
       for (let y = 8; y < m.height; y += 16) for (let x = 8; x < m.width; x += 16, n++) if (t.rockDist(x, y) < 0) rock++;
@@ -62,8 +62,10 @@ describe('cave mapgen', () => {
   });
 
   it('caves do not reshuffle the nests', () => {
-    const a = generateMap({ seed: 31, size: 'large', players: 4 });
-    const b = generateMap({ seed: 31, size: 'large', players: 4, caves: 'full' });
+    // Cave forms never move nests; open forms like ring and river can, so compare with classic.
+    const a = generateMap({ seed: 31, size: 'large', players: 4, form: 'classic' });
+    for (const form of ['caves', 'regions', 'islands'] as const) expect(generateMap({ seed: 31, size: 'large', players: 4, caves: 'full', form }).nests).toEqual(a.nests);
+    const b = generateMap({ seed: 31, size: 'large', players: 4, caves: 'full', form: 'caves' });
     expect(b.nests).toEqual(a.nests);
   });
 });

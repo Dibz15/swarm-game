@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NEST_RADIUS } from '../src/sim/constants';
 import { Terrain } from '../src/sim/terrain';
-import { expansionSpread, generateMap, MAP_LAYOUTS, type MapSize } from '../src/sim/mapgen';
+import { expansionSpread, generateMap, MAP_FORMS, MAP_LAYOUTS, type MapForm, type MapSize } from '../src/sim/mapgen';
 
 describe('map layouts (#38)', () => {
   it('every layout keeps nests apart, on the map, and reachable, with terrain and caves', () => {
@@ -92,8 +92,57 @@ describe('map layouts (#38)', () => {
   });
 
   it('open-center maps put a crystal in the middle when the map has crystals', () => {
-    const m = generateMap({ seed: 3, size: 'medium', players: 4, layout: 'open', terrain: 'standard' });
+    const m = generateMap({ seed: 3, size: 'medium', players: 4, layout: 'open', terrain: 'standard', form: 'classic' });
     expect(m.nests.some((n) => n.x === m.width / 2 && n.y === m.height / 2)).toBe(false);
     expect(m.terrain.crystals.some((c) => c.x === m.width / 2 && c.y === m.height / 2)).toBe(true);
+  });
+});
+
+describe('map forms (#98)', () => {
+  it('every form keeps nests apart, clear of walls, reachable, and fair, at every player count', () => {
+    for (const form of MAP_FORMS) {
+      for (const size of ['small', 'medium', 'large'] as MapSize[]) {
+        for (const players of [2, 3, 5]) {
+          for (const alt of [0, 1, 2]) {
+            const m = generateMap({ seed: 70 + players + alt * 131, size, players, form, terrain: 'standard' });
+            expect(m.form).toBe(form);
+            const t = new Terrain(m.terrain, m.width, m.height);
+            expect(t.connected(m.nests.map((n) => [n.x, n.y])), `${form} ${size} ${players}p alt ${alt}`).toBe(true);
+            for (const n of m.nests) {
+              expect(t.clearance(n.x, n.y)).toBeGreaterThan(NEST_RADIUS[n.type]);
+              for (const o of m.nests) if (o !== n) expect((n.x - o.x) ** 2 + (n.y - o.y) ** 2).toBeGreaterThan(60 * 60);
+            }
+            expect(m.nests.length % players).toBeLessThanOrEqual(1);
+            if (players > 2) expect(expansionSpread(m.nests, players)).toBeLessThan(1.35);
+          }
+        }
+      }
+    }
+  });
+
+  it('the seed picks a form that suits the map: open forms on open ground, cave forms in full caves', () => {
+    const seen = (caves: 'off' | 'full') => {
+      const out = new Set<MapForm>();
+      for (let s = 0; s < 120; s++) out.add(generateMap({ seed: s, size: 'medium', players: 2, terrain: 'standard', caves }).form!);
+      return [...out].sort();
+    };
+    expect(seen('off')).toEqual(['classic', 'river', 'ring', 'spiral'].sort());
+    expect(seen('full')).toEqual(['caves', 'islands', 'regions'].sort());
+    // No terrain at all: nothing to build a ring or river from.
+    for (let s = 0; s < 40; s++) expect(['classic', 'spiral']).toContain(generateMap({ seed: s, size: 'medium', players: 2 }).form);
+  });
+
+  it('regions come in every topology', () => {
+    const tops = new Set<string>();
+    for (let s = 0; s < 60; s++) tops.add(generateMap({ seed: s, size: 'medium', players: 3, form: 'regions' }).topology!);
+    expect([...tops].sort()).toEqual(['chain', 'hub', 'ring', 'tree']);
+  });
+
+  it('a ring keeps its middle empty', () => {
+    for (let s = 0; s < 20; s++) {
+      const m = generateMap({ seed: s, size: 'medium', players: 3, form: 'ring', terrain: 'standard' });
+      const t = new Terrain(m.terrain, m.width, m.height);
+      expect(t.clearance(m.width / 2, m.height / 2) < 0 || m.terrain.fields.some((f) => f.x1 === m.width / 2 && f.y1 === m.height / 2)).toBe(true);
+    }
   });
 });
