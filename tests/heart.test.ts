@@ -178,9 +178,10 @@ describe('the finale', () => {
 
   // A sanity check, not tuning (#68): the human proxy, in the real finale
   // (rivals and warlords and all), can kill the heart at low and high strength
-  // on some seed. Stops at the first win.
+  // on some seed. Stops at the first win. Strong hearts are rarely beaten
+  // (about 3 seeds in 20 at strength 10), hence the long seed list.
   it.each([0, 10])('the heart can be beaten at strength %i', (strength) => {
-    const win = [0, 1, 2, 3, 4, 5].find((seed) => {
+    const win = Array.from({ length: 16 }, (_, k) => k).find((seed) => {
       const { run, setup } = finale(seed, strength);
       const w = createWorld(setup);
       const proxy = new Proxy(run.color, { skill: 1 });

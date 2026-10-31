@@ -117,7 +117,7 @@ class App {
     else if (q.has('eventdemo')) this.startEventDemo();
     else if (q.has('creatures')) this.setScreen(creatureGrid());
     else if (q.has('fortress')) this.setScreen(fortressGrid());
-    else if (q.has('maps')) this.setScreen(mapGrid());
+    else if (q.has('maps')) this.setScreen(mapGrid((setup) => this.startGame(setup, { scenario: 'maps (dev)' })));
     else if (q.has('heart')) this.startHeartDemo(Number(q.get('heart')) || 0);
     else if (q.has('playtest')) this.showPlaytests();
     else this.showMenu();

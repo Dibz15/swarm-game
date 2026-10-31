@@ -37,6 +37,8 @@ export interface CrystalSpec {
 export interface CaveSpec {
   carves: Capsule[];
   zone: Capsule[] | null;
+  /** rock laid over everything after the carving: open ground mapgen found nobody could reach (#98) */
+  fill?: Capsule[];
 }
 
 export interface TerrainSpec {
@@ -101,6 +103,8 @@ export interface RockGrid {
 }
 
 const rockCache = new WeakMap<CaveSpec, RockGrid>();
+/** A cave's rock-zone distances, kept by the zone itself: caves that only differ in their carves share it. */
+const zoneCache = new WeakMap<Capsule[], { cols: number; rows: number; d: Float32Array }>();
 
 /** Min signed capsule distance per grid point, within ROCK_PAD of each capsule. */
 function unionDist(caps: Capsule[], cols: number, rows: number): Float32Array {
@@ -128,11 +132,20 @@ export function rockGrid(cave: CaveSpec, width: number, height: number): RockGri
   if (hit) return hit;
   const cols = Math.ceil(width / ROCK_RES) + 1, rows = Math.ceil(height / ROCK_RES) + 1;
   const open = unionDist(cave.carves, cols, rows);
-  const zone = cave.zone ? unionDist(cave.zone, cols, rows) : null;
+  let zone: Float32Array | null = null;
+  if (cave.zone) {
+    const z = zoneCache.get(cave.zone);
+    zone = z && z.cols === cols && z.rows === rows ? z.d : unionDist(cave.zone, cols, rows);
+    zoneCache.set(cave.zone, { cols, rows, d: zone });
+  }
   // Rock = zone minus carves. Its signed distance (negative inside rock) is
   // the max of the zone's and the carves' inverted one: positive in the open.
   const d = new Float32Array(cols * rows);
   for (let k = 0; k < d.length; k++) d[k] = Math.max(zone ? zone[k] : -ROCK_PAD, -open[k]);
+  if (cave.fill?.length) {
+    const fill = unionDist(cave.fill, cols, rows);
+    for (let k = 0; k < d.length; k++) if (fill[k] < d[k]) d[k] = fill[k];
+  }
   const g = { cols, rows, d };
   rockCache.set(cave, g);
   return g;
@@ -642,12 +655,11 @@ export class Terrain {
     return f.dist[t] !== UNREACHED ? t : this.nearestFree(t);
   }
 
-  /** Is every listed point reachable from the first? (mapgen validation) */
-  connected(points: readonly [number, number][]): boolean {
-    if (points.length < 2) return true;
+  /** Tiles a walker can reach from (x, y), 4-connected. */
+  private reach(x: number, y: number): Uint8Array {
     const n = this.cols * this.rows;
     const seen = new Uint8Array(n);
-    const start = this.nearestFree(this.tileOf(points[0][0], points[0][1]));
+    const start = this.nearestFree(this.tileOf(x, y));
     const queue = new Int32Array(n);
     let head = 0, tail = 0;
     queue[tail++] = start;
@@ -664,10 +676,40 @@ export class Terrain {
         queue[tail++] = v;
       }
     }
+    return seen;
+  }
+
+  /** Is every listed point reachable from the first? (mapgen validation) */
+  connected(points: readonly [number, number][]): boolean {
+    if (points.length < 2) return true;
+    const seen = this.reach(points[0][0], points[0][1]);
     for (const [x, y] of points) {
       const t = this.tileOf(x, y);
       if (this.flags[t] & T_BLOCK || !seen[t]) return false;
     }
     return true;
+  }
+
+  /**
+   * Open ground nobody can walk to from (x, y), as runs of tiles along each
+   * row: [x1, x2, y] tile centers, px. For mapgen to fill in (#98).
+   */
+  cutOff(x: number, y: number): [number, number, number][] {
+    const seen = this.reach(x, y);
+    const out: [number, number, number][] = [];
+    for (let ty = 0; ty < this.rows; ty++) {
+      for (let tx = 0; tx < this.cols; ) {
+        const k = ty * this.cols + tx;
+        if (seen[k] || this.flags[k] & T_BLOCK) {
+          tx++;
+          continue;
+        }
+        let e = tx;
+        while (e + 1 < this.cols && !seen[k + e + 1 - tx] && !(this.flags[k + e + 1 - tx] & T_BLOCK)) e++;
+        out.push([(tx + 0.5) * TILE, (e + 0.5) * TILE, (ty + 0.5) * TILE]);
+        tx = e + 1;
+      }
+    }
+    return out;
   }
 }
