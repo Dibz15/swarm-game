@@ -10,11 +10,11 @@ const asciiSeed = process.argv[4];
 
 for (const size of Object.keys(MAP_SIZES) as MapSize[]) {
   for (const players of [2, 3, 4, 6]) {
-    for (const portrait of [false, true]) {
+    {
       let walls = 0, neb = 0, rift = 0, crys = 0, bad = 0, ms = 0, blocked = 0;
       for (let s = 0; s < seeds; s++) {
         const t0 = performance.now();
-        const m = generateMap({ seed: 5000 + s, size, players, portrait, terrain: preset });
+        const m = generateMap({ seed: 5000 + s, size, players, terrain: preset });
         const tr = new Terrain(m.terrain, m.width, m.height);
         ms += performance.now() - t0;
         walls += m.terrain.walls.length;
@@ -27,7 +27,7 @@ for (const size of Object.keys(MAP_SIZES) as MapSize[]) {
         blocked += b / tr.flags.length;
       }
       console.log(
-        `${size.padEnd(6)} ${players}p ${portrait ? 'tall' : 'wide'}: walls ${(walls / seeds).toFixed(1)}, nebula ${(neb / seeds).toFixed(1)}, rifts ${(rift / seeds).toFixed(1)}, crystals ${(crys / seeds).toFixed(1)}, blocked ${((100 * blocked) / seeds).toFixed(1)}%, disconnected ${bad}, gen ${(ms / seeds).toFixed(1)} ms`,
+        `${size.padEnd(6)} ${players}p: walls ${(walls / seeds).toFixed(1)}, nebula ${(neb / seeds).toFixed(1)}, rifts ${(rift / seeds).toFixed(1)}, crystals ${(crys / seeds).toFixed(1)}, blocked ${((100 * blocked) / seeds).toFixed(1)}%, disconnected ${bad}, gen ${(ms / seeds).toFixed(1)} ms`,
       );
     }
   }

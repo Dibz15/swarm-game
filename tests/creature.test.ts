@@ -104,7 +104,7 @@ describe('rival portraits', () => {
     const run = newRun('creatures', 0, 'swarm', 0);
     for (const n of run.nodes.filter((n) => n.kind !== 'start')) {
       const rs = rivals(run, n.id);
-      const bots = nodeSetup(run, n.id, false).players.filter((p) => p.bot);
+      const bots = nodeSetup(run, n.id).players.filter((p) => p.bot);
       expect(rs.map((r) => r.faction)).toEqual(bots.map((p) => p.faction));
       expect(rs.map((r) => r.personality)).toEqual(bots.map((p) => p.bot!.personality));
       // A warlord keeps its own face (tier 3) all run.

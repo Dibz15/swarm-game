@@ -93,7 +93,8 @@ export class GameView {
       const rec = this.rec;
       this.session.onIssue = (c) => rec.order(this.world, c);
     }
-    s.camera.setMap(this.world.width, this.world.height);
+    // The camera turns the map so your start is bottom or left (#98).
+    s.camera.setMap(this.world.width, this.world.height, this.human >= 0 ? this.homePoint() : null);
     s.camera.fit();
     s.particles.clear();
     s.rings.list = [];
@@ -761,9 +762,10 @@ export class GameView {
   /** Every own unit of `kind` currently on screen. */
   selectKindOnScreen(kind: number): void {
     const cam = this.s.camera;
-    const [x0, y0] = cam.toWorld(0, 0);
-    const [x1, y1] = cam.toWorld(cam.viewW, cam.viewH);
-    this.selectKindIn(kind, x0, y0, x1, y1);
+    // On a turned view the corners swap, so sort them.
+    const [ax, ay] = cam.toWorld(0, 0);
+    const [bx, by] = cam.toWorld(cam.viewW, cam.viewH);
+    this.selectKindIn(kind, Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by));
   }
 
   /** Own unit kind under a world point, or -1. */

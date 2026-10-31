@@ -109,12 +109,12 @@ describe('fields', () => {
 });
 
 describe('terrain mapgen', () => {
-  it('keeps every nest reachable and clear of walls, on all sizes and in portrait', () => {
+  it('keeps every nest reachable and clear of walls, on all sizes and shapes', () => {
     for (const size of ['small', 'medium', 'large'] as MapSize[]) {
       for (const players of [2, 3, 5]) {
-        for (const portrait of [false, true]) {
+        for (const alt of [0, 1]) {
           for (let s = 0; s < 4; s++) {
-            const m = generateMap({ seed: 900 + s, size, players, portrait, terrain: 'heavy' });
+            const m = generateMap({ seed: 900 + s + alt * 97, size, players, terrain: 'heavy' });
             const t = new Terrain(m.terrain, m.width, m.height);
             expect(t.connected(m.nests.map((n) => [n.x, n.y]))).toBe(true);
             for (const n of m.nests) for (const c of m.terrain.walls) expect(capsuleDist(c, n.x, n.y)).toBeGreaterThan(40);

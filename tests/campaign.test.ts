@@ -129,7 +129,7 @@ describe('battle settings', () => {
   it('conquest can also be won by holding most nests, so two rivals cannot stall it', () => {
     const run = newRun('settings', 0, 'swarm', 0);
     const conquest = run.nodes.find((n) => n.kind === 'conquest')!;
-    expect(nodeSetup(run, conquest.id, false).domShare).toBe(CONQUEST_SHARE);
+    expect(nodeSetup(run, conquest.id).domShare).toBe(CONQUEST_SHARE);
   });
 
   it('difficulty and rival count never step up at the same depth', () => {
@@ -188,11 +188,11 @@ describe('run difficulty', () => {
     for (const difficulty of DIFFICULTIES) {
       const run = newRun('heart', 0, 'swarm', 0, difficulty);
       run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, 5).map((n) => n.id);
-      const setup = nodeSetup(run, run.heart, false);
+      const setup = nodeSetup(run, run.heart);
       expect(setup.heart).toEqual({ strength: 5, rule: difficulty === 'brutal' ? 'heart+rivals' : 'heart' });
       expect(bloomLabel(run, run.heart)).toBe('The heart, fed by 5 nodes');
       const other = run.nodes.find((n) => n.kind === 'conquest')!;
-      expect(nodeSetup(run, other.id, false).heart).toBeUndefined();
+      expect(nodeSetup(run, other.id).heart).toBeUndefined();
     }
   });
 
@@ -246,7 +246,7 @@ describe('broods', () => {
     expect(armyFor(run, run.fielded)).toEqual(run.broods.map((b) => ({ kind: b.kind, count: b.size, vet: false })));
     for (const b of run.broods) b.wounded = 1;
     expect(armyFor(run, run.fielded)).toEqual([MILITIA]);
-    const s = nodeSetup(run, run.nodes[run.start].links[0], false, run.fielded);
+    const s = nodeSetup(run, run.nodes[run.start].links[0], run.fielded);
     expect(s.players[0]).toMatchObject({ human: true, nestTypes: run.unlocks.nests, army: [MILITIA] });
   });
 
@@ -400,7 +400,7 @@ describe('rewards', () => {
     expect(onlyDots.kind[Kind.Tank].hp).toBe(1);
     // The same strain on two broods of one kind doesn't stack.
     expect(modsFor([], [dots, { ...dots, id: 9 }]).kind[Kind.Dot].speed).toBeCloseTo(1.15);
-    const s = nodeSetup(run, run.nodes[run.start].links[0], false, [dots.id]);
+    const s = nodeSetup(run, run.nodes[run.start].links[0], [dots.id]);
     expect(s.players[0].mods!.kind[Kind.Dot].speed).toBeCloseTo(1.15);
   });
 

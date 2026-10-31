@@ -8,9 +8,9 @@ describe('map layouts (#38)', () => {
     for (const layout of MAP_LAYOUTS) {
       for (const size of ['small', 'medium', 'large'] as MapSize[]) {
         for (const players of [2, 3, 5]) {
-          for (const portrait of [false, true]) {
+          for (const alt of [0, 1]) {
             for (const caves of ['off', 'full'] as const) {
-              const m = generateMap({ seed: 40 + players, size, players, portrait, layout, caves, terrain: 'heavy' });
+              const m = generateMap({ seed: 40 + players + alt * 97, size, players, layout, caves, terrain: 'heavy' });
               expect(m.layout).toBe(layout);
               for (const n of m.nests) {
                 expect(n.x).toBeGreaterThan(NEST_RADIUS[n.type]);
@@ -49,6 +49,30 @@ describe('map layouts (#38)', () => {
     expect(layouts.size).toBe(MAP_LAYOUTS.length);
     expect(counts.size).toBeGreaterThanOrEqual(4);
     expect(starts.size).toBeGreaterThanOrEqual(4);
+  });
+
+  it('the seed picks the shape and density (#98): every aspect comes up, density spans its range', () => {
+    for (const [players, want] of [[2, [1, 1.3, 1.6, 2]], [4, [1, 1.3, 1.6]], [6, [1, 1.3]]] as [number, number[]][]) {
+      const aspects = new Set<number>(), dens: number[] = [];
+      for (let s = 0; s < 60; s++) {
+        const m = generateMap({ seed: s, size: 'medium', players });
+        // Always laid out wide: the camera turns it to the screen.
+        expect(m.width).toBeGreaterThanOrEqual(m.height);
+        aspects.add(Math.round(m.aspect! * 10) / 10);
+        dens.push(m.density!);
+      }
+      expect([...aspects].sort()).toEqual(want);
+      expect(Math.min(...dens)).toBeLessThan(0.15);
+      expect(Math.max(...dens)).toBeGreaterThan(0.85);
+    }
+  });
+
+  it('sparse maps are bigger with fewer nests than packed ones', () => {
+    const maps = Array.from({ length: 80 }, (_, s) => generateMap({ seed: s, size: 'medium', players: 4 }));
+    const sparse = maps.filter((m) => m.density! < 0.25), packed = maps.filter((m) => m.density! > 0.75);
+    const mean = (ms: typeof maps, f: (m: (typeof maps)[0]) => number) => ms.reduce((t, m) => t + f(m), 0) / ms.length;
+    expect(mean(sparse, (m) => m.width * m.height)).toBeGreaterThan(mean(packed, (m) => m.width * m.height) * 1.3);
+    expect(mean(sparse, (m) => m.nests.length)).toBeLessThan(mean(packed, (m) => m.nests.length));
   });
 
   it('1v1 maps are never sparser than the old fixed count', () => {

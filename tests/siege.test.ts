@@ -125,6 +125,9 @@ describe('holding the line', () => {
     }
     expect(sg.bloomNests.some((id) => w.nests[id].x === fx[0].x && w.nests[id].y === fx[0].y)).toBe(true);
     for (const id of sg.bloomNests) w.nests[id].owner = 0;
+    // Clear the first wave, so it can't take the capital before the next one comes.
+    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] !== 0) w.dmg[i] = 1e9;
+    resolveDamage(w);
     fx.length = 0;
     for (let t = 0; t < 41 * TICK_HZ && !fx.length; t++) {
       step(w, []);
@@ -200,7 +203,7 @@ describe('Hold the line in runs', () => {
         expect(n.domain).toBeUndefined();
         expect(n.checkpoint).toBeFalsy();
         expect(n.depth).toBeGreaterThanOrEqual(2);
-        const s = nodeSetup(r, n.id, false);
+        const s = nodeSetup(r, n.id);
         expect(s.siege).toBeDefined();
         // Just you and the Bloom.
         expect(s.players).toHaveLength(1);
@@ -218,7 +221,7 @@ describe('Hold the line in runs', () => {
       const node = r.nodes.find((n) => n.kind === 'hold');
       if (!node) continue;
       for (const b of r.broods) b.size = b.cap = 14;
-      const w = createWorld(nodeSetup(r, node.id, false, r.broods.map((b) => b.id)));
+      const w = createWorld(nodeSetup(r, node.id, r.broods.map((b) => b.id)));
       // Odd seeds: nobody gives an order.
       const proxy = k % 2 ? null : new Proxy(r.color, { skill: 1 });
       while (!w.over && w.tick < 6 * 60 * TICK_HZ) {

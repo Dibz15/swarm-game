@@ -157,7 +157,7 @@ describe('the finale', () => {
     const run = newRun(`finale-${seed}`, 0, 'swarm', 0);
     run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, strength).map((n) => n.id);
     for (const b of run.broods) b.size = 16;
-    return { run, setup: nodeSetup(run, run.heart, false, run.broods.map((b) => b.id)) };
+    return { run, setup: nodeSetup(run, run.heart, run.broods.map((b) => b.id)) };
   };
 
   it('replays identically with the heart awake', () => {

@@ -70,6 +70,7 @@ interface Pass {
   vbo: WebGLBuffer;
   buf: InstanceBuffer;
   uCam: WebGLUniformLocation | null;
+  uRot: WebGLUniformLocation | null;
   uPx: WebGLUniformLocation | null;
   gpuCap: number;
 }
@@ -94,6 +95,7 @@ export class Renderer {
     uRes: WebGLUniformLocation | null;
     uView: WebGLUniformLocation | null;
     uMap: WebGLUniformLocation | null;
+    uRot: WebGLUniformLocation | null;
     uTime: WebGLUniformLocation | null;
     uTer: WebGLUniformLocation | null;
     uTerOn: WebGLUniformLocation | null;
@@ -107,6 +109,7 @@ export class Renderer {
   private shapePass: Pass;
   private overlayPass: Pass;
   private camU = new Float32Array(4);
+  private rotU = new Float32Array(2);
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -130,6 +133,7 @@ export class Renderer {
       uRes: gl.getUniformLocation(bgProg, 'u_res'),
       uView: gl.getUniformLocation(bgProg, 'u_view'),
       uMap: gl.getUniformLocation(bgProg, 'u_map'),
+      uRot: gl.getUniformLocation(bgProg, 'u_rot'),
       uTime: gl.getUniformLocation(bgProg, 'u_time'),
       uTer: gl.getUniformLocation(bgProg, 'u_ter'),
       uTerOn: gl.getUniformLocation(bgProg, 'u_terOn'),
@@ -174,7 +178,7 @@ export class Renderer {
       loc++;
       off += 4;
     }
-    return { prog, vao, vbo, buf, uCam: gl.getUniformLocation(prog, 'u_cam'), uPx: gl.getUniformLocation(prog, 'u_px'), gpuCap: 0 };
+    return { prog, vao, vbo, buf, uCam: gl.getUniformLocation(prog, 'u_cam'), uRot: gl.getUniformLocation(prog, 'u_rot'), uPx: gl.getUniformLocation(prog, 'u_px'), gpuCap: 0 };
   }
 
   resize(): boolean {
@@ -225,6 +229,7 @@ export class Renderer {
     gl.viewport(0, 0, this.width, this.height);
     gl.disable(gl.DEPTH_TEST);
     const camU = cam.uniform(this.camU);
+    const rot = cam.rot(this.rotU);
     const px = 1 / cam.zoom;
 
     gl.disable(gl.BLEND);
@@ -233,6 +238,7 @@ export class Renderer {
     gl.uniform2f(this.bg.uRes, this.width, this.height);
     gl.uniform3f(this.bg.uView, camU[0], camU[1], px);
     gl.uniform2f(this.bg.uMap, cam.mapW, cam.mapH);
+    gl.uniform2fv(this.bg.uRot, rot);
     gl.uniform1f(this.bg.uTime, time);
     gl.uniform1f(this.bg.uTerOn, this.terOn ? 1 : 0);
     if (this.terOn) {
@@ -245,14 +251,14 @@ export class Renderer {
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    this.drawPass(this.shapePass, camU, px);
-    this.drawPass(this.beamPass, camU, px);
-    this.drawPass(this.unitPass, camU, px);
-    this.drawPass(this.overlayPass, camU, px);
+    this.drawPass(this.shapePass, camU, rot, px);
+    this.drawPass(this.beamPass, camU, rot, px);
+    this.drawPass(this.unitPass, camU, rot, px);
+    this.drawPass(this.overlayPass, camU, rot, px);
     gl.bindVertexArray(null);
   }
 
-  private drawPass(p: Pass, camU: Float32Array, px: number): void {
+  private drawPass(p: Pass, camU: Float32Array, rot: Float32Array, px: number): void {
     const gl = this.gl;
     const b = p.buf;
     if (b.count === 0) return;
@@ -266,6 +272,7 @@ export class Renderer {
     }
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, b.u8, 0, bytes);
     gl.uniform4fv(p.uCam, camU);
+    gl.uniform2fv(p.uRot, rot);
     gl.uniform1f(p.uPx, px);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b.count);
   }

@@ -6,6 +6,7 @@ import { Terrain, capsuleDist, emptyTerrain, type Capsule, type CaveSpec, type F
 
 export type MapSize = 'small' | 'medium' | 'large';
 
+/** Each size's reference map (its area, at 1.6:1) and nests per sector; the seed picks the actual shape (#98). */
 export const MAP_SIZES: Record<MapSize, { w: number; h: number; perSector: number }> = {
   small: { w: 1300, h: 820, perSector: 3 },
   medium: { w: 1650, h: 1040, perSector: 4 },
@@ -107,8 +108,6 @@ export interface MapParams {
   seed: number;
   size: MapSize;
   players: number;
-  /** tall map for portrait screens, player 0 at the bottom */
-  portrait?: boolean;
   terrain?: TerrainLevel | TerrainParams;
   /** cave layout preset or explicit params (default: open map) */
   caves?: CaveLevel | CaveParams;
@@ -144,6 +143,10 @@ export interface MapSpec {
   events: EventSpec;
   /** the layout a generated map used */
   layout?: MapLayout;
+  /** a generated map's width over height (always ≥ 1: the camera turns it to fit the screen) */
+  aspect?: number;
+  /** a generated map's density, 0 (sparse: few nests, far apart, big) to 1 (packed) */
+  density?: number;
   /** a walled-in player's fortress, as it came out (#100, #67) */
   fortress?: FortressInfo;
 }
@@ -178,6 +181,19 @@ export function terrainParams(t: MapParams['terrain']): TerrainParams {
  */
 export type MapLayout = 'classic' | 'open' | 'core' | 'clusters' | 'lanes';
 export const MAP_LAYOUTS: readonly MapLayout[] = ['classic', 'open', 'core', 'clusters', 'lanes'];
+
+/**
+ * The shapes a map can take (width over height), by player count: long maps
+ * only for a 1v1, where both halves stay alike; with more players, extreme
+ * shapes would stretch some sectors far more than others.
+ */
+const ASPECTS: Record<number, readonly number[]> = {
+  2: [1, 1.3, 1.6, 2],
+  3: [1, 1.3, 1.6],
+  4: [1, 1.3, 1.6],
+  5: [1, 1.3],
+  6: [1, 1.3],
+};
 
 /** odds of each layout when the seed picks one */
 const LAYOUT_ODDS: readonly number[] = [3, 2, 2, 2, 2];
@@ -286,28 +302,50 @@ export function generateMap(p: MapParams): MapSpec {
   const layout = !p.layout || p.layout === 'random' ? pickLayout(rng) : p.layout;
   const L = LAYOUTS[layout];
   const weights = p.typeWeights ?? DEFAULT_TYPE_WEIGHTS;
-  const portrait = !!p.portrait;
-  const w = portrait ? dims.h : dims.w;
-  const h = portrait ? dims.w : dims.h;
   const players = p.players;
   const P = Math.max(2, players);
-  const cx = w / 2, cy = h / 2;
   const sector = TAU / P;
 
-  // Per-map variety: ±1 nest per sector, looser or tighter spacing, starts a
-  // little in or out and turned, and a slightly squashed or stretched ellipse.
-  const roll = rng.int(3) - 1;
+  // The map's shape and density come from the seed alone, never the screen
+  // (#98): every player sees the same map, and the camera turns it to fit.
+  // On its own stream, so the nest draws don't shift with it.
+  const shape = new Rng(p.seed ^ 0x5a9e01);
+  const aspect = shape.pick(ASPECTS[Math.min(P, 6)]);
+  const density = shape.next();
+  // Sparse maps spread the same nests over more ground: long crossings.
+  const area = dims.w * dims.h * (1.35 - 0.5 * density) * shape.range(0.95, 1.05);
+  const w = Math.round(Math.sqrt(area * aspect)), h = Math.round(area / Math.sqrt(area * aspect));
+  const cx = w / 2, cy = h / 2;
+
+  // Per-map variety: nests per sector and spacing follow the density (dense:
+  // more nests, packed; sparse: fewer, far apart), starts a little in or out
+  // and turned, and a slightly squashed or stretched ellipse.
+  const roll = Math.max(-1, Math.min(2, Math.round(-1 + 3 * density + rng.range(-0.5, 0.5))));
   let perSector = p.nestsPerSector ?? Math.max(2, dims.perSector + (L.extra ?? 0) + roll);
   // A 1v1 has only two sectors to fill: never sparser than the size's
   // default (one more each when there's no center nest), and only varies upward.
   if (!p.nestsPerSector && P === 2) perSector = Math.max(perSector, dims.perSector + (L.center === 'crystal' ? 1 : 0) + Math.max(0, roll));
-  const spacing = L.spacing * rng.range(0.85, 1.2);
+  const spacing = L.spacing * (1.35 - 0.6 * density) * rng.range(0.92, 1.08);
   const capR = rng.range(0.76, 0.9);
-  const base = (portrait ? PI / 2 : PI) + rng.range(-0.15, 0.15) * sector; // player 0 starts bottom / left
+  const base = PI + rng.range(-0.15, 0.15) * sector; // player 0 starts on the left
   const ax = w * 0.5 * 0.88 * rng.range(0.96, 1.04), ay = h * 0.5 * 0.84 * rng.range(0.96, 1.04);
   const pos = (r: number, a: number): [number, number] => [cx + dcos(a) * r * ax, cy + dsin(a) * r * ay];
   const ctx: LayoutCtx = { sector, capR, unit: Math.min(w * 0.44, h * 0.42) };
   const minDist = (p.size === 'small' ? 100 : 110) * spacing;
+  // Gulfs: on some maps, empty ground in every sector that nests stay out of
+  // (a packed core with an empty rim, or pockets with gulfs between).
+  const gulfs: [number, number, number][] = [];
+  if (rng.next() < 0.35) {
+    const n = 1 + rng.int(2);
+    for (let tries = 0; tries < 20 && gulfs.length < n; tries++) {
+      const r = rng.range(0.35, 0.85), da = rng.range(-0.45, 0.45) * sector, R = rng.range(90, 160) * (p.size === 'large' ? 1.15 : 1);
+      const [gx, gy] = pos(r, base + da), [kx, ky] = pos(capR, base);
+      // Never over the start, the middle, or its natural expansion.
+      if ((gx - kx) ** 2 + (gy - ky) ** 2 < (R + 140) ** 2 || (gx - cx) ** 2 + (gy - cy) ** 2 < (R + 60) ** 2) continue;
+      gulfs.push([gx, gy, R]);
+    }
+  }
+  const inGulf = (x: number, y: number) => gulfs.some(([gx, gy, R]) => (gx - x) ** 2 + (gy - y) ** 2 < R * R);
 
   /** One placement attempt: all nests, in polar terms too. */
   const attempt = (rng: Rng) => {
@@ -325,13 +363,15 @@ export function generateMap(p: MapParams): MapSpec {
       polar.push({ r: 0, a: 0, sec: 0 });
     }
 
-    const fits = (r: number, da: number) => {
+    /** `tight` < 1 lets a crowded sector squeeze its last nests in. */
+    const fits = (r: number, da: number, tight = 1) => {
       if (r < 0.12 || r > 1.02) return false;
+      const md = minDist * tight;
       for (let k = 0; k < P; k++) {
         const [x, y] = pos(r, base + da + k * sector);
         if (x < 60 || x > w - 60 || y < 60 || y > h - 60) return false;
         for (const n of nests) {
-          if ((n.x - x) ** 2 + (n.y - y) ** 2 < minDist * minDist) return false;
+          if ((n.x - x) ** 2 + (n.y - y) ** 2 < md * md) return false;
         }
       }
       // Clear of the open middle, kept for its crystal.
@@ -384,7 +424,8 @@ export function generateMap(p: MapParams): MapSpec {
     const sample = L.sampler(rng, ctx);
     for (let tries = 0; tries < 400 && placed < perSector; tries++) {
       const [r, da] = sample();
-      if (!fits(r, da)) continue;
+      // Late tries ignore the gulfs and squeeze closer, so a crowded sector still fills.
+      if (!fits(r, da, tries < 300 ? 1 : 0.8) || (tries < 300 && inGulf(...pos(r, base + da)))) continue;
       let type = pickType(rng, weights);
       for (let k = 0; k < 6 && !allowed(type); k++) type = pickType(rng, weights);
       if (!allowed(type)) type = [NestType.Forge, NestType.Spire, NestType.Swift, NestType.Hive].find(allowed) ?? NestType.Hive;
@@ -416,7 +457,7 @@ export function generateMap(p: MapParams): MapSpec {
   const frame: Frame = { w, h, P, sector, base, pos, nests, polar, size: p.size, centerCrystal: L.center === 'crystal' };
   const terrain = generateTerrain(new Rng(p.seed ^ 0x7e4a1c), terrainParams(p.terrain), caveParams(p.caves), frame);
   const events = generateEvents(new Rng(p.seed ^ 0x3c9d17), eventParams(p.events), terrain, frame);
-  const spec: MapSpec = { width: w, height: h, nests, terrain, events, layout };
+  const spec: MapSpec = { width: w, height: h, nests, terrain, events, layout, aspect: w / h, density };
   // A fortress goes up last, on its own stream: the rest is the same map.
   // Every wild-swarm spawn must reach it too (Hold the line's waves come from them).
   if (p.fortress !== undefined) spec.fortress = fortify(spec, p.fortress, p.size, new Rng(p.seed ^ 0x51f0a7), events.swarmSpawns) ?? undefined;

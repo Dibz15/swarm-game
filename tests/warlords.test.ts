@@ -67,13 +67,13 @@ describe('warlord placement', () => {
 describe('domain battles', () => {
   it('field the warlord first, with its trait and personality', () => {
     const [run, w] = withTrait('ironhide');
-    const setup = nodeSetup(run, w.stronghold, false);
+    const setup = nodeSetup(run, w.stronghold);
     const lord = setup.players[1];
     expect(lord.faction).toBe(w.faction);
     // In its own stronghold it turtles (#100); elsewhere it keeps its temper.
     expect(lord.bot!.personality).toBe('turtler');
     const other = w.nodes.find((id) => id !== w.stronghold);
-    if (other !== undefined) expect(nodeSetup(run, other, false).players[1].bot!.personality).toBe(w.personality);
+    if (other !== undefined) expect(nodeSetup(run, other).players[1].bot!.personality).toBe(w.personality);
     expect(lord.mods!.kind[Kind.Tank].hp).toBeCloseTo(1.5);
     expect(setup.players.filter((p) => p.faction === w.faction)).toHaveLength(1);
     expect(warlordOf(run, w.stronghold)!.name).toBe(w.name);
@@ -82,23 +82,23 @@ describe('domain battles', () => {
 
   it('a Swarmlord spawns faster and casts no powers', () => {
     const [run, w] = withTrait('swarmlord');
-    const lord = nodeSetup(run, w.stronghold, false).players[1];
+    const lord = nodeSetup(run, w.stronghold).players[1];
     expect(lord.bot!.powers).toBe(false);
     expect(lord.prod).toBeCloseTo((DIFFICULTY[lord.bot!.difficulty].prod ?? 1) * 1.25 * STRONGHOLD_PROD);
   });
 
   it('the Bloom eating its domain weakens it; eating the stronghold ends it', () => {
     const [run, w] = withTrait('ironhide');
-    const base = nodeSetup(run, w.stronghold, false).players[1].prod!;
+    const base = nodeSetup(run, w.stronghold).players[1].prod!;
     const other = w.nodes.find((id) => id !== w.stronghold);
     if (other !== undefined) {
       run.swallowed.push(other);
-      expect(nodeSetup(run, w.stronghold, false).players[1].prod!).toBeCloseTo(base * (1 - EROSION));
+      expect(nodeSetup(run, w.stronghold).players[1].prod!).toBeCloseTo(base * (1 - EROSION));
       expect(warlordOf(run, w.stronghold)!.weakened).toBe(1);
     }
     run.swallowed.push(w.stronghold);
     expect(warlordAt(run, w.stronghold)).toBeUndefined();
-    for (const id of w.nodes) if (id !== w.stronghold) expect(nodeSetup(run, id, false).players.some((p) => p.mods && !p.human)).toBe(false);
+    for (const id of w.nodes) if (id !== w.stronghold) expect(nodeSetup(run, id).players.some((p) => p.mods && !p.human)).toBe(false);
   });
 
   it('warlords bordering the heart join the finale', () => {
@@ -106,7 +106,7 @@ describe('domain battles', () => {
     const w = run.warlords![0];
     w.nodes.push(run.nodes[run.heart].links[0]);
     expect(finaleWarlords(run)).toContain(w);
-    const setup = nodeSetup(run, run.heart, false);
+    const setup = nodeSetup(run, run.heart);
     expect(setup.players.find((p) => p.faction === w.faction)?.mods).toBeDefined();
   });
 
@@ -115,7 +115,7 @@ describe('domain battles', () => {
     delete run.warlords;
     for (const n of run.nodes) delete n.domain;
     const id = run.nodes[run.start].links[0];
-    expect(nodeSetup(run, id, false).players.some((p) => p.mods && !p.human)).toBe(false);
+    expect(nodeSetup(run, id).players.some((p) => p.mods && !p.human)).toBe(false);
     resolveTurn(run, id, WIN, run.fielded, 0);
     expect(run.at).toBe(id);
   });

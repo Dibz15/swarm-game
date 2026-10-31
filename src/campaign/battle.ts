@@ -35,7 +35,7 @@ export function armyFor(run: RunState, fielded: number[]): { kind: number; count
 }
 
 /** The match for a run node. Same node, same battle (its seed is fixed). */
-export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded: number[] = []): MatchSetup {
+export function nodeSetup(run: RunState, id: number, fielded: number[] = []): MatchSetup {
   const n = run.nodes[id];
   const rng = new Rng(n.seed);
   const others = [0, 1, 2, 3, 4, 5].filter((c) => c !== run.color);
@@ -59,7 +59,6 @@ export function nodeSetup(run: RunState, id: number, portrait: boolean, fielded:
     caves: hold ? 'off' : n.caves,
     layout: 'random',
     events,
-    portrait,
     // A stronghold's warlord starts with three nests: half the map would be a head start.
     domShare: n.kind === 'domination' && !hold ? DOMINATION_SHARE : finale ? undefined : CONQUEST_SHARE,
     // The citadel's guards grow with the army you bring, so a late-run swarm can't just rush it.
@@ -141,7 +140,7 @@ export interface Rival {
 export function rivals(run: RunState, id: number): Rival[] {
   const n = run.nodes[id];
   const lords = n.kind === 'finale' ? finaleWarlords(run) : [warlordFighting(run, id)].filter((w): w is Warlord => !!w);
-  return nodeSetup(run, id, false)
+  return nodeSetup(run, id)
     .players.filter((p) => p.bot)
     .map((p, i) => {
       const personality = p.bot!.personality;

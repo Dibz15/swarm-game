@@ -20,7 +20,7 @@ for (let k = 0; n < N && k < N * 4; k++) {
   for (const b of run.broods) b.size = b.cap = SIZE;
   // Militia: no broods at all, just the militia's handful.
   if (militia) run.broods = [];
-  const setup = nodeSetup(run, node.id, false, run.broods.map((b) => b.id));
+  const setup = nodeSetup(run, node.id, run.broods.map((b) => b.id));
   const w = createWorld(setup);
   const proxy = new Proxy(run.color, { skill: 1 });
   while (!w.over && w.tick < 8 * 60 * TICK_HZ) {

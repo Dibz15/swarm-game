@@ -19,7 +19,7 @@ for (let k = 0; k < N; k++) {
     const run = newRun(`hold-probe-${k}`, 0, 'swarm', 0);
     const w0 = run.warlords![0];
     for (const b of run.broods) b.size = b.cap = SIZE;
-    const setup = nodeSetup(run, w0.stronghold, false, run.broods.map((b) => b.id));
+    const setup = nodeSetup(run, w0.stronghold, run.broods.map((b) => b.id));
     if (!fort) { delete setup.stronghold; for (const p of setup.players) if (p.bot) delete p.bot.citadel; }
     const w = createWorld(setup);
     const proxy = new Proxy(run.color, { skill: 1, citadelBlob: rush ? 1 : undefined });
