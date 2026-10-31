@@ -888,10 +888,11 @@ function fairestCave(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number; 
   const { w, h, P, nests } = f;
   const center = { x: w / 2, y: h / 2 };
   // Noise and warrens rock is grown once; the attempts only re-cut the tunnels.
-  const field = cp.mode === 'noise' || cp.mode === 'ca' ? fieldZone(new Rng(rng.int(0x7fffffff)), cp, f) : null;
+  const grid = cp.mode === 'noise' || cp.mode === 'ca' ? fieldGrid(new Rng(rng.int(0x7fffffff)), cp, f) : null;
+  const field = grid && cp.mode === 'noise' ? fieldCaps(grid, f, (k) => grid.rock[k] === 1) : null;
   let best: CaveSpec | null = null, bestSpread = Infinity;
   for (let attempt = 0; attempt < 16 && bestSpread > 1.05; attempt++) {
-    const cave = generateCaves(new Rng(rng.int(0x7fffffff)), cp, f, crystals, crystalR, scale, field);
+    const cave = generateCaves(new Rng(rng.int(0x7fffffff)), cp, f, crystals, crystalR, scale, field, cp.mode === 'ca' ? grid : null);
     const t = new Terrain({ walls: [], fields: [], crystals: [], cave }, w, h);
     const detours = nests.slice(0, P).map((n) => t.pathDist(n.x, n.y, center.x, center.y, 0) / Math.sqrt((n.x - center.x) ** 2 + (n.y - center.y) ** 2));
     const spread = Math.max(...detours) / Math.min(...detours);
@@ -900,7 +901,7 @@ function fairestCave(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number; 
       best = cave;
     }
   }
-  if (field) {
+  if (grid) {
     // The grid only roughly knows where rock pieces leave room to walk: fill
     // whatever open ground the first start can't actually reach.
     const lost = new Terrain({ walls: [], fields: [], crystals: [], cave: best! }, w, h).cutOff(nests[0].x, nests[0].y);
@@ -916,7 +917,7 @@ function fairestCave(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number; 
  * more than one way in. Everything is a carved capsule, so the open space is
  * connected by construction.
  */
-function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number; a: number }[], crystalR: number, scale: number, field: Capsule[] | null = null): CaveSpec {
+function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number; a: number }[], crystalR: number, scale: number, field: Capsule[] | null = null, caverns: FieldGrid | null = null): CaveSpec {
   const { w, h, P, sector, base, pos, nests, polar } = f;
   // Polar units are fractions of the map ellipse; this converts px to them (roughly).
   const unit = Math.min(w * 0.44, h * 0.42);
@@ -1056,9 +1057,7 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
   }
 
   let zone: Capsule[] | null = null;
-  if (field) {
-    zone = field;
-  } else if (cp.mode === 'full') {
+  if (cp.mode === 'full' || caverns) {
     // The deep: a tunnel in from the map edge on each border, where wild swarms enter.
     const ea = 0.5 * sector;
     let best = 0, bd = Infinity;
@@ -1075,7 +1074,24 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
     const n = nodes[best];
     const na = Math.abs(n.a - ea) < Math.abs(n.a + sector - ea) ? n.a : n.a + sector;
     tunnel(1.12, ea, n.r, na);
-  } else {
+  }
+  if (caverns) {
+    // Warrens: solid rock like the caves, with the grown caverns carved out
+    // wherever they open onto a chamber or tunnel (the rest stay rock).
+    const seeds: number[] = [];
+    for (let i = 0; i < caverns.rows; i++) {
+      for (let j = 0; j < caverns.cols; j++) {
+        const [x, y] = pos(caverns.rAt(i), base + caverns.aAt(j));
+        if (carves.some((c) => capsuleDist(c, x, y) < c.r)) seeds.push(i * caverns.cols + j);
+      }
+    }
+    const open = floodOpen(caverns, seeds);
+    // Just over half a cell's diagonal: open cells join up with no specks
+    // left where four meet, and the rock between caverns stays.
+    carves.push(...fieldCaps(caverns, f, (k) => open[k] === 1, 0.72));
+  } else if (field) {
+    zone = field;
+  } else if (cp.mode !== 'full') {
     // Belt: a thick ring of rock around the center, built from arcs.
     zone = [];
     const r = 0.5, rad = 0.26 * unit, segs = 4;
@@ -1090,28 +1106,38 @@ function generateCaves(rng: Rng, cp: CaveParams, f: Frame, crystals: { r: number
   return { carves, zone };
 }
 
+/** A polar grid of rock and open cells over player 0's sector (#98); its angle wraps round into the next sector. */
+interface FieldGrid {
+  rows: number;
+  cols: number;
+  /** 1 = rock */
+  rock: Uint8Array;
+  /** the polar radius of row i */
+  rAt: (i: number) => number;
+  /** the polar angle of column j, from the sector's middle */
+  aAt: (j: number) => number;
+}
+
 /**
- * Rock masses for the 'noise' and 'ca' cave modes (#98), as capsules: a polar
- * grid over player 0's sector whose angle wraps round (the next sector is the
- * same grid turned), so every sector gets the same rock and the borders join
- * up without a seam. 'noise' thresholds warped fBm or ridged noise, sampled
- * round a circle so it wraps too; 'ca' grows caverns with a cellular
- * automaton. Runs of rock cells become capsules; the caller carves chambers
- * and tunnels through them, which keeps the map connected.
+ * The cell grid for the 'noise' and 'ca' cave modes (#98): a polar grid over
+ * player 0's sector whose angle wraps round (the next sector is the same grid
+ * turned), so every sector gets the same rock and the borders join up
+ * without a seam. 'noise' thresholds warped fBm or ridged noise, sampled
+ * round a circle so it wraps too; 'ca' grows caverns with a cellular automaton.
  */
-function fieldZone(rng: Rng, cp: CaveParams, f: Frame): Capsule[] {
-  const { sector, pos, w, h, P, base } = f;
-  const cell = 22;
+function fieldGrid(rng: Rng, cp: CaveParams, f: Frame): FieldGrid {
+  const { sector, pos, w, h } = f;
   const r0 = 0.12, r1 = cp.mode === 'ca' ? 1.22 : 1.1;
   // Size the grid by the ellipse's long axis, so no cell is wider than
-  // `cell` anywhere: the rock capsules have a fixed radius, and stretched
-  // cells would leave open seams between them on wide maps.
+  // FIELD_CELL anywhere: the capsules have a fixed radius, and stretched
+  // cells would leave seams between them on wide maps.
   const [ex, ey] = pos(1, 0), [fx, fy] = pos(1, PI / 2);
   const uMax = Math.max(Math.abs(ex - w / 2), Math.abs(fy - h / 2), Math.abs(ey - h / 2), Math.abs(fx - w / 2));
-  const rows = Math.ceil(((r1 - r0) * uMax) / cell);
-  const cols = Math.max(8, Math.round((sector * uMax) / cell));
+  const rows = Math.ceil(((r1 - r0) * uMax) / FIELD_CELL);
+  const cols = Math.max(8, Math.round((sector * uMax) / FIELD_CELL));
   const rock = new Uint8Array(rows * cols);
   const rAt = (i: number) => r0 + ((i + 0.5) * (r1 - r0)) / rows;
+  const aAt = (j: number) => ((j + 0.5) / cols - 0.5) * sector;
   if (cp.mode === 'noise') {
     const { kind, threshold, scale, warp } = cp.field ?? NOISE_FIELD;
     const seed = rng.int(0x7fffffff);
@@ -1129,13 +1155,20 @@ function fieldZone(rng: Rng, cp: CaveParams, f: Frame): Capsule[] {
       for (let j = 0; j < cols; j++) {
         // Near a border, blend in the noise from the far side of the sector:
         // at the border both sides read the same mix, so there's no seam.
-        const a = ((j + 0.5) / cols - 0.5) * sector, r = rAt(i);
+        const a = aAt(j), r = rAt(i);
         const e = Math.min(1, Math.max(0, (Math.abs(a) / sector - 0.3) / 0.2));
         const wt = 0.5 * e * e * (3 - 2 * e);
         const v = wt > 0 ? (1 - wt) * at(r, a) + wt * at(r, a - Math.sign(a) * sector) : at(r, a);
         rock[i * cols + j] = v > threshold ? 1 : 0;
       }
     }
+    // Fill enclosed pockets: open ground walled off from both the middle and
+    // the rim would be unreachable (tunnels are only cut between chambers).
+    // A first pass on the grid; fairestCave checks the real ground after.
+    const seeds: number[] = [];
+    for (let j = 0; j < cols; j++) for (const i of [0, rows - 1]) if (!rock[i * cols + j]) seeds.push(i * cols + j);
+    const seen = floodOpen({ rows, cols, rock, rAt, aAt }, seeds);
+    for (let k = 0; k < rock.length; k++) if (!rock[k] && !seen[k]) rock[k] = 1;
   } else {
     // Caverns: random fill, then a few rounds of "rock if most neighbors are".
     for (let k = 0; k < rock.length; k++) rock[k] = rng.next() < 0.47 ? 1 : 0;
@@ -1160,14 +1193,21 @@ function fieldZone(rng: Rng, cp: CaveParams, f: Frame): Capsule[] {
       rock.set(next);
     }
   }
-  // Fill enclosed pockets: open ground walled off from both the middle and
-  // the rim would be unreachable (tunnels are only cut between chambers).
-  // A first pass on the grid; fairestCave checks the real ground after.
-  // Warrens' outer rows run off the map, so there only the middle counts.
+  return { rows, cols, rock, rAt, aAt };
+}
+
+const FIELD_CELL = 22;
+
+/** The open cells 4-connected to any of `seeds` (cell indices), wrapping round the angle. */
+function floodOpen(g: FieldGrid, seeds: number[]): Uint8Array {
+  const { rows, cols, rock } = g;
   const seen = new Uint8Array(rock.length);
   const stack: number[] = [];
-  for (let j = 0; j < cols; j++) for (const i of cp.mode === 'ca' ? [0] : [0, rows - 1]) if (!rock[i * cols + j]) stack.push(i * cols + j);
-  for (const k of stack) seen[k] = 1;
+  for (const k of seeds) {
+    if (rock[k] || seen[k]) continue;
+    seen[k] = 1;
+    stack.push(k);
+  }
   while (stack.length) {
     const k = stack.pop()!;
     const i = Math.floor(k / cols), j = k % cols;
@@ -1179,28 +1219,30 @@ function fieldZone(rng: Rng, cp: CaveParams, f: Frame): Capsule[] {
       stack.push(n);
     }
   }
-  for (let k = 0; k < rock.length; k++) if (!rock[k] && !seen[k]) rock[k] = 1;
-  // Runs of up to 3 rock cells along each ring become one capsule.
+  return seen;
+}
+
+/** Runs of up to 3 picked cells along each ring, as capsules (radius `rad`, in cells) in every sector. */
+function fieldCaps(g: FieldGrid, f: Frame, pick: (k: number) => boolean, rad = 0.78): Capsule[] {
+  const { rows, cols, rAt, aAt } = g;
+  const { P, pos, base, sector } = f;
   const out: Capsule[] = [];
-  const rad = cell * 0.78;
   for (let i = 0; i < rows; i++) {
     const r = rAt(i);
     for (let j = 0; j < cols; ) {
-      if (!rock[i * cols + j]) {
+      if (!pick(i * cols + j)) {
         j++;
         continue;
       }
       let e = j;
-      while (e + 1 < cols && e - j < 2 && rock[i * cols + e + 1]) e++;
-      const a1 = ((j + 0.5) / cols - 0.5) * sector, a2 = ((e + 0.5) / cols - 0.5) * sector;
+      while (e + 1 < cols && e - j < 2 && pick(i * cols + e + 1)) e++;
       for (let k = 0; k < P; k++) {
-        const [x1, y1] = pos(r, base + a1 + k * sector);
-        const [x2, y2] = pos(r, base + a2 + k * sector);
-        out.push({ x1, y1, x2, y2, r: rad });
+        const [x1, y1] = pos(r, base + aAt(j) + k * sector);
+        const [x2, y2] = pos(r, base + aAt(e) + k * sector);
+        out.push({ x1, y1, x2, y2, r: rad * FIELD_CELL });
       }
       j = e + 1;
     }
   }
   return out;
 }
-
