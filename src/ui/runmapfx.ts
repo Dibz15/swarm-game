@@ -191,9 +191,19 @@ export function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: 
     g.drawImage(rock, 0, 0);
   }
   if (detail) {
-    for (const f of m.terrain.fields) {
-      g.strokeStyle = f.kind === 'rift' ? 'rgba(255, 70, 70, 0.35)' : 'rgba(150, 90, 220, 0.35)';
-      capsule(f, g);
+    // Each kind on its own layer, drawn solid then laid on see-through, so
+    // overlapping pieces (a rift sea, #98) don't stack into stripes.
+    for (const [kind, color] of [['nebula', 'rgb(150, 90, 220)'], ['rift', 'rgb(255, 70, 70)']] as const) {
+      const layer = document.createElement('canvas');
+      layer.width = g.canvas.width;
+      layer.height = g.canvas.height;
+      const l = layer.getContext('2d')!;
+      l.lineCap = 'round';
+      l.fillStyle = l.strokeStyle = color;
+      for (const f of m.terrain.fields) if (f.kind === kind) capsule(f, l);
+      g.globalAlpha = 0.35;
+      g.drawImage(layer, 0, 0);
+      g.globalAlpha = 1;
     }
     g.fillStyle = 'rgba(120, 230, 255, 0.7)';
     for (const c of m.terrain.crystals) {

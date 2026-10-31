@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NEST_RADIUS } from '../src/sim/constants';
-import { Terrain } from '../src/sim/terrain';
+import { Terrain, capsuleDist } from '../src/sim/terrain';
 import { expansionSpread, generateMap, MAP_FORMS, MAP_LAYOUTS, type MapForm, type MapSize } from '../src/sim/mapgen';
 import { fbm, ridged, vnoise } from '../src/sim/mathx';
 
@@ -127,7 +127,7 @@ describe('map forms (#98)', () => {
       for (let s = 0; s < 120; s++) out.add(generateMap({ seed: s, size: 'medium', players: 2, terrain: 'standard', caves }).form!);
       return [...out].sort();
     };
-    expect(seen('off')).toEqual(['classic', 'river', 'ring', 'spiral'].sort());
+    expect(seen('off')).toEqual(['classic', 'islands', 'river', 'ring', 'spiral'].sort());
     expect(seen('full')).toEqual(['caves', 'islands', 'regions', 'warrens'].sort());
     // No terrain at all: nothing to build a ring or river from.
     for (let s = 0; s < 40; s++) expect(['classic', 'spiral']).toContain(generateMap({ seed: s, size: 'medium', players: 2 }).form);
@@ -206,6 +206,35 @@ describe('noise terrain (#98)', () => {
         expect(t.cutOff(m.nests[0].x, m.nests[0].y), `${form} ${s} ${m.aspect!.toFixed(1)}:1`).toEqual([]);
       }
     }
+  });
+
+  it('islands: off caves, a rift sea with dry bridges joining every nest; in caves, rock', () => {
+    for (let s = 0; s < 8; s++) {
+      const players = 2 + (s % 3);
+      const m = generateMap({ seed: 600 + s, size: s % 2 ? 'large' : 'medium', players, form: 'islands', terrain: 'standard' });
+      expect(m.terrain.cave).toBeFalsy();
+      const rifts = m.terrain.fields.filter((f) => f.kind === 'rift');
+      expect(rifts.length).toBeGreaterThan(20);
+      for (const n of m.nests) for (const c of rifts) expect(capsuleDist(c, n.x, n.y)).toBeGreaterThan(NEST_RADIUS[n.type]);
+      // Treat the sea as rock: the bridges alone still join every nest.
+      const dry = new Terrain({ ...m.terrain, walls: [...m.terrain.walls, ...rifts], fields: [] }, m.width, m.height);
+      expect(dry.connected(m.nests.map((n) => [n.x, n.y])), `seed ${600 + s}`).toBe(true);
+    }
+    const c = generateMap({ seed: 600, size: 'medium', players: 2, form: 'islands', caves: 'full', terrain: 'standard' });
+    expect(c.terrain.cave).toBeTruthy();
+    expect(c.terrain.fields.filter((f) => f.kind === 'rift').length).toBeLessThan(10);
+  });
+
+  it('warrens spread their nests out through the caverns, not just the middle', () => {
+    let outer = 0, all = 0;
+    for (let s = 0; s < 8; s++) {
+      const m = generateMap({ seed: 700 + s, size: 'medium', players: 2, form: 'warrens', terrain: 'standard' });
+      for (const n of m.nests) {
+        all++;
+        if (((n.x - m.width / 2) / (0.44 * m.width)) ** 2 + ((n.y - m.height / 2) / (0.42 * m.height)) ** 2 > 0.8 ** 2) outer++;
+      }
+    }
+    expect(outer / all).toBeGreaterThan(0.3);
   });
 
   it('an asked-for fill applies to any open form, even over a cave belt', () => {
