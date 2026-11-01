@@ -88,7 +88,7 @@ function updateCrystals(w: World): void {
   for (const c of w.crystals) {
     if (c.holder < 0) continue;
     const f = w.factions[c.holder];
-    if (!f.eliminated) f.energy = Math.min(ENERGY.max, f.energy + TERRAIN.crystalEnergy * f.mods.crystalRate * DT);
+    if (!f.eliminated) f.energy = Math.min(ENERGY.max, f.energy + TERRAIN.crystalEnergy * c.value * f.mods.crystalRate * DT);
   }
 }
 

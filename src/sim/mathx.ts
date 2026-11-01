@@ -103,6 +103,28 @@ export function dpow(a: number, b: number): number {
   return dexp(b * dlog(a));
 }
 
+/**
+ * atan2 for mapgen (#114): halve the angle twice to get the argument under
+ * 0.42, then sum the atan series. Only +, *, / and sqrt, which are IEEE-exact.
+ */
+export function datan2(y: number, x: number): number {
+  if (x === 0 && y === 0) return 0;
+  const ax = Math.abs(x), ay = Math.abs(y);
+  const swap = ay > ax;
+  const t = swap ? ax / ay : ay / ax;
+  const u = t / (1 + Math.sqrt(1 + t * t));
+  const u2 = u * u;
+  let term = u, sum = u;
+  for (let k = 1; k < 22; k++) {
+    term *= -u2;
+    sum += term / (2 * k + 1);
+  }
+  let a = 2 * sum;
+  if (swap) a = PI / 2 - a;
+  if (x < 0) a = PI - a;
+  return y < 0 ? -a : a;
+}
+
 // Deterministic value noise (#98): integer hashing (Math.imul is exact) and
 // smoothstep blending, so mapgen's noise terrain is the same everywhere.
 

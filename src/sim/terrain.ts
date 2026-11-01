@@ -28,6 +28,8 @@ export interface CrystalSpec {
   x: number;
   y: number;
   r: number;
+  /** energy rate as a multiple of TERRAIN.crystalEnergy (default 1): sparse maps have fewer, richer crystals (#114) */
+  value?: number;
 }
 
 /**

@@ -425,7 +425,7 @@ const PROBES: Record<string, [string, (w: World) => number, 'more' | 'less'][]> 
     [
       'crystal energy',
       (w) => {
-        w.crystals.push({ x: 800, y: 800, r: 30, holder: -1, last: -1 });
+        w.crystals.push({ x: 800, y: 800, r: 30, value: 1, holder: -1, last: -1 });
         put(w, 0, Kind.Dot, 800, 800, true);
         put(w, 1, Kind.Dot, 200, 200, true);
         run(w, 60);

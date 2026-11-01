@@ -149,6 +149,8 @@ export interface Crystal {
   x: number;
   y: number;
   r: number;
+  /** energy rate multiple */
+  value: number;
   holder: number;
   /** last faction to hold it, so passers-by don't re-announce it */
   last: number;
@@ -390,7 +392,7 @@ export class World {
     this.rng = new Rng(seed ^ 0x51f15e);
     this.grid = new Grid(width, height);
     this.terrain = new Terrain(terrain, width, height);
-    this.crystals = terrain.crystals.map((c) => ({ x: c.x, y: c.y, r: c.r, holder: -1, last: -1 }));
+    this.crystals = terrain.crystals.map((c) => ({ x: c.x, y: c.y, r: c.r, value: c.value ?? 1, holder: -1, last: -1 }));
     for (let f = 0; f < NUM_FACTIONS; f++) {
       this.factions.push({
         id: f,
