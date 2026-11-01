@@ -1111,15 +1111,15 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
       if (mid.length >= 8) routes.push(mid);
     }
   });
-  /** A point well along a route and the way the route runs there. */
-  const onRoute = (): [number, number, number, number] | null => {
+  /** A point well along a route and the way the route runs there (and the route and index, for `seam`). */
+  const onRoute = (): [number, number, number, number, number[], number] | null => {
     if (!routes.length) return null;
     const p = routes[rng.int(routes.length)], n = p.length / 2;
     const k = Math.floor(n * rng.range(0.25, 0.75));
     const k0 = Math.max(0, k - 3), k1 = Math.min(n - 1, k + 3);
     const dx = p[k1 * 2] - p[k0 * 2], dy = p[k1 * 2 + 1] - p[k0 * 2 + 1];
     const L = Math.sqrt(dx * dx + dy * dy);
-    return L < 1 ? null : [p[k * 2], p[k * 2 + 1], dx / L, dy / L];
+    return L < 1 ? null : [p[k * 2], p[k * 2 + 1], dx / L, dy / L, p, k];
   };
   /** Far enough from the other fields that they read as separate features (a form's own pieces, like a river, need less). */
   const fixed = spec.fields.length;
@@ -1141,12 +1141,14 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
   };
   const nebulaOk = (c: Capsule) => capitals.every((n) => capsuleDist(c, n.x, n.y) > 90) && clearOfCrystals(c, 8);
   const riftOk = (c: Capsule) => nests.every((n) => capsuleDist(c, n.x, n.y) > NEST_RADIUS[n.type] + 40) && clearOfCrystals(c, 10);
-  /** A soft cloud of 2-3 puffs round (x, y), spread along (nx, ny). */
+  /** A soft cloud of 2-3 puffs round (x, y), spread along (nx, ny); now and then a wide bank of 4-5. */
   const cloud = (x: number, y: number, nx: number, ny: number, rad: number): PolarCapsule[] => {
+    const bank = rng.next() < 0.3;
+    if (bank) rad *= 1.3;
     const out = [polarCap({ x1: x, y1: y, x2: x, y2: y, r: rad })];
-    const extra = 1 + rng.int(2);
+    const extra = bank ? 3 + rng.int(2) : 1 + rng.int(2);
     for (let e = 0; e < extra; e++) {
-      const s = (e % 2 ? -1 : 1) * rad * rng.range(0.5, 0.9), o = rng.range(-0.3, 0.3) * rad;
+      const s = (e % 2 ? -1 : 1) * rad * rng.range(0.5, 0.9) * (1 + (e >> 1) * 0.8), o = rng.range(-0.3, 0.3) * rad;
       const px = x + nx * s - ny * o, py = y + ny * s + nx * o;
       out.push(polarCap({ x1: px, y1: py, x2: px, y2: py, r: rad * rng.range(0.6, 0.9) }));
     }
@@ -1155,7 +1157,8 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
   /** A rift across a route at (x, y) running (dx, dy): a curve, a broken line, a fork, or a pool. */
   const riftAcross = (x: number, y: number, dx: number, dy: number): Capsule[] => {
     const nx = -dy, ny = dx;
-    const shape = rng.pick(['curve', 'curve', 'broken', 'fork', 'pool'] as const);
+    // Caves clip a long line to stubs, so they lean to pools.
+    const shape = rng.pick(spec.cave ? (['pool', 'pool', 'curve', 'fork'] as const) : (['curve', 'curve', 'broken', 'fork', 'pool'] as const));
     const out: Capsule[] = [];
     if (shape === 'pool') {
       // A few wide, overlapping blobs.
@@ -1168,7 +1171,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
       return out;
     }
     // A bowed line across the route, off-center so one way round is shorter.
-    const rad = rng.range(9, 13) * scale;
+    const rad = rng.range(11, 16) * scale;
     const L = rng.range(100, 170) * scale, bow = rng.range(-0.35, 0.35) * L, shift = rng.range(-0.3, 0.3) * L;
     const segs = 5;
     const at = (s: number): [number, number] => {
@@ -1214,7 +1217,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
       if (!at) return null;
       const [x, y, dx, dy] = at;
       if (cp && ground.clearance(x, y) < 45 * scale) return null;
-      if (!apart(x, y, 80)) return null;
+      if (!apart(x, y, 110)) return null;
       const rad = rng.range(36, 56) * scale, side = rng.range(-0.5, 0.5) * rad;
       return cloud(x - dy * side, y + dx * side, -dy, dx, rad);
     },
@@ -1222,7 +1225,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
       if (!valleys.length) return null;
       const k = valleys[rng.int(valleys.length)];
       const [x, y] = pos(grid!.rAt(Math.floor(k / grid!.cols)), base + grid!.aAt(k % grid!.cols));
-      if (!apart(x, y, 80)) return null;
+      if (!apart(x, y, 110)) return null;
       const t = rng.range(-PI, PI);
       return cloud(x, y, dcos(t), dsin(t), rng.range(36, 56) * scale);
     },
@@ -1243,13 +1246,19 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
     },
   };
   const firstNebula = ring ? 'halo' : spiralGap ? 'arms' : grid?.height ? 'valley' : 'route';
-  const clouds = Math.round(tp.nebula * rng.range(0.8, 1.6));
-  for (let k = 0; k < clouds; k++) {
+  // How much ground each sector holds, so a big map gets more than a small one
+  // (about 2 clouds and 2 rifts per standard sector on a medium 3p map). Rock
+  // takes its share, softened: a cave's open ground is where the eye goes.
+  let open = 0, cells = 0;
+  for (let y = 20; y < h; y += 40) for (let x = 20; x < w; x += 40, cells++) if (inOpen(x, y, 0)) open++;
+  const room = ((w * h) / P / 300000) * Math.sqrt(open / cells);
+  const clouds = tp.nebula <= 0 ? 0 : Math.min(8, Math.max(1, Math.round(tp.nebula * rng.range(0.7, 1.15) * room)));
+  const placeNebula = (k: number) => {
     let ok = false;
     // The form's own spot first, then routes (and valleys on noise maps).
     const order = k === 0 ? [firstNebula, 'route'] : grid?.height && k % 2 === 0 ? ['valley', 'route'] : ['route', firstNebula];
     for (const g of order) {
-      for (let tries = 0; tries < 12 && !ok; tries++) {
+      for (let tries = 0; tries < 24 && !ok; tries++) {
         const parts = nebulaGen[g]();
         ok = !!parts && addField(parts, 'nebula', nebulaOk);
       }
@@ -1262,7 +1271,7 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
       if (!apart(x, y, 50)) continue;
       ok = addField(cloud(x, y, dcos(t), dsin(t), rng.range(36, 60) * scale), 'nebula', nebulaOk);
     }
-  }
+  };
 
   // Rifts: damaging ground across the routes, in varied shapes: you wade
   // through or go round. A ring gets a broken arc round its void, a rock
@@ -1271,8 +1280,31 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
     route: () => {
       const at = onRoute();
       if (!at || !apart(at[0], at[1], 70)) return null;
-      const caps = riftAcross(...at);
+      const caps = riftAcross(at[0], at[1], at[2], at[3]);
       return caps.length >= 2 || (caps.length === 1 && caps[0].r > 15) ? caps.map(polarCap) : null;
+    },
+    // In caves, a stretch of tunnel runs hot: the short way burns, the long way round is dry.
+    seam: () => {
+      const at = onRoute();
+      if (!spec.cave || !at || !apart(at[0], at[1], 70)) return null;
+      const [, , , , p, k] = at, n = p.length / 2;
+      const half = rng.range(80, 150) * scale, rad = rng.range(11, 15) * scale;
+      const walk = (dir: number): [number, number][] => {
+        const out: [number, number][] = [];
+        let d = 0, last = 0;
+        for (let j = k + dir; j >= 0 && j < n && d < half; j += dir) {
+          d += Math.sqrt((p[j * 2] - p[(j - dir) * 2]) ** 2 + (p[j * 2 + 1] - p[(j - dir) * 2 + 1]) ** 2);
+          if (d - last >= 28 || d >= half) {
+            out.push([p[j * 2], p[j * 2 + 1]]);
+            last = d;
+          }
+        }
+        return out;
+      };
+      const pts = [...walk(-1).reverse(), [p[k * 2], p[k * 2 + 1]] as [number, number], ...walk(1)];
+      if (pts.length < 3) return null;
+      const caps = pts.slice(1).map(([x2, y2], i) => ({ x1: pts[i][0], y1: pts[i][1], x2, y2, r: rad }));
+      return caps.every((c) => inOpen(c.x1, c.y1, 0) && inOpen(c.x2, c.y2, 0)) ? caps.map(polarCap) : null;
     },
     arc: () => {
       if (!ring || ring.kind === 'rift') return null;
@@ -1294,23 +1326,29 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
   };
   const firstRift = ring ? 'arc' : river?.kind === 'wall' ? 'ford' : 'route';
   // A rift sea or a rift river is the map's rift already.
-  const rifts = (f.form === 'islands' && !cp) || river?.kind === 'rift' ? 0 : Math.round(tp.rifts * rng.range(0.6, 1.3));
-  for (let k = 0; k < rifts; k++) {
+  const rifts = (f.form === 'islands' && !cp) || river?.kind === 'rift' || tp.rifts <= 0 ? 0 : Math.min(6, Math.max(1, Math.round(tp.rifts * rng.range(0.8, 1.3) * room)));
+  const placeRift = (k: number) => {
     let ok = false;
-    for (const g of k === 0 ? [firstRift, 'route'] : ['route']) {
-      for (let tries = 0; tries < 12 && !ok; tries++) {
+    const more = spec.cave && k % 2 === 0 ? ['seam', 'route'] : ['route'];
+    for (const g of k === 0 ? [firstRift, ...more] : more) {
+      for (let tries = 0; tries < 24 && !ok; tries++) {
         const parts = riftGen[g]();
         ok = !!parts && addField(parts, 'rift', riftOk);
       }
       if (ok) break;
     }
-    // Last resort: a bowed strip anywhere off the nests.
-    for (let tries = 0; tries < 20 && !ok; tries++) {
+    // Last resort, for the first: a bowed strip anywhere off the nests. The rest go across routes or not at all.
+    for (let tries = 0; tries < 20 && !ok && k === 0; tries++) {
       const [x, y] = pos(rng.range(0.32, 0.75), base + rng.range(-0.45, 0.45) * sector), t = rng.range(-PI, PI);
       if (!apart(x, y, 50)) continue;
       const caps = riftAcross(x, y, dcos(t), dsin(t));
       ok = caps.length > 0 && addField(caps.map(polarCap), 'rift', riftOk);
     }
+  };
+  // In turns, so neither crowds the other out.
+  for (let k = 0; k < Math.max(clouds, rifts); k++) {
+    if (k < clouds) placeNebula(k);
+    if (k < rifts) placeRift(k);
   }
 
   return spec;
