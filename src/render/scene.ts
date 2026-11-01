@@ -1,5 +1,5 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_RETREAT, UNIT_STATS, UPGRADE_COST, VARIANTS } from '../sim/index';
+import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, TERRAIN, UNIT_FEEDING, UNIT_RETREAT, UNIT_STATS, UPGRADE_COST, VARIANTS } from '../sim/index';
 import { HEART, heartSlot, standingNests } from '../sim/heart';
 import { WILD_HEART, type World } from '../sim/world';
 import type { Renderer } from './renderer';
@@ -249,6 +249,12 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
       c = mixRgb(c, w.factions[owner]?.mods.mend ? MEND_RGB : WHITE, 0.25 * surgeGlow);
       size *= 1.15;
     }
+    // Rift heat (#58): an ember glow that builds the longer they stand in it.
+    if (w.heat[i]) {
+      const f = w.heat[i] / TERRAIN.rift.heatTicks;
+      c = mixRgb(c, EMBER_RGB, 0.6 * f);
+      size *= 1 + 0.08 * f;
+    }
     if (w.state[i] === UNIT_FEEDING) alpha = 190;
     // Skirmish: falling back, faded.
     else if (w.state[i] === UNIT_RETREAT) alpha = 150;
@@ -378,6 +384,7 @@ function drawHeart(r: Renderer, w: World, o: SceneOpts): void {
 
 const SHADOW: RGB = [0, 0, 0];
 const MEND_RGB: RGB = [120, 255, 150];
+const EMBER_RGB: RGB = [255, 110, 40];
 const EMBER: RGB = [255, 120, 40];
 
 /** Scorch (#60): smouldering ground left by a Barrage, flickering and fading as it burns out. */

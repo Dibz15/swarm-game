@@ -407,7 +407,7 @@ function howToPlayMobile(onBack: () => void): HTMLDivElement {
         <h3>Powers and upgrades</h3>
         <p><b>Surge</b> and <b>Nova</b> fire on your selected dots. Nest powers: tap the button, then tap the target. Tap one of your nests, then <b>Upgrade</b> to feed it dots for faster spawns and a turret.</p>
         <h3>The map</h3>
-        <p>Rock blocks paths (cave maps are mostly rock, with tunnels between chambers), purple nebula slows, red rifts burn. Hold a crystal or a supply drop alone for energy. Wild swarms and the Colossus fight everyone.</p>
+        <p>Rock blocks paths (cave maps are mostly rock, with tunnels between chambers), purple nebula slows, red rifts burn the longer you stand in them. Hold a crystal or a supply drop alone for energy. Wild swarms and the Colossus fight everyone.</p>
         <div class="row end"><button class="primary" data-a="back">Got it</button></div>
       </div>
     </div>`);
@@ -447,7 +447,7 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
             <ul class="terrain">
               <li><i class="t-wall"></i><b>Rock</b> blocks movement and shots. Gaps make chokepoints. On cave layouts, nests sit in chambers joined by tunnels</li>
               <li><i class="t-neb"></i><b>Nebula</b> slows everything inside: ambush ground</li>
-              <li><i class="t-rift"></i><b>Rift</b> burns dots standing in it: a risky shortcut</li>
+              <li><i class="t-rift"></i><b>Rift</b> burns hotter the longer you stay: dash across, don't fight in it</li>
               <li><i class="t-crys"></i><b>Crystal</b> charges energy for whoever holds it alone</li>
             </ul>
             <h3>Map events</h3>

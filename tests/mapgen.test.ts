@@ -332,6 +332,8 @@ describe('feature placement (#114)', () => {
           const lines = routes(m);
           for (const kind of ['nebula', 'rift'] as const) {
             for (const f of features(m.terrain.fields.filter((o) => o.kind === kind))) {
+              // A hot zone laps a crystal instead (#58).
+              if (kind === 'rift' && f.some((c) => m.terrain.crystals.some((o) => capsuleDist(c, o.x, o.y) < o.r + 6))) continue;
               on[kind][1]++;
               // Across a route: its core on the line, not just grazing it.
               if (f.some((c) => lines.some((p) => p.some((_, k) => k % 2 === 0 && capsuleDist(c, p[k], p[k + 1]) < c.r * 0.5)))) on[kind][0]++;
@@ -392,5 +394,23 @@ describe('feature placement (#114)', () => {
         expect(dry.connected(m.nests.map((n) => [n.x, n.y])), `${form} ${players}p`).toBe(true);
       }
     }
+  });
+
+  it('some rifts lap a crystal, never its core, and every crystal stays reachable dry (#58)', () => {
+    let hot = 0;
+    for (const form of ['classic', 'river', 'spiral', 'caves', 'warrens'] as const) {
+      for (let s = 0; s < 8; s++) {
+        const m = generateMap({ seed: 500 + s, size: 'medium', players: 2 + (s % 3), form, terrain: 'standard' });
+        const rifts = m.terrain.fields.filter((f) => f.kind === 'rift');
+        for (const c of m.terrain.crystals) {
+          for (const f of rifts) expect(capsuleDist(f, c.x, c.y), `${form} ${s}`).toBeGreaterThan(c.r * 0.5);
+          if (rifts.some((f) => capsuleDist(f, c.x, c.y) < c.r + 6)) hot++;
+        }
+        const dry = new Terrain({ ...m.terrain, walls: [...m.terrain.walls, ...rifts], fields: [] }, m.width, m.height);
+        const points = [...m.nests.map((n): [number, number] => [n.x, n.y]), ...m.terrain.crystals.map((c): [number, number] => [c.x, c.y])];
+        expect(dry.connected(points), `${form} ${s}`).toBe(true);
+      }
+    }
+    expect(hot).toBeGreaterThan(20);
   });
 });

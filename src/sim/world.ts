@@ -330,6 +330,8 @@ export class World {
   readonly pack = new Uint8Array(MAX_UNITS);
   /** Swarm-call (#60): tick until which the unit is roused */
   readonly called = new Int32Array(MAX_UNITS);
+  /** rift heat in ticks (#58): builds inside a rift, drains outside */
+  readonly heat = new Uint8Array(MAX_UNITS);
   /** Echo (#60): a ghost's expiry tick, or 0 for a real unit */
   readonly ghost = new Int32Array(MAX_UNITS);
   /** Echo ghosts alive (most matches have none) */
@@ -460,6 +462,7 @@ export function spawnUnit(
   w.fortify[i] = 0;
   w.pack[i] = 0;
   w.called[i] = 0;
+  w.heat[i] = 0;
   w.guard[i] = 0;
   w.ghost[i] = 0;
   w.wild[i] = 0;

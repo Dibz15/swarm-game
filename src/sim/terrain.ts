@@ -57,6 +57,15 @@ export const TILE = 16;
 export const T_BLOCK = 1;
 export const T_NEBULA = 2;
 export const T_RIFT = 4;
+/** a tile in the core of a wide rift (`TERRAIN.riftWide`/`riftDeep`): crossing there would burn a unit up */
+export const T_DEEP = 8;
+
+/** Rift damage per second at `heat` ticks of heat (#58): a ramp on heat squared. */
+export function riftDps(heat: number): number {
+  const { minDps, maxDps, heatTicks } = TERRAIN.rift;
+  const f = Math.min(1, heat / heatTicks);
+  return minDps + (maxDps - minDps) * f * f;
+}
 
 /** Squared distance from (x, y) to segment (x1, y1)-(x2, y2). */
 export function segDist2(x: number, y: number, x1: number, y1: number, x2: number, y2: number): number {
@@ -237,7 +246,10 @@ export class Terrain {
         }
       }
     }
-    for (const f of spec.fields) this.raster(f, 0, f.kind === 'nebula' ? T_NEBULA : T_RIFT);
+    for (const f of spec.fields) {
+      this.raster(f, 0, f.kind === 'nebula' ? T_NEBULA : T_RIFT);
+      if (f.kind === 'rift' && f.r > TERRAIN.riftWide) this.raster(f, -TERRAIN.riftDeep, T_DEEP);
+    }
 
     this.ccols = Math.ceil(width / CELL) + 1;
     this.crows = Math.ceil(height / CELL) + 1;
@@ -451,7 +463,7 @@ export class Terrain {
   /** Movement cost multiplier (x10) for entering a tile. */
   private cost(t: number, diag: boolean): number {
     const f = this.flags[t];
-    const m = f & T_RIFT ? TERRAIN.riftCost : f & T_NEBULA ? TERRAIN.nebulaCost : 1;
+    const m = f & T_DEEP ? TERRAIN.riftDeepCost : f & T_RIFT ? TERRAIN.riftCost : f & T_NEBULA ? TERRAIN.nebulaCost : 1;
     return Math.round((diag ? 14 : 10) * m);
   }
 
@@ -540,10 +552,35 @@ export class Terrain {
     }
 
     // Where the cheapest path is as cheap as open ground, nothing is in the
-    // way: head straight for the target instead of zig-zagging on tiles.
+    // way: head straight for the target instead of zig-zagging on tiles. On
+    // eight-way tiles a way round a field often costs no more than the line
+    // itself, so with fields the line must also clear them (#58): a tile's
+    // line is clear if it is off every field and the tiles the line passes
+    // between next (straight on, and diagonally) are clear. Tiles are decided
+    // ring by ring out from the target, so those are known.
     const sx = seed % cols, sy = (seed / cols) | 0;
+    const FIELD = T_NEBULA | T_RIFT;
+    let clear: Uint8Array | null = null;
+    if (this.hasFields) {
+      clear = new Uint8Array(n);
+      const ring = (t: number) => Math.max(Math.abs((t % cols) - sx), Math.abs(((t / cols) | 0) - sy));
+      const start = new Int32Array(Math.max(cols, rows) + 2);
+      for (let t = 0; t < n; t++) start[ring(t) + 1]++;
+      for (let r = 1; r < start.length; r++) start[r] += start[r - 1];
+      const order = new Int32Array(n);
+      for (let t = 0; t < n; t++) order[start[ring(t)]++] = t;
+      clear[seed] = 1;
+      for (let k = 0; k < n; k++) {
+        const t = order[k];
+        if (t === seed || flags[t] & FIELD) continue;
+        const tx = t % cols, ty = (t / cols) | 0;
+        const ax = Math.abs(sx - tx), ay = Math.abs(sy - ty), gx = Math.sign(sx - tx), gy = Math.sign(sy - ty);
+        const diag = t + gy * cols + gx, on = ax > ay ? t + gx : ay > ax ? t + gy * cols : diag;
+        if (clear[on] && (ax === 0 || ay === 0 || clear[diag])) clear[t] = 1;
+      }
+    }
     for (let t = 0; t < n; t++) {
-      if (dist[t] === UNREACHED || t === seed) continue;
+      if (dist[t] === UNREACHED || t === seed || (clear && !clear[t])) continue;
       const dx = Math.abs((t % cols) - sx), dy = Math.abs(((t / cols) | 0) - sy);
       const open = 10 * Math.max(dx, dy) + 4 * Math.min(dx, dy);
       if (dist[t] <= open) dir[t] = STRAIGHT;

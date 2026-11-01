@@ -1131,16 +1131,19 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
     if (!caps.length || !caps.every((c) => inMap(c, 0) && check(c))) return false;
     // In caves, nebula sits in open ground.
     if (kind === 'nebula' && !caps.every((c) => inOpen(c.x1, c.y1, 0) && inOpen(c.x2, c.y2, 0))) return false;
-    // Rifts never stand in the way alone: the nests still connect with every rift treated as rock.
+      // Rifts never stand in the way alone: the nests and crystals still connect with every rift treated as rock.
     if (kind === 'rift') {
       const rifts = spec.fields.filter((o) => o.kind === 'rift');
-      if (!new Terrain({ walls: [...spec.walls, ...rifts, ...caps], fields: [], crystals: [], cave: spec.cave }, w, h).connected(points)) return false;
+      const dry = [...points, ...spec.crystals.map((o): [number, number] => [o.x, o.y])];
+      if (!new Terrain({ walls: [...spec.walls, ...rifts, ...caps], fields: [], crystals: [], cave: spec.cave }, w, h).connected(dry)) return false;
     }
     for (const c of caps) spec.fields.push({ ...c, kind });
     return true;
   };
   const nebulaOk = (c: Capsule) => capitals.every((n) => capsuleDist(c, n.x, n.y) > 90) && clearOfCrystals(c, 8);
   const riftOk = (c: Capsule) => nests.every((n) => capsuleDist(c, n.x, n.y) > NEST_RADIUS[n.type] + 40) && clearOfCrystals(c, 10);
+  /** A hot zone (#58) may lap a crystal's hold ring, but never its core. */
+  const hotOk = (c: Capsule) => nests.every((n) => capsuleDist(c, n.x, n.y) > NEST_RADIUS[n.type] + 40) && spec.crystals.every((o) => capsuleDist(c, o.x, o.y) > c.r + o.r * 0.5);
   /** A soft cloud of 2-3 puffs round (x, y), spread along (nx, ny); now and then a wide bank of 4-5. */
   const cloud = (x: number, y: number, nx: number, ny: number, rad: number): PolarCapsule[] => {
     const bank = rng.next() < 0.3;
@@ -1283,6 +1286,28 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
       const caps = riftAcross(at[0], at[1], at[2], at[3]);
       return caps.length >= 2 || (caps.length === 1 && caps[0].r > 15) ? caps.map(polarCap) : null;
     },
+    // A hot zone (#58): an arc or pool lapping a crystal's edge, so holding it means standing by the burn.
+    crystal: () => {
+      const own = spec.crystals.filter((o) => o.x !== w / 2 || o.y !== h / 2);
+      if (!own.length) return null;
+      const cr = own[rng.int(own.length)];
+      const rad = rng.range(11, 15) * scale, R = cr.r + rad * 0.5 + 4, t0 = rng.range(-PI, PI);
+      const caps: Capsule[] = [];
+      if (rng.next() < 0.6) {
+        const span = rng.range(1.05, 1.9), segs = 3;
+        for (let s = 0; s < segs; s++) {
+          const a = t0 + (span * s) / segs, b = t0 + (span * (s + 1)) / segs;
+          caps.push({ x1: cr.x + dcos(a) * R, y1: cr.y + dsin(a) * R, x2: cr.x + dcos(b) * R, y2: cr.y + dsin(b) * R, r: rad });
+        }
+      } else {
+        for (let k = 0; k < 2; k++) {
+          const a = t0 + (k - 0.5) * 0.5, d = R + rad * 0.4;
+          const px = cr.x + dcos(a) * d, py = cr.y + dsin(a) * d;
+          caps.push({ x1: px, y1: py, x2: px, y2: py, r: rad * 1.3 });
+        }
+      }
+      return caps.every((c) => inOpen(c.x1, c.y1, 0) && inOpen(c.x2, c.y2, 0)) ? caps.map(polarCap) : null;
+    },
     // In caves, a stretch of tunnel runs hot: the short way burns, the long way round is dry.
     seam: () => {
       const at = onRoute();
@@ -1330,10 +1355,12 @@ function generateTerrain(rng: Rng, tp: TerrainParams, cp: CaveParams | null, f: 
   const placeRift = (k: number) => {
     let ok = false;
     const more = spec.cave && k % 2 === 0 ? ['seam', 'route'] : ['route'];
-    for (const g of k === 0 ? [firstRift, ...more] : more) {
+    // About one rift in four laps a crystal; on maps with few, maybe the last.
+    const hot = k > 0 && (k % 4 === 3 || (rifts < 4 && k === rifts - 1 && rng.next() < 0.5));
+    for (const g of k === 0 ? [firstRift, ...more] : hot ? ['crystal', ...more] : more) {
       for (let tries = 0; tries < 24 && !ok; tries++) {
         const parts = riftGen[g]();
-        ok = !!parts && addField(parts, 'rift', riftOk);
+        ok = !!parts && addField(parts, 'rift', g === 'crystal' ? hotOk : riftOk);
       }
       if (ok) break;
     }
