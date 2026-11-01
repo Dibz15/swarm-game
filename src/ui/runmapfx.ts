@@ -156,6 +156,8 @@ function mapSprite(run: RunState, n: RunNode, style: 'constellation' | 'minimap'
   return cv;
 }
 
+const ROCK = 'rgb(70, 85, 150)';
+
 /**
  * A top-down picture of a battle map at scale `s` from (ox, oy): cave rock,
  * walls, nebula and rift fields (with `detail`), crystals, and the nests in
@@ -174,21 +176,25 @@ export function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: 
   const cave = m.terrain.cave;
   if (cave) {
     // Rock everywhere in the zone, with the chambers and tunnels carved out.
+    // Drawn solid, then laid on see-through, so the overlapping pieces of
+    // noise rock don't stack into stripes.
     const rock = document.createElement('canvas');
     rock.width = g.canvas.width;
     rock.height = g.canvas.height;
     const r = rock.getContext('2d')!;
     r.lineCap = 'round';
-    r.fillStyle = r.strokeStyle = 'rgba(70, 85, 150, 0.55)';
+    r.fillStyle = r.strokeStyle = ROCK;
     if (cave.zone) for (const z of cave.zone) capsule(z, r);
     else r.fillRect(X(0), Y(0), m.width * s, m.height * s);
     r.globalCompositeOperation = 'destination-out';
     r.strokeStyle = '#000';
     for (const c of cave.carves) capsule(c, r);
     r.globalCompositeOperation = 'source-over';
-    r.strokeStyle = 'rgba(70, 85, 150, 0.55)';
+    r.strokeStyle = ROCK;
     for (const c of cave.fill ?? []) capsule(c, r);
+    g.globalAlpha = 0.55;
     g.drawImage(rock, 0, 0);
+    g.globalAlpha = 1;
   }
   if (detail) {
     // Each kind on its own layer, drawn solid then laid on see-through, so
@@ -212,8 +218,19 @@ export function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: 
       g.fill();
     }
   }
-  g.strokeStyle = 'rgba(150, 170, 255, 0.5)';
-  for (const w of m.terrain.walls) capsule(w, g);
+  if (m.terrain.walls.length) {
+    // Walls the same way: a river's or a ring's overlap too.
+    const layer = document.createElement('canvas');
+    layer.width = g.canvas.width;
+    layer.height = g.canvas.height;
+    const l = layer.getContext('2d')!;
+    l.lineCap = 'round';
+    l.strokeStyle = 'rgb(150, 170, 255)';
+    for (const w of m.terrain.walls) capsule(w, l);
+    g.globalAlpha = 0.5;
+    g.drawImage(layer, 0, 0);
+    g.globalAlpha = 1;
+  }
   const unit = Math.max(m.width, m.height) * s;
   for (const nest of m.nests) {
     g.fillStyle = colorOf(nest.player);
