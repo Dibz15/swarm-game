@@ -2,6 +2,8 @@ import { DT, ENERGY, EVENTS, Kind, MAX_LEVEL, NEST_KIND, NEUTRAL, NUM_FACTIONS, 
 import { groupArrive } from './commands';
 import type { EventSpec } from './mapgen';
 import { TAU, dcos, dsin } from './mathx';
+import { updateHeart } from './heart';
+import { updateSiege } from './siege';
 import { Rng } from './rng';
 import { queryRadius } from './spatial';
 import { pushFx, removeUnit, spawnUnit, WILD_COLOSSUS, WILD_SWARM, type Colossus, type Swarm, type World } from './world';
@@ -50,6 +52,8 @@ export function updateEvents(w: World): void {
   }
 
   if (ev.swarms.length && t % EVENTS.swarmRethink === 0) for (const s of ev.swarms) steerSwarm(w, s);
+  if (w.heart) updateHeart(w);
+  if (w.siege) updateSiege(w);
   ev.swarms = ev.swarms.filter((s) => (s.uids = s.uids.filter((u) => w.uidToSlot.has(u))).length > 0);
   if (ev.colossi.length) updateColossi(w);
   if (ev.drops.length) updateDrops(w);
@@ -73,12 +77,21 @@ function spawnSwarm(w: World): void {
   // Rotate through the borders from a seeded start, so no sector is favored.
   if (ev.swarmCount === 0) ev.swarmCount = ev.rng.int(spawns.length);
   const [sx, sy] = spawns[ev.swarmCount++ % spawns.length];
+  releaseSwarm(w, sx, sy, size, ev.spec.params.bloom ? 'bloomSwarm' : 'swarmSpawn');
+}
+
+/** A wild swarm of `size` around (sx, sy) that starts hunting at once. */
+/** A wild swarm's usual mix: Swarmers, every fifth a Raider. */
+const SWARM_MIX: readonly number[] = [Kind.Dot, Kind.Dot, Kind.Dot, Kind.Dot, Kind.Swift];
+
+export function releaseSwarm(w: World, sx: number, sy: number, size: number, fx: 'swarmSpawn' | 'bloomSwarm' | null, mix: readonly number[] = SWARM_MIX): Swarm {
+  const ev = w.events!;
   const sw: Swarm = { uids: [], tx: sx, ty: sy };
   const spread = Math.sqrt(size) * 6;
   for (let k = 0; k < size; k++) {
     const a = ev.rng.next() * TAU, r = Math.sqrt(ev.rng.next()) * spread;
     const [x, y] = w.terrain.freePoint(sx + dcos(a) * r, sy + dsin(a) * r, 4);
-    const kind = k % 5 === 4 ? Kind.Swift : Kind.Dot;
+    const kind = mix[k % mix.length];
     const s = spawnUnit(w, NEUTRAL, kind, x, y, sx, sy, groupArrive(size));
     if (s < 0) break;
     w.wild[s] = WILD_SWARM;
@@ -86,14 +99,15 @@ function spawnSwarm(w: World): void {
   }
   ev.swarms.push(sw);
   steerSwarm(w, sw);
-  pushFx(w, 'swarmSpawn', sx, sy, NEUTRAL, spread);
+  if (fx) pushFx(w, fx, sx, sy, NEUTRAL, spread);
+  return sw;
 }
 
 const candX: number[] = [];
 const candY: number[] = [];
 
 /** Head for the biggest army nearby; wander between drop spots if nobody is around. */
-function steerSwarm(w: World, sw: Swarm): void {
+export function steerSwarm(w: World, sw: Swarm): void {
   let cx = 0, cy = 0, n = 0;
   for (const u of sw.uids) {
     const s = w.uidToSlot.get(u);
@@ -106,8 +120,29 @@ function steerSwarm(w: World, sw: Swarm): void {
   cx /= n;
   cy /= n;
 
-  // Candidates: player nests plus a stride sample of player units.
+  // Candidates: player nests plus a stride sample of player units. A siege
+  // wave (#67) only hunts its quarry, and goes for the nearest of its nests.
   candX.length = candY.length = 0;
+  if (sw.hunt !== undefined) {
+    let bd = Infinity;
+    for (const nest of w.nests) {
+      if (nest.owner !== sw.hunt) continue;
+      // The capital is the prize; raiders pick off the outer nests first.
+      const d = (nest.x - cx) ** 2 + (nest.y - cy) ** 2 + (nest.capital === !!sw.raid ? 1e8 : 0);
+      if (d < bd) (bd = d), (sw.tx = nest.x), (sw.ty = nest.y);
+    }
+    if (bd < Infinity) {
+      const ar = groupArrive(n);
+      for (const u of sw.uids) {
+        const s = w.uidToSlot.get(u);
+        if (s === undefined) continue;
+        w.ox[s] = sw.tx;
+        w.oy[s] = sw.ty;
+        w.arrive[s] = ar;
+      }
+      return;
+    }
+  }
   for (const nest of w.nests) {
     if (nest.owner >= 0 && nest.owner !== NEUTRAL) {
       candX.push(nest.x);
@@ -156,8 +191,10 @@ function spawnDrop(w: World): void {
   const spots = ev.spec.dropSpots;
   // Usually land near whoever is weakest, so drops pull the leader out of
   // its turtle instead of feeding it. Never the same spot twice in a row.
+  // A faction the drops favour (a campaign perk, #60) takes the weakest's place.
   let k = ev.rng.int(spots.length);
-  const weak = weakestHome(w);
+  const fav = favoured(w);
+  const weak = fav >= 0 ? homeOf(w, fav) : weakestHome(w);
   if (weak && ev.rng.next() < EVENTS.dropNearWeakest) {
     let bd = Infinity;
     for (let j = 0; j < spots.length; j++) {
@@ -175,6 +212,16 @@ function spawnDrop(w: World): void {
   pushFx(w, 'dropIncoming', x, y, NEUTRAL, EVENTS.dropRadius);
 }
 
+/** The active faction drops favour most, or -1. */
+function favoured(w: World): number {
+  let best = -1;
+  for (let f = 0; f < NEUTRAL; f++) {
+    const fa = w.factions[f];
+    if (fa.active && !fa.eliminated && fa.mods.dropFavour > 0 && (best < 0 || fa.mods.dropFavour > w.factions[best].mods.dropFavour)) best = f;
+  }
+  return best;
+}
+
 /** Nest centroid of the active player with the smallest army, or null. */
 function weakestHome(w: World): [number, number] | null {
   let weak = -1;
@@ -183,9 +230,14 @@ function weakestHome(w: World): [number, number] | null {
     if (!fa.active || fa.eliminated) continue;
     if (weak < 0 || w.unitCount[f] < w.unitCount[weak]) weak = f;
   }
+  return homeOf(w, weak);
+}
+
+/** Nest centroid of faction f, or null. */
+function homeOf(w: World, f: number): [number, number] | null {
   let x = 0, y = 0, n = 0;
   for (const nest of w.nests) {
-    if (nest.owner !== weak) continue;
+    if (nest.owner !== f) continue;
     x += nest.x;
     y += nest.y;
     n++;
@@ -216,6 +268,7 @@ function updateDrops(w: World): void {
     queryRadius(w, d.x, d.y, EVENTS.dropRadius, scratch);
     let team = -1, lead = -1, mixed = false, total = 0;
     for (const s of scratch) {
+      if (w.ghost[s]) continue;
       const o = w.owner[s];
       if (team >= 0 && w.teamOf[o] !== team) mixed = true;
       if (team < 0) team = w.teamOf[o];
@@ -224,7 +277,7 @@ function updateDrops(w: World): void {
       total += w.kind[s] === Kind.Swift ? TRAITS.raidCapture : 1;
     }
     if (mixed || lead < 0 || lead === NEUTRAL) return true;
-    const rate = (EVENTS.dropBase + EVENTS.dropPerUnit * Math.min(total, 20)) * DT * STEP;
+    const rate = (EVENTS.dropBase + EVENTS.dropPerUnit * Math.min(total, 20)) * DT * STEP * Math.max(1, w.factions[lead].mods.dropFavour);
     if (d.holder >= 0 && w.teamOf[d.holder] !== w.teamOf[lead]) {
       // Someone else's progress drains first, twice as fast.
       d.progress -= rate * 2;
@@ -283,6 +336,7 @@ function updateColossi(w: World): void {
     const [tx, ty] = c.path[c.leg];
     if ((w.x[s] - tx) ** 2 + (w.y[s] - ty) ** 2 < 50 * 50) {
       if (c.leg === c.path.length - 1) {
+        if (c.stay) return true;
         // Walked off the far side: nobody got it.
         removeUnit(w, s);
         return false;
@@ -310,11 +364,16 @@ function stomp(w: World, s: number): void {
 
 /** Whoever lands the killing blow on a Colossus: full energy and a free upgrade. */
 export function colossusSlain(w: World, x: number, y: number, killer: number): void {
-  if (killer >= 0 && killer !== NEUTRAL) {
-    w.factions[killer].energy = ENERGY.max;
-    grantUpgrade(w, killer);
-  }
+  giantReward(w, killer);
   pushFx(w, 'colossusDown', x, y, killer, 80);
+}
+
+/** Whoever fells a giant (a Colossus or the Bloom's heart) gets full energy and an upgrade. Returns whether a player did. */
+export function giantReward(w: World, killer: number): boolean {
+  if (killer < 0 || killer === NEUTRAL) return false;
+  w.factions[killer].energy = ENERGY.max;
+  grantUpgrade(w, killer);
+  return true;
 }
 
 // ---- garrison regrowth --------------------------------------------------------

@@ -1,3 +1,5 @@
+import type { TraitId } from '../campaign/warlords';
+import { BOONS, WAVE_KINDS, waveSize } from '../sim/siege';
 import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
@@ -5,9 +7,9 @@ import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
-import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
-import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost } from '../sim/commands';
-import type { Nest, World } from '../sim/world';
+import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
+import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, surgeCost } from '../sim/commands';
+import { inArmy, type Nest, type World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
 import { LocalSession } from './session';
@@ -53,6 +55,8 @@ export class GameView {
   mission: MissionRun | null = null;
   /** actions this mission hides */
   locked = new Set<Lock>();
+  /** why a locked action is locked, when it isn't the tutorial's "not in this lesson" */
+  private lockReason = new Map<Lock, string>();
   private highlightAt = 0;
   /** reading pause: the step it is for, and when it ends (seconds); see READ_PAUSE */
   private readStep = -1;
@@ -63,11 +67,17 @@ export class GameView {
   private mask = new Uint8Array(MAX_UNITS);
   private spawnSeen: number[] = [];
   private domSecs = -1;
+  private siegeSecs = -1;
   private frame = 0;
   /** supply state last frame, to announce hitting the cap once */
   private supplyBlocked = false;
   private supplyNests = 0;
   private supplyToastTick = -1e9;
+  private bloomToasted = false;
+  /** a campaign warlord in this battle (#66, #100): its units' look, its citadel's marker */
+  warlord: { faction: number; trait: TraitId } | null = null;
+  /** the citadel's walls were breached (sounded once) */
+  private breached = false;
 
   constructor(
     readonly setup: MatchSetup,
@@ -83,7 +93,8 @@ export class GameView {
       const rec = this.rec;
       this.session.onIssue = (c) => rec.order(this.world, c);
     }
-    s.camera.setMap(this.world.width, this.world.height);
+    // The camera turns the map so your start is bottom or left (#98).
+    s.camera.setMap(this.world.width, this.world.height, this.human >= 0 ? this.homePoint() : null);
     s.camera.fit();
     s.particles.clear();
     s.rings.list = [];
@@ -113,6 +124,13 @@ export class GameView {
     if (secs !== this.domSecs) {
       if (ds && secs <= 10 && secs > 0) this.s.sfx.domTick(1 - secs / 10, ds.team === w.teamOf[this.human]);
       this.domSecs = secs;
+    }
+    // Holding the line (#67): the clock ticks through its last ten seconds.
+    const sg = this.result ? null : w.siege;
+    const left = sg ? Math.ceil((sg.until - w.tick) / TICK_HZ) : -1;
+    if (left !== this.siegeSecs) {
+      if (sg && left <= 10 && left > 0) this.s.sfx.domTick(1 - left / 10, true);
+      this.siegeSecs = left;
     }
     // Soft ticks for your own nests spawning, if they are on screen.
     for (const n of w.nests) {
@@ -162,13 +180,20 @@ export class GameView {
   /** A mission hides this action: say so instead of doing it. */
   private blocked(a: Lock): boolean {
     if (!this.locked.has(a)) return false;
-    this.s.toast('Not in this lesson: it comes later', '#9aa4c7');
+    this.s.toast(this.lockReason.get(a) ?? 'Not in this lesson: it comes later', '#9aa4c7');
     return true;
+  }
+
+  /** Lock an action for this match (campaign unlocks), with the toast that explains it. */
+  lock(a: Lock, reason: string): void {
+    this.locked.add(a);
+    this.lockReason.set(a, reason);
   }
 
   private finish(r: MatchResult, time: number): void {
     this.result = r;
     this.resultTime = time;
+    if (r === 'victory' && this.world.winReason === 'held') this.s.sfx.lineHeld();
     if (r === 'victory') this.s.sfx.victory();
     else this.s.sfx.defeat();
   }
@@ -184,6 +209,7 @@ export class GameView {
       selectedNests: this.selection.nests,
       hoverNest: this.hoverNest,
       human: this.human,
+      warlord: this.warlord,
     });
     this.drawAim();
     this.drawEdgeMarkers(time);
@@ -216,15 +242,19 @@ export class GameView {
   /** Arrows at the screen edge pointing to off-screen drops, Colossi and swarms. */
   private drawEdgeMarkers(time: number): void {
     const ev = this.world.events;
-    if (!ev) return;
     const w = this.world;
     const marks: [number, number, readonly number[]][] = [];
-    for (const d of ev.drops) marks.push([d.x, d.y, DROP_MARK]);
-    for (const c of ev.colossi) {
+    // A stronghold's citadel (#100), while it's still the goal.
+    if (w.citadel >= 0 && w.nests[w.citadel].owner !== this.human) {
+      const c = w.nests[w.citadel];
+      marks.push([c.x, c.y, FACTION_RGB[this.warlord?.faction ?? c.owner] ?? WHITE]);
+    }
+    for (const d of ev?.drops ?? []) marks.push([d.x, d.y, DROP_MARK]);
+    for (const c of ev?.colossi ?? []) {
       const s = w.uidToSlot.get(c.uid);
       if (s !== undefined) marks.push([w.x[s], w.y[s], FERAL]);
     }
-    for (const sw of ev.swarms) {
+    for (const sw of ev?.swarms ?? []) {
       let x = 0, y = 0, n = 0;
       for (const u of sw.uids) {
         const s = w.uidToSlot.get(u);
@@ -277,7 +307,7 @@ export class GameView {
       if (!from) return;
       let dx = cur[0] - from[0], dy = cur[1] - from[1];
       const d = Math.hypot(dx, dy);
-      const range = POWER.blinkRange * boost;
+      const range = POWER.blinkRange * boost * this.world.factions[this.human].mods.blinkRange;
       if (d > range) {
         dx *= range / d;
         dy *= range / d;
@@ -330,12 +360,19 @@ export class GameView {
       sfx.death(d[k], d[k + 1], d[k + 2]);
     }
     w.deaths = [];
+    // A stronghold's walls breached: the first time you contest the citadel.
+    if (!this.breached && w.citadel >= 0 && w.nests[w.citadel].contested && w.nests[w.citadel].owner !== this.human) {
+      this.breached = true;
+      sfx.citadelBreach();
+      toast('At the citadel: take it to win', hex(this.warlord?.faction ?? w.nests[w.citadel].owner));
+    }
 
     for (const e of w.fx) {
       const c = FACTION_RGB[e.f] ?? WHITE;
       const nest = w.nests[e.nest];
       switch (e.type) {
         case 'capture':
+          if (e.nest === w.citadel && e.f === this.human) sfx.citadelFall();
           rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3.2, dur: 0.7, c, thick: 2.5 });
           particles.burst(e.x, e.y, c, 26, 120, 2.6, 0.8);
           sfx.capture(e.x, e.y, e.f === this.human);
@@ -368,6 +405,9 @@ export class GameView {
           sfx.nova(e.x, e.y, e.f === this.human);
           break;
         }
+        case 'swarmCall':
+          rings.add({ x: e.x, y: e.y, r0: 4, r1: e.r, dur: 0.35, c, thick: 1.5 });
+          break;
         case 'surge':
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 1.4, dur: 0.5, c, thick: 2 });
           sfx.surge(e.x, e.y, e.f === this.human);
@@ -423,6 +463,70 @@ export class GameView {
           sfx.swarmHorn();
           toast('A wild swarm is coming! It hunts the biggest army', '#d65c4e');
           break;
+        case 'bloomSwarm':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 2.5, r1: e.r * 0.5, dur: 0.9, c: FERAL, thick: 3 });
+          sfx.bloomSwarm();
+          if (!this.bloomToasted) toast('The Bloom sends its swarms. They hunt every army alike', '#d65c4e');
+          this.bloomToasted = true;
+          break;
+        case 'heartWindup':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 1.6, r1: e.r, dur: 0.9, c: FERAL, thick: 2 });
+          sfx.heartWindup(e.x, e.y);
+          break;
+        case 'siegeWave': {
+          // e.prev: the wave's index in the schedule; e.x0: which side (a pincer fires one per side).
+          const wave = w.siege?.waves[e.prev];
+          rings.add({ x: e.x, y: e.y, r0: 20, r1: 140, dur: 0.9, c: FERAL, thick: 3 });
+          if (wave && e.x0 === 0) {
+            sfx.siegeWave();
+            toast(`Wave ${e.prev + 1}: ${WAVE_KINDS[wave.kind].name}, ${waveSize(w, wave)} strong`, '#e3707a');
+          }
+          break;
+        }
+        case 'capitalLost':
+          sfx.capitalAlarm();
+          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.6, c: [255, 93, 115], thick: 3 });
+          toast('Your capital has fallen: retake it within 20 seconds!', '#ff5d73');
+          break;
+        case 'boonOffer':
+          sfx.boonOffer();
+          break;
+        case 'boonTaken': {
+          const id = (Object.keys(BOONS) as (keyof typeof BOONS)[])[e.prev];
+          if (id) toast(`${BOONS[id].name}: ${BOONS[id].text.toLowerCase()}`, hex(this.human));
+          rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3, dur: 0.6, c: FACTION_RGB[this.human], thick: 3 });
+          sfx.levelUp(e.x, e.y, true);
+          break;
+        }
+        case 'capitalRetaken':
+          toast('Capital retaken', hex(this.human));
+          break;
+        case 'heartPulse': {
+          rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r, dur: 0.4, c: FERAL, thick: 5 });
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.4, r1: e.r, dur: 0.35, c: FERAL, thick: 0, disc: true });
+          const [sx, sy] = camera.toScreen(e.x, e.y);
+          if (sx > -100 && sy > -100 && sx < camera.viewW + 100 && sy < camera.viewH + 100) camera.shake = Math.min(1, camera.shake + 0.3);
+          sfx.heartPulse(e.x, e.y);
+          break;
+        }
+        case 'heartPhase':
+          rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r * 2.2, dur: 1, c: WHITE, thick: 4 });
+          particles.burst(e.x, e.y, FERAL, 60, 160, 3, 1);
+          camera.shake = Math.min(1, camera.shake + 0.5);
+          sfx.heartPhase();
+          toast('The heart rages! Its swarms rally to defend it', '#d65c4e');
+          break;
+        case 'heartDown': {
+          const kc = e.f >= 0 && e.f < NEUTRAL ? c : FERAL;
+          rings.add({ x: e.x, y: e.y, r0: 10, r1: e.r * 3, dur: 1.4, c: WHITE, thick: 6 });
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 2, dur: 0.8, c: kc, thick: 0, disc: true });
+          particles.burst(e.x, e.y, FERAL, 140, 240, 3.4, 1.6);
+          camera.shake = 1;
+          sfx.heartDown(e.x, e.y, e.f === this.human);
+          if (e.f === this.human) toast('You destroyed the heart of the Bloom!', hex(e.f));
+          else if (e.f >= 0 && e.f < NEUTRAL) toast(`${FACTION_NAMES[e.f]} destroyed the heart. Now beat them`, hex(e.f));
+          break;
+        }
         case 'dropIncoming':
           sfx.dropIncoming();
           toast('Supply drop incoming: hold it alone for energy and a free upgrade', '#ffe28c');
@@ -508,7 +612,7 @@ export class GameView {
     const w = this.world;
     const out: number[] = [];
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.owner[i] !== this.human || w.state[i] === UNIT_FEEDING) continue;
+      if (w.owner[i] !== this.human || !inArmy(w, i)) continue;
       if (test(w.x[i], w.y[i])) out.push(w.uid[i]);
     }
     return out;
@@ -630,7 +734,7 @@ export class GameView {
     const w = this.world;
     const units: number[] = [];
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.owner[i] !== this.human || w.kind[i] !== kind || w.state[i] === UNIT_FEEDING) continue;
+      if (w.owner[i] !== this.human || w.kind[i] !== kind || !inArmy(w, i)) continue;
       if (w.x[i] >= x0 && w.x[i] <= x1 && w.y[i] >= y0 && w.y[i] <= y1) units.push(w.uid[i]);
     }
     if (!units.length) return;
@@ -658,9 +762,10 @@ export class GameView {
   /** Every own unit of `kind` currently on screen. */
   selectKindOnScreen(kind: number): void {
     const cam = this.s.camera;
-    const [x0, y0] = cam.toWorld(0, 0);
-    const [x1, y1] = cam.toWorld(cam.viewW, cam.viewH);
-    this.selectKindIn(kind, x0, y0, x1, y1);
+    // On a turned view the corners swap, so sort them.
+    const [ax, ay] = cam.toWorld(0, 0);
+    const [bx, by] = cam.toWorld(cam.viewW, cam.viewH);
+    this.selectKindIn(kind, Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by));
   }
 
   /** Own unit kind under a world point, or -1. */
@@ -734,10 +839,15 @@ export class GameView {
     return this.world.nests[orders[0].nest];
   }
 
+  /** Holding the line (#67): take boon `k` of the offer. */
+  pickBoon(k: number): void {
+    if (this.world.siege?.offer) this.session.issue({ t: 'boon', p: this.human, k });
+  }
+
   surge(): void {
     if (this.blocked('surge')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Surge', '#9aa4c7');
-    if (this.world.factions[this.human].energy < POWER.surgeCost) return this.s.sfx.fail();
+    if (this.short(surgeCost(this.world, this.human))) return this.s.sfx.fail();
     this.session.issue({ t: 'surge', p: this.human, units: [...this.selection.units] });
   }
 
@@ -748,7 +858,7 @@ export class GameView {
       return this.s.toast('Nova only hits around your selected dots: wait until the enemy reaches them', '#ffd166');
     }
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');
-    if (this.world.factions[this.human].energy < POWER.novaCost) return this.s.sfx.fail();
+    if (this.short(POWER.novaCost)) return this.s.sfx.fail();
     this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
   }
 
@@ -765,7 +875,7 @@ export class GameView {
     if (!n) return false;
     cx /= n;
     cy /= n;
-    const r = novaRadius(n);
+    const r = novaRadius(n, w.factions[this.human].mods.novaRadius);
     for (let i = 0; i < w.n; i++) {
       if (w.alive[i] && w.hostile(w.owner[i], this.human) && (w.x[i] - cx) ** 2 + (w.y[i] - cy) ** 2 < r * r) return true;
     }
@@ -781,11 +891,17 @@ export class GameView {
       this.s.toast(`Hold a ${NEST_NAMES[POWER_NEST[power]]} to use this`, '#9aa4c7');
       return false;
     }
-    if (this.world.factions[this.human].energy < cost) {
+    if (this.short(cost)) {
       this.s.sfx.fail();
       return false;
     }
     return true;
+  }
+
+  /** Can't pay for a power? Feral (#60) has none; under Blood price (#60) the sim checks the units it costs instead. */
+  private short(cost: number): boolean {
+    const f = this.world.factions[this.human];
+    return f.mods.noPowers || (!f.mods.bloodPrice && f.energy < cost);
   }
 
   fortify(): void {
@@ -817,6 +933,8 @@ export class GameView {
         return this.s.toast('Lockdown needs an enemy nest under the cursor', '#9aa4c7');
       }
       if (!this.power('lockdown', POWER.lockdownCost)) return;
+      const rest = siphonWait(this.world, this.human);
+      if (rest > 0) return this.s.toast(`Siphon: Lockdown is ready again in ${Math.ceil(rest / TICK_HZ)} s`, '#9aa4c7');
       this.session.issue({ t: 'lockdown', p: this.human, nest: n.id });
     }
   }

@@ -1,0 +1,747 @@
+/**
+ * A procedural campaign run (#18; #62, #63): an organic map of territory
+ * nodes, a Bloom front that rolls across it a little further every turn, your
+ * broods, and the rules for moving, fighting and spending biomass. Pure and seeded: the same seed text
+ * always gives the same map, and nothing here touches the DOM.
+ *
+ * Map space is MAP_W x MAP_H. You start at the left; the Bloom's heart (the
+ * finale) is the rightmost node. The Bloom follows you (#88): it waits in a
+ * band off the left edge, and every node you leave starts it growing, so it
+ * spreads from where you came whichever way you went, and in time eats the
+ * nodes you skipped.
+ */
+
+import { Rng, hashString } from '../sim/rng';
+import { Kind, NestType } from '../sim/constants';
+import type { CaveLevel, MapSize, TerrainLevel } from '../sim/mapgen';
+import {
+  COST,
+  MAX_FIELDED,
+  MAX_ROSTER,
+  PACKS,
+  RESCUE_SIZE,
+  biomassFor,
+  fighters,
+  newBrood,
+  settleBroods,
+  type BattleReport,
+  type Brood,
+  type BroodEvent,
+  type PackId,
+  type Unlock,
+} from './broods';
+import { HUNGER_BLOOM, REROLL, REWARD, STRAIN_SLOTS, TIER_WEIGHT, rollOffer } from './rewards';
+import {
+  DOMAIN_RESCUE,
+  DOMAIN_REWARD,
+  DOMAIN_WEIGHT,
+  STRONGHOLD_REWARD,
+  STRONGHOLD_WEIGHT,
+  TROPHY,
+  placeWarlords,
+  type Warlord,
+} from './warlords';
+
+export const MAP_W = 1000;
+export const MAP_H = 620;
+export const RUN_VERSION = 2;
+/** share of battle nodes that offer a brood to rescue */
+const RESCUE_ODDS = 0.25;
+
+/**
+ * The run's difficulty, chosen when it starts. Mostly the Bloom: its pace is a
+ * share of the fastest the shortest route survives (at Standard's 0.6, one lost
+ * battle is almost always survivable and two spread-out ones usually are;
+ * measured over 150 seeds). Gentle also holds the Bloom still after a lost
+ * battle; the two ends shift the bots a level on some nodes.
+ * Calibrated with scripts/run-probe.ts against the human proxy's skill dial.
+ */
+export type RunDifficulty = 'gentle' | 'standard' | 'hard' | 'brutal';
+export interface DifficultyRules {
+  name: string;
+  blurb: string;
+  /** Bloom pace, as a share of the fastest the shortest route survives */
+  pace: number;
+  /** a lost battle doesn't advance the Bloom */
+  holdOnLoss: boolean;
+  /** bot difficulty shift: -1 on Normal nodes (Gentle), +1 on Hard nodes and the finale (Brutal) */
+  bots: -1 | 0 | 1;
+}
+export const DIFFICULTIES: RunDifficulty[] = ['gentle', 'standard', 'hard', 'brutal'];
+export const RUN_DIFFICULTY: Record<RunDifficulty, DifficultyRules> = {
+  gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, and easier middle battles.', pace: 0.45, holdOnLoss: true, bots: -1 },
+  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.6, holdOnLoss: false, bots: 0 },
+  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.75, holdOnLoss: false, bots: 0 },
+  brutal: { name: 'Brutal', blurb: 'A fast Bloom, and Brutal bots in the late battles and the finale.', pace: 0.8, holdOnLoss: false, bots: 1 },
+};
+/** saves from before difficulty were Standard */
+export const difficultyOf = (run: { difficulty?: RunDifficulty }): RunDifficulty => run.difficulty ?? 'standard';
+
+export type NodeKind = 'start' | 'conquest' | 'domination' | 'hold' | 'finale';
+
+export interface RunNode {
+  id: number;
+  x: number;
+  y: number;
+  links: number[];
+  kind: NodeKind;
+  /** hops from the start */
+  depth: number;
+  /** the battle's own seed */
+  seed: number;
+  size: MapSize;
+  caves: CaveLevel;
+  terrain: TerrainLevel;
+  rivals: number;
+  /** bot difficulty 0..3 */
+  difficulty: number;
+  /** biomass for winning here (before nests, survivors and speed) */
+  reward: number;
+  /** winning here rescues a brood of this kind */
+  rescue?: number;
+  /** reaching this node saves a checkpoint the run can restart from once */
+  checkpoint?: boolean;
+  /** the warlord whose domain this node is in (its id) */
+  domain?: number;
+}
+
+/** Where the Bloom grows from: a node you left, and the Bloom time you left it. */
+export interface BloomSeed {
+  x: number;
+  y: number;
+  born: number;
+}
+
+/**
+ * The Bloom (#88): a band it waits in, off the left edge (x of its edge at
+ * height y is `front + frontShape(y)`; it stays put), plus a circle around
+ * every node you've left, growing by `step` a turn after a turn's lag.
+ */
+export interface Bloom {
+  /** the band's edge (older saves: where their left-to-right front stopped) */
+  front: number;
+  /** how far a circle grows each turn */
+  step: number;
+  /** how far ahead the band runs at the top and bottom edges */
+  bulge: number;
+  /** [amplitude, frequency, phase] ripples along the band */
+  waves: [number, number, number][];
+  /** turns it has grown (it pauses after a loss on Gentle) */
+  time: number;
+  seeds: BloomSeed[];
+}
+
+/** Turns before the Bloom starts growing from a node you left. */
+export const BLOOM_LAG = 1;
+
+/** A seed's radius at Bloom time `time`. */
+export const seedRadius = (b: Bloom, s: BloomSeed, time = b.time): number => b.step * Math.max(0, time - s.born - BLOOM_LAG);
+
+/** How the Bloom's parts fuse: circles and the band melt together within this distance (a smooth union). */
+export const BLOOM_FUSE = 60;
+/** Its whole edge also grows near where it's growing from: by this share of each seed's radius... */
+export const BLOOM_SWELL = 0.45;
+/** ...fading with distance from that seed over this length. */
+export const BLOOM_REACH = 320;
+
+/** A smooth minimum: like min(a, b), but rounded where they're within k of each other. */
+function smin(a: number, b: number, k: number): number {
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.min(a, b) - (h * h * k) / 4;
+}
+
+/**
+ * Signed distance from (x, y) to the Bloom's edge at Bloom time `time`
+ * (negative inside), with the band's shape given by `shape`. The band and
+ * the circles fuse into one body, and its whole edge swells near the seeds,
+ * less the further away it is.
+ */
+export function bloomGapWith(b: Bloom, x: number, y: number, time: number, shape: (y: number) => number): number {
+  let g = x - (b.front + shape(y));
+  let swell = 0;
+  for (const s of b.seeds) {
+    const r = seedRadius(b, s, time);
+    const d = Math.hypot(x - s.x, y - s.y);
+    g = smin(g, d - r, BLOOM_FUSE);
+    swell += BLOOM_SWELL * r * Math.exp(-d / BLOOM_REACH);
+  }
+  return g - swell;
+}
+
+/** Signed distance from (x, y) to the Bloom's edge at Bloom time `time`: negative inside it. */
+export const bloomGap = (b: Bloom, x: number, y: number, time = b.time): number => bloomGapWith(b, x, y, time, (yy) => frontShape(b, yy));
+
+export type RunStatus = 'active' | 'won' | 'lost';
+
+export interface RunState {
+  v: number;
+  id: string;
+  seedText: string;
+  seed: number;
+  /** the player's color */
+  color: number;
+  nodes: RunNode[];
+  start: number;
+  heart: number;
+  /** the node you're standing on */
+  at: number;
+  /** nodes you've taken (a visited node is passed through without a battle) */
+  visited: number[];
+  /** nodes the Bloom has swallowed */
+  swallowed: number[];
+  bloom: Bloom;
+  turn: number;
+  /** chosen at the start (older saves: Standard, see difficultyOf) */
+  difficulty?: RunDifficulty;
+  broods: Brood[];
+  nextBrood: number;
+  /** the broods fielded last time, as the default pick */
+  fielded: number[];
+  /** nest types usable in battle (bitmask; the Hive always) and Nova */
+  unlocks: { nests: number; nova: boolean };
+  biomass: number;
+  /** run-wide rewards: power variants, perks and pacts (ids in rewards.ts) */
+  perks: string[];
+  /** a reward offer waiting to be picked (saved, so reloading shows the same one) */
+  offer?: { ids: string[]; rerolls: number; weight?: Record<'common' | 'uncommon' | 'rare', number> };
+  /** rival warlords and their domains (#66; older saves have none) */
+  warlords?: Warlord[];
+  status: RunStatus;
+  /** why a lost run ended */
+  lostTo?: 'broods' | 'bloom';
+  /** the run as it stood at the checkpoint (JSON), until it's used */
+  checkpointSave?: string;
+  checkpointUsed: boolean;
+  created: number;
+  updated: number;
+  log: { turn: number; node: number; won: boolean }[];
+}
+
+// ---- generation -----------------------------------------------------------
+
+/** Is (x, y) inside the run's irregular region? A noisy ellipse. */
+function inside(x: number, y: number, lobes: [number, number, number][]): boolean {
+  const dx = (x - MAP_W / 2) / (MAP_W * 0.48);
+  const dy = (y - MAP_H / 2) / (MAP_H * 0.46);
+  const a = Math.atan2(dy, dx);
+  let edge = 1;
+  for (const [amp, k, ph] of lobes) edge += amp * Math.sin(a * k + ph);
+  return dx * dx + dy * dy < edge * edge;
+}
+
+/** Dart-throwing Poisson-disk sampling, loosened or tightened until the count lands in range. */
+function scatter(rng: Rng, want: number, lobes: [number, number, number][]): { x: number; y: number }[] {
+  let min = 150;
+  let best: { x: number; y: number }[] = [];
+  for (let tries = 0; tries < 30; tries++) {
+    const pts: { x: number; y: number }[] = [];
+    for (let k = 0; k < 4000 && pts.length < want + 4; k++) {
+      const x = rng.range(30, MAP_W - 30);
+      const y = rng.range(30, MAP_H - 30);
+      if (!inside(x, y, lobes)) continue;
+      if (pts.every((p) => (p.x - x) ** 2 + (p.y - y) ** 2 >= min * min)) pts.push({ x, y });
+    }
+    if (Math.abs(pts.length - want) < Math.abs(best.length - want)) best = pts;
+    if (pts.length >= want && pts.length <= want + 2) return pts.slice(0, want);
+    min *= pts.length < want ? 0.93 : 1.06;
+  }
+  return best.slice(0, want);
+}
+
+/** Relative neighbourhood graph: a-b is a link unless some c is closer to both. Always connected. */
+function link(pts: { x: number; y: number }[]): number[][] {
+  const d = (a: number, b: number) => Math.hypot(pts[a].x - pts[b].x, pts[a].y - pts[b].y);
+  const links: number[][] = pts.map(() => []);
+  for (let a = 0; a < pts.length; a++) {
+    for (let b = a + 1; b < pts.length; b++) {
+      const ab = d(a, b);
+      let blocked = false;
+      for (let c = 0; c < pts.length && !blocked; c++) {
+        if (c !== a && c !== b && Math.max(d(a, c), d(b, c)) < ab) blocked = true;
+      }
+      if (!blocked) {
+        links[a].push(b);
+        links[b].push(a);
+      }
+    }
+  }
+  return links;
+}
+
+/** Hops from `from` to every node, avoiding `blocked`. -1 = unreachable. */
+export function hops(nodes: { links: number[] }[], from: number, blocked: (id: number) => boolean = () => false): number[] {
+  const dist = nodes.map(() => -1);
+  dist[from] = 0;
+  const queue = [from];
+  while (queue.length) {
+    const a = queue.shift()!;
+    for (const b of nodes[a].links) {
+      if (dist[b] >= 0 || blocked(b)) continue;
+      dist[b] = dist[a] + 1;
+      queue.push(b);
+    }
+  }
+  return dist;
+}
+
+/** How far the front's shape runs ahead of `front` at height y. */
+export function frontShape(b: Bloom, y: number): number {
+  const e = (y - MAP_H / 2) / (MAP_H / 2);
+  let s = b.bulge * e * e;
+  for (const [amp, k, ph] of b.waves) s += amp * Math.sin(y * k + ph);
+  return s;
+}
+
+/** Is (x, y) in the Bloom? */
+export function inBloom(b: Bloom, x: number, y: number, time = b.time): boolean {
+  return bloomGap(b, x, y, time) < 0;
+}
+
+/** Battle settings for a node, harder the further it is from the start. */
+function battle(node: RunNode, t: number, rng: Rng, rules: DifficultyRules): void {
+  if (node.kind === 'start') return;
+  if (node.kind === 'finale') {
+    Object.assign(node, { size: 'large', rivals: 3, difficulty: 2 + Math.max(0, rules.bots), caves: rng.pick<CaveLevel>(['off', 'belt']), terrain: 'standard', reward: 0 });
+    return;
+  }
+  // One step at a time: a second rival first (still Easy), then Normal bots, then Hard.
+  // Raising both together made depth 3-4 a wall in the run probe (#68).
+  node.difficulty = t < 0.4 ? 0 : t < 0.7 ? 1 : 2;
+  node.rivals = t < 0.2 ? 1 : t < 0.7 ? 2 : 2 + rng.int(2);
+  // Domination maps run one rival busier (a race for nests rather than a purge),
+  // but only once the bots are Normal: three Easy racers early were their own wall.
+  if (node.kind === 'domination' && node.difficulty >= 1) node.rivals = Math.min(3, node.rivals + 1);
+  // Only Normal eases: in an FFA, Hard bots fight each other harder and leave more
+  // openings, so easing Hard nodes to Normal made Gentle runs harder in the probe.
+  if (rules.bots < 0 && node.difficulty === 1) node.difficulty = 0;
+  if (rules.bots > 0 && node.difficulty === 2) node.difficulty = 3;
+  node.size = node.rivals <= 1 ? 'small' : 'medium';
+  node.caves = rng.pick<CaveLevel>(['off', 'off', 'off', 'belt', 'belt', 'full']);
+  node.terrain = rng.pick<TerrainLevel>(['light', 'standard', 'standard', 'heavy']);
+  node.reward = Math.round(10 + 20 * t + node.rivals * 4 + (node.kind === 'domination' ? 4 : 0));
+}
+
+/** Hold the line (#67): at most one per depth, past the first, outside domains. Its own stream. */
+const HOLD_ODDS = 0.45;
+function placeHolds(seed: number, nodes: RunNode[], far: number): void {
+  const rng = new Rng(hashString(`${seed}:holds`));
+  for (let d = 2; d < far; d++) {
+    const pool = nodes.filter((n) => n.depth === d && (n.kind === 'conquest' || n.kind === 'domination') && !n.checkpoint && n.domain === undefined);
+    if (!pool.length || rng.next() >= HOLD_ODDS) continue;
+    const n = rng.pick(pool);
+    const t = Math.min(1, d / far);
+    // No rival (#67 playtest: it took the field while you held the walls): just you and the Bloom.
+    Object.assign(n, { kind: 'hold', rivals: 0, size: 'medium', caves: 'off', reward: Math.round(10 + 20 * t + 8) });
+  }
+}
+
+export function newRun(seedText: string, color: number, pack: PackId = 'swarm', now = Date.now(), difficulty: RunDifficulty = 'standard'): RunState {
+  const rules = RUN_DIFFICULTY[difficulty];
+  const seed = hashString(`run:${seedText.trim() || 'swarm'}`);
+  const rng = new Rng(seed);
+  const lobes: [number, number, number][] = [1, 2, 3].map((k) => [rng.range(0.03, 0.09), k + 1, rng.range(0, Math.PI * 2)]);
+  const pts = scatter(rng, 18 + rng.int(7), lobes);
+  const links = link(pts);
+
+  let start = 0, heart = 0;
+  pts.forEach((p, i) => {
+    if (p.x < pts[start].x) start = i;
+    if (p.x > pts[heart].x) heart = i;
+  });
+  const nodes: RunNode[] = pts.map((p, i) => ({
+    id: i,
+    x: Math.round(p.x),
+    y: Math.round(p.y),
+    links: links[i],
+    kind: i === start ? 'start' : i === heart ? 'finale' : rng.next() < 0.35 ? 'domination' : 'conquest',
+    depth: 0,
+    seed: hashString(`${seed}:${i}`),
+    size: 'small',
+    caves: 'off',
+    terrain: 'standard',
+    rivals: 1,
+    difficulty: 0,
+    reward: 0,
+  }));
+  const depth = hops(nodes, start);
+  const far = Math.max(1, depth[heart]);
+  for (const n of nodes) {
+    n.depth = depth[n.id];
+    battle(n, Math.min(1, n.depth / far), rng, rules);
+  }
+  // One checkpoint about halfway to the heart; rescues scattered over the rest.
+  const mid = nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale' && n.depth === Math.max(1, Math.round(far / 2)));
+  if (mid.length) rng.pick(mid).checkpoint = true;
+  for (const n of nodes) {
+    if (n.kind === 'start' || n.kind === 'finale' || n.checkpoint) continue;
+    if (rng.next() < RESCUE_ODDS) n.rescue = rng.pick([Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift]);
+  }
+  // Warlords (#66), on their own seeded streams so the map above is unchanged.
+  const warlords = placeWarlords(seed, nodes, far, color, (from) => hops(nodes, from));
+  const wr = new Rng(hashString(`${seed}:domains`));
+  for (const w of warlords) {
+    for (const id of w.nodes) {
+      const n = nodes[id];
+      n.domain = w.id;
+      if (id === w.stronghold) {
+        n.reward = Math.round(n.reward * STRONGHOLD_REWARD);
+        // The fortress is what makes it harder (#100): the bots stay at the node's
+        // level, and only the warlord and one rival hold it.
+        n.rivals = Math.min(n.rivals, 2);
+      } else n.reward = Math.round(n.reward * DOMAIN_REWARD);
+      if (n.rescue === undefined && wr.next() < DOMAIN_RESCUE) n.rescue = wr.pick([Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift]);
+    }
+  }
+  placeHolds(seed, nodes, far);
+
+  // The Bloom: starts just behind everything, and moves at a pace the
+  // shortest route to the heart keeps ahead of with room for a lost battle or
+  // two (a loss means staying put while it advances).
+  const bloom: Bloom = {
+    front: 0,
+    step: 0,
+    time: 0,
+    seeds: [],
+    bulge: rng.range(90, 150),
+    waves: [
+      [rng.range(14, 26), rng.range(0.008, 0.014), rng.range(0, Math.PI * 2)],
+      [rng.range(6, 12), rng.range(0.025, 0.04), rng.range(0, Math.PI * 2)],
+    ],
+  };
+  bloom.front = Math.min(...nodes.map((n) => n.x - frontShape(bloom, n.y))) - 40;
+  bloom.step = paceFor(nodes, start, heart, bloom, 1 / rules.pace);
+
+  return {
+    v: RUN_VERSION,
+    id: `${now.toString(36)}-${(seed % 46656).toString(36)}`,
+    seedText: seedText.trim() || 'swarm',
+    seed,
+    color,
+    nodes,
+    start,
+    heart,
+    at: start,
+    visited: [start],
+    swallowed: [],
+    bloom,
+    turn: 0,
+    difficulty,
+    ...startBroods(seed, pack),
+    biomass: 0,
+    perks: [],
+    warlords,
+    status: 'active',
+    checkpointUsed: false,
+    created: now,
+    updated: now,
+    log: [],
+  };
+}
+
+/**
+ * The fastest Bloom the shortest route survives when every hop takes
+ * `turnsPerHop` turns: 1 / pace, so the easier the run, the more room for
+ * lost battles at each node. Found by bisection on a simulated walk.
+ */
+function paceFor(nodes: RunNode[], start: number, heart: number, b: Bloom, turnsPerHop: number): number {
+  const back = hops(nodes, heart);
+  const route = [start];
+  while (route[route.length - 1] !== heart) {
+    const a = route[route.length - 1];
+    route.push(nodes[a].links.reduce((best, n) => (back[n] < back[best] ? n : best)));
+  }
+  const survives = (step: number): boolean => {
+    const t: Bloom = { ...b, step, time: 0, seeds: [] };
+    for (let i = 0; i + 1 < route.length; i++) {
+      const next = nodes[route[i + 1]];
+      if (next.id === heart) return true;
+      if (inBloom(t, next.x, next.y)) return false;
+      t.seeds.push({ x: nodes[route[i]].x, y: nodes[route[i]].y, born: t.time });
+      t.time += turnsPerHop;
+    }
+    return true;
+  };
+  let lo = 1, hi = MAX_STEP;
+  if (survives(hi)) return hi;
+  for (let k = 0; k < 30; k++) {
+    const mid = (lo + hi) / 2;
+    if (survives(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** The Bloom never grows faster than this a turn. */
+const MAX_STEP = MAP_W / 3;
+
+// ---- turns ----------------------------------------------------------------
+
+/** Nodes you can move to from where you stand. */
+export function moves(run: RunState): number[] {
+  if (run.status !== 'active') return [];
+  return run.nodes[run.at].links.filter((n) => !run.swallowed.includes(n));
+}
+
+/** Moving onto a node you already took is a free march: no battle, but the Bloom still advances. */
+export function needsBattle(run: RunState, id: number): boolean {
+  return !run.visited.includes(id);
+}
+
+/** Every node in the Bloom now (the heart never falls). */
+function swallowedNow(run: RunState): number[] {
+  return run.nodes.filter((n) => n.id !== run.heart && inBloom(run.bloom, n.x, n.y)).map((n) => n.id);
+}
+
+function startBroods(seed: number, pack: PackId): Pick<RunState, 'broods' | 'nextBrood' | 'fielded' | 'unlocks'> {
+  const p = PACKS[pack];
+  const broods: Brood[] = [];
+  p.kinds.forEach((kind, i) => broods.push(newBrood(i, kind, seed, broods.map((b) => b.name))));
+  const nests = (1 << NestType.Hive) | (typeof p.unlock === 'number' ? 1 << p.unlock : 0);
+  return { broods, nextBrood: broods.length, fielded: broods.map((b) => b.id), unlocks: { nests, nova: p.unlock === 'nova' } };
+}
+
+/** What a turn did, for the debrief and the map. */
+export interface TurnResult {
+  /** nodes the Bloom newly swallowed */
+  fresh: number[];
+  events: BroodEvent[];
+  biomass: number;
+  checkpoint?: 'reached' | 'restored';
+  /** a domain broken by your win, or a stronghold the Bloom ate */
+  warlords: { id: number; what: 'broken' | 'eaten' }[];
+}
+
+/**
+ * Resolve a turn: a battle for `id` (with `report`, fought by `fielded`), or a
+ * march through a node you already took (`report` null). A win moves you
+ * there; a loss leaves you in place. Then the Bloom advances. If that leaves
+ * no broods or no route, the run ends, unless the checkpoint can save it.
+ */
+export function resolveTurn(run: RunState, id: number, report: BattleReport | null, fielded: number[] = [], now = Date.now()): TurnResult {
+  const node = run.nodes[id];
+  const won = report ? report.won : true;
+  const res: TurnResult = { fresh: [], events: [], biomass: 0, warlords: [] };
+  // Before the turn changes anything: whose ground this battle was on.
+  const lord = report ? warlordFighting(run, id) : undefined;
+  run.turn++;
+  run.updated = now;
+  if (report) {
+    run.log.push({ turn: run.turn, node: id, won });
+    const fought = fighters(run.broods, fielded, maxFielded(run)).map((b) => b.id);
+    run.fielded = fought.length ? fought : run.fielded;
+    res.events = settleBroods(run.broods, fought, report);
+    res.biomass = biomassFor(node.reward, report) * (run.perks.includes('hunger') ? 2 : 1);
+    run.biomass += res.biomass;
+  }
+  if (won) {
+    if (report && node.rescue !== undefined && run.broods.length < MAX_ROSTER) {
+      const b = newBrood(run.nextBrood++, node.rescue, run.seed, run.broods.map((o) => o.name), RESCUE_SIZE);
+      run.broods.push(b);
+      res.events.push({ name: b.name, kind: b.kind, what: 'rescued', size: b.size });
+    }
+    if (report && lord && lord.stronghold === id && !lord.broken) {
+      lord.broken = true;
+      run.perks.push(TROPHY + lord.trait);
+      res.warlords.push({ id: lord.id, what: 'broken' });
+    }
+    if (!run.visited.includes(id)) run.visited.push(id);
+    // The Bloom will grow from where you came.
+    const from = run.nodes[run.at];
+    if (id !== run.at) run.bloom.seeds.push({ x: from.x, y: from.y, born: run.bloom.time });
+    run.at = id;
+    if (id === run.heart) {
+      run.status = 'won';
+      return res;
+    }
+  }
+
+  // Gentle: the Bloom waits while you recover from a lost battle.
+  if (!(report && !report.won && RUN_DIFFICULTY[difficultyOf(run)].holdOnLoss)) run.bloom.time++;
+  res.fresh = swallowedNow(run).filter((n) => !run.swallowed.includes(n));
+  run.swallowed.push(...res.fresh);
+  for (const w of run.warlords ?? []) if (!w.broken && res.fresh.includes(w.stronghold)) res.warlords.push({ id: w.id, what: 'eaten' });
+
+  const lost: RunState['lostTo'] = run.broods.length === 0 ? 'broods' : moves(run).length === 0 ? 'bloom' : undefined;
+  if (lost) {
+    if (run.checkpointSave && !run.checkpointUsed) {
+      restoreCheckpoint(run, now);
+      res.checkpoint = 'restored';
+      return res;
+    }
+    run.status = 'lost';
+    run.lostTo = lost;
+    return res;
+  }
+  if (node.checkpoint && won && !run.checkpointSave && !run.checkpointUsed) {
+    run.checkpointSave = JSON.stringify({ ...run, checkpointSave: undefined, log: [], offer: undefined });
+    res.checkpoint = 'reached';
+  }
+  // After the checkpoint snapshot, so a restore doesn't hand the same pick out twice.
+  if (report?.won) {
+    const weight = offerWeight(id, lord);
+    const ids = rollOffer(run, 0, weight);
+    run.offer = ids.length ? { ids, rerolls: 0, ...(weight === TIER_WEIGHT ? {} : { weight }) } : undefined;
+  }
+  return res;
+}
+
+/** Back to the checkpoint, once. The run keeps its id and history. */
+function restoreCheckpoint(run: RunState, now: number): void {
+  const saved = JSON.parse(run.checkpointSave!) as RunState;
+  const log = run.log;
+  Object.assign(run, saved, { log, checkpointSave: undefined, checkpointUsed: true, updated: now, status: 'active', lostTo: undefined, offer: undefined });
+}
+
+// ---- camp -----------------------------------------------------------------
+
+export const unlocked = (run: RunState, u: Unlock): boolean => (u === 'nova' ? run.unlocks.nova : !!(run.unlocks.nests & (1 << u)));
+export const unlockCost = (u: Unlock): number => (u === 'nova' ? COST.nova : COST.nest);
+
+/** Spend biomass at the camp. Returns false (and changes nothing) if it can't be done. */
+export function heal(run: RunState, broodId: number): boolean {
+  const b = run.broods.find((o) => o.id === broodId);
+  if (!b || b.wounded === 0 || run.biomass < COST.heal) return false;
+  run.biomass -= COST.heal;
+  b.wounded = 0;
+  return true;
+}
+
+export function grow(run: RunState, broodId: number): boolean {
+  const b = run.broods.find((o) => o.id === broodId);
+  if (!b || run.biomass < COST.grow(b)) return false;
+  run.biomass -= COST.grow(b);
+  b.cap += COST.growBy;
+  b.grows++;
+  return true;
+}
+
+export function unlock(run: RunState, u: Unlock): boolean {
+  if (unlocked(run, u) || run.biomass < unlockCost(u)) return false;
+  run.biomass -= unlockCost(u);
+  if (u === 'nova') run.unlocks.nova = true;
+  else run.unlocks.nests |= 1 << u;
+  return true;
+}
+
+// ---- rewards --------------------------------------------------------------
+
+/** How many broods may fight: one under Lone wolf. */
+export const maxFielded = (run: RunState): number => (run.perks.includes('lone-wolf') ? 1 : MAX_FIELDED);
+export const rerollCost = (run: RunState): number => REROLL.base + REROLL.step * (run.offer?.rerolls ?? 0);
+
+/** A new offer for biomass. Returns false (and changes nothing) if it can't be paid for. */
+export function rerollOffer(run: RunState): boolean {
+  const o = run.offer;
+  if (!o || run.biomass < rerollCost(run)) return false;
+  run.biomass -= rerollCost(run);
+  o.rerolls++;
+  o.ids = rollOffer(run, o.rerolls, o.weight);
+  return true;
+}
+
+export function skipReward(run: RunState): void {
+  run.offer = undefined;
+}
+
+/**
+ * Take a reward from the offer. Strains go to `broodId` (one of its kind),
+ * replacing `replace` when its slots are full; a power variant replaces the
+ * one held for that power. Returns false if the pick isn't valid.
+ */
+export function takeReward(run: RunState, id: string, broodId?: number, replace?: string): boolean {
+  const r = REWARD[id];
+  if (!r || !run.offer?.ids.includes(id)) return false;
+  if (r.family === 'strain') {
+    const b = run.broods.find((o) => o.id === broodId);
+    if (!b || b.kind !== r.kind || b.strains.includes(id)) return false;
+    if (b.strains.length >= STRAIN_SLOTS) {
+      const k = replace === undefined ? -1 : b.strains.indexOf(replace);
+      if (k < 0) return false;
+      b.strains.splice(k, 1);
+    }
+    b.strains.push(id);
+  } else {
+    if (run.perks.includes(id)) return false;
+    if (r.power) run.perks = run.perks.filter((p) => REWARD[p]?.power !== r.power);
+    run.perks.push(id);
+    if (id === 'hunger') speedBloom(run.bloom, HUNGER_BLOOM);
+    if (id === 'lone-wolf') run.fielded = run.fielded.slice(0, 1);
+  }
+  run.offer = undefined;
+  return true;
+}
+
+/**
+ * Nodes you know about: the ones you've taken and their neighbours. The rest
+ * of the map is fogged until you get there (the heart is always marked).
+ */
+export function revealed(run: RunState): Set<number> {
+  const out = new Set<number>();
+  for (const v of run.visited) {
+    out.add(v);
+    for (const l of run.nodes[v].links) out.add(l);
+  }
+  return out;
+}
+
+/** 0..1: how close the Bloom is to a node (1 = it falls next turn). Drives battle events. */
+export function pressure(run: RunState, id: number): number {
+  const n = run.nodes[id];
+  return Math.max(0, Math.min(1, 1 - bloomGap(run.bloom, n.x, n.y) / (run.bloom.step * 3)));
+}
+
+/** How close the Bloom is to where you can go next (0..1): the run map's music darkens with it. */
+export function mapBloom(run: RunState): number {
+  return Math.max(0, ...moves(run).map((id) => pressure(run, id)), pressure(run, run.at));
+}
+
+/** The Bloom's strength: every node it swallowed feeds its swarms and its heart. */
+export function bloomStrength(run: RunState): number {
+  return run.swallowed.length;
+}
+
+/** Speed the Bloom up from now on, keeping how far it has already grown. */
+export function speedBloom(b: Bloom, factor: number): void {
+  const step = b.step * factor;
+  for (const s of b.seeds) {
+    const r = seedRadius(b, s);
+    if (r > 0) s.born = b.time - BLOOM_LAG - r / step;
+  }
+  b.step = step;
+}
+
+// ---- warlords (#66) ---------------------------------------------------------
+
+/** A warlord still in the run: its stronghold neither taken nor swallowed. */
+export const living = (run: RunState, w: Warlord): boolean => !w.broken && !run.swallowed.includes(w.stronghold);
+
+/** How many of a warlord's domain nodes the Bloom has swallowed. */
+export const erosion = (run: RunState, w: Warlord): number => w.nodes.filter((id) => run.swallowed.includes(id)).length;
+
+/** The living warlord whose domain holds this node, if any. */
+export function warlordAt(run: RunState, id: number): Warlord | undefined {
+  const d = run.nodes[id].domain;
+  const w = d === undefined ? undefined : run.warlords?.[d];
+  return w && living(run, w) ? w : undefined;
+}
+
+/**
+ * The warlord in a node's battle: the living one whose domain it is, or the
+ * one whose stronghold it is even once broken (so the debrief still shows who
+ * you beat). The finale has none: see `finaleWarlords`.
+ */
+export function warlordFighting(run: RunState, id: number): Warlord | undefined {
+  return warlordAt(run, id) ?? run.warlords?.find((w) => w.stronghold === id);
+}
+
+/** Living warlords whose domains border the heart: they join the finale. */
+export function finaleWarlords(run: RunState): Warlord[] {
+  const near = new Set(run.nodes[run.heart].links);
+  return (run.warlords ?? []).filter((w) => living(run, w) && w.nodes.some((id) => near.has(id)));
+}
+
+/** Offer weights after a win here: richer in a domain, richest at its stronghold. */
+function offerWeight(id: number, lord: Warlord | undefined): typeof TIER_WEIGHT {
+  if (!lord) return TIER_WEIGHT;
+  return lord.stronghold === id ? STRONGHOLD_WEIGHT : DOMAIN_WEIGHT;
+}

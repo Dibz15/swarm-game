@@ -21,10 +21,12 @@ import {
 } from './constants';
 import { TAU, dcos, dpow, dsin } from './mathx';
 import { queryRadius } from './spatial';
-import { pushFx, spawnUnit, UNIT_FEEDING, type Nest, type World } from './world';
+import { inArmy, pushFx, spawnUnit, type Nest, type World } from './world';
 
 const scratch: number[] = [];
-const counts = new Int32Array(NUM_FACTIONS);
+const counts = new Float64Array(NUM_FACTIONS);
+/** factions with Raiders on the nest this tick (Arsonist) */
+const raiders = new Uint8Array(NUM_FACTIONS);
 
 function captureRate(count: number, level: number): number {
   return (DT * (0.12 + 0.025 * Math.min(count, 24))) / (0.8 + 0.2 * level);
@@ -43,9 +45,14 @@ export function supplyCap(w: World, f: number): number {
     nests++;
     levels += n.level - 1;
   }
-  const cap = capFor(nests, levels, escalation(w.tick));
+  const cap = capFor(nests, levels, escalation(w.tick)) + nests * (w.factions[f]?.mods.supplyPerNest ?? 0);
   const hard = w.factions[f]?.unitCap ?? 0;
   return hard > 0 ? Math.min(cap, hard) : cap;
+}
+
+/** How far a Bastion's turret and armor aura reach (its owner's mods stretch it). */
+export function bastionRange(w: World, n: Nest): number {
+  return (BASTION.range + BASTION.rangePerLevel * (n.level - 1)) * w.factions[n.owner].mods.bastionRange;
 }
 
 function capFor(nests: number, levels: number, L: number): number {
@@ -65,7 +72,7 @@ export function updateNests(w: World): void {
   }
   const L = escalation(w.tick);
   for (let f = 0; f < NUM_FACTIONS; f++) {
-    capOf[f] = capFor(nestCount[f], levelCount[f], L);
+    capOf[f] = capFor(nestCount[f], levelCount[f], L) + nestCount[f] * (w.factions[f]?.mods.supplyPerNest ?? 0);
     const hard = w.factions[f]?.unitCap ?? 0;
     if (hard > 0) capOf[f] = Math.min(capOf[f], hard);
   }
@@ -75,7 +82,7 @@ export function updateNests(w: World): void {
     if (n.owner >= 0) {
       if (n.type === NestType.Bastion && n.control >= BASTION.minControl) {
         const t = bastionTurret(n.owner, n.level);
-        turretFire(w, n, BASTION.range + BASTION.rangePerLevel * (n.level - 1), t.targets, t.dps);
+        turretFire(w, n, bastionRange(w, n), t.targets, t.dps);
       }
       if (n.capital && n.owner !== NEUTRAL && n.control >= 1) turretFire(w, n, CAPITAL.range, CAPITAL.targets, CAPITAL.dps);
       else if (n.level >= 2 && n.type !== NestType.Bastion && n.owner !== NEUTRAL && n.control >= 1) {
@@ -91,7 +98,7 @@ function applyArmor(w: World, n: Nest): void {
   // Neutral garrisons don't get it, so the early expansion pace stays the same.
   if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1) return;
   const bastion = n.type === NestType.Bastion;
-  const r = bastion ? BASTION.range + BASTION.rangePerLevel * (n.level - 1) : n.r + BALANCE.homeRadius;
+  const r = bastion ? bastionRange(w, n) : n.r + BALANCE.homeRadius;
   // Home turf fades fully during escalation; capitals keep half their armor.
   const L = escalation(w.tick);
   const home = 1 - (1 - BALANCE.homeArmor) * (1 - L);
@@ -107,10 +114,15 @@ function applyArmor(w: World, n: Nest): void {
 function updateControl(w: World, n: Nest): void {
   counts.fill(0);
   queryRadius(w, n.x, n.y, n.r, scratch);
+  raiders.fill(0);
   for (const s of scratch) {
-    if (w.state[s] === UNIT_FEEDING) continue;
+    if (!inArmy(w, s)) continue;
     // Swifts are raiders: they capture and drain nests several times faster.
-    counts[w.owner[s]] += w.kind[s] === Kind.Swift ? TRAITS.raidCapture : 1;
+    const o = w.owner[s];
+    if (w.kind[s] === Kind.Swift) {
+      counts[o] += TRAITS.raidCapture * w.factions[o].mods.kind[Kind.Swift].capture;
+      raiders[o] = 1;
+    } else counts[o] += 1;
   }
 
   // Which teams are standing on the nest, and which faction leads each?
@@ -143,18 +155,19 @@ function updateControl(w: World, n: Nest): void {
     return;
   }
 
-  // Neutral garrison units only defend; they never capture.
-  if (leadA === NEUTRAL && n.owner !== NEUTRAL) return;
+  // Neutral garrison units only defend; they never capture. In a siege (#67)
+  // the Bloom's waves do tear down a player's nests, though never take them.
+  if (leadA === NEUTRAL && n.owner !== NEUTRAL && (!w.siege || n.owner < 0)) return;
 
-  const rate = captureRate(totalA, n.level);
+  const rate = captureRate(totalA, n.level) * w.factions[leadA].mods.captureRate;
   if (n.owner >= 0 && teamA === ownerTeam) {
     if (n.lockedUntil <= w.tick) n.control = Math.min(1, n.control + rate * (n.level >= 2 ? LEVEL.recovery : 1));
     return;
   }
 
   if (n.owner >= 0) {
-    // Enemy-held: drain control until it flips to unowned.
-    n.control -= rate;
+    // Enemy-held: drain control until it flips to unowned. Arsonist Raiders burn it down faster.
+    n.control -= raiders[leadA] ? rate * w.factions[leadA].mods.kind[Kind.Swift].arson : rate;
     if (n.control <= 0) {
       const prev = n.owner;
       n.owner = -1;
@@ -178,7 +191,8 @@ function updateControl(w: World, n: Nest): void {
   n.controller = leadA;
   n.control += rate;
   if (n.control >= 1) {
-    n.control = 1;
+    // Scorched earth: a fresh capture starts part-held and must recover before it spawns.
+    n.control = w.factions[leadA].mods.captureControl;
     n.owner = leadA;
     n.spawnAcc = 0;
     n.rallyX = n.x;
@@ -192,7 +206,8 @@ function updateControl(w: World, n: Nest): void {
 
 function spawn(w: World, n: Nest): void {
   if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1 || n.contested || n.lockedUntil > w.tick) return;
-  const kind = NEST_KIND[n.type];
+  // A nest type the owner hasn't unlocked (campaign) spawns plain Swarmers.
+  const kind = w.factions[n.owner].nestTypes & (1 << n.type) ? NEST_KIND[n.type] : Kind.Dot;
   if (kind < 0) return;
   // Supply blocked: no production until the army shrinks or the cap grows.
   const cap = capOf[n.owner];
@@ -208,7 +223,7 @@ function spawn(w: World, n: Nest): void {
   const k = nestCount[n.owner];
   const exp = BALANCE.nestExponent + (1 - BALANCE.nestExponent) * L;
   const wide = k > 1 ? dpow(k, exp - 1) : 1;
-  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * wide * upkeep;
+  n.spawnAcc += DT * LEVEL_SPAWN_MULT[n.level] * NEST_SPAWN_MULT[n.type] * f.prodMult * f.mods.spawnRate * wide * upkeep;
   const interval = UNIT_STATS[kind].interval;
   if (n.spawnAcc < interval) return;
   n.spawnAcc -= interval;
@@ -219,7 +234,7 @@ function spawn(w: World, n: Nest): void {
   const atHome = n.rallyX === n.x && n.rallyY === n.y;
   const s = spawnUnit(w, n.owner, kind, sx, sy, n.rallyX, n.rallyY, atHome ? n.r + 14 : 28);
   if (s < 0) return;
-  if (n.level >= 3) {
+  if (n.level >= f.mods.vetLevel) {
     w.vet[s] = 1;
     w.hp[s] *= LEVEL.veteranHp;
   }

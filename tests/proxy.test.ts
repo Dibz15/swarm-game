@@ -6,7 +6,7 @@ import { createWorld, type MatchSetup } from '../src/sim/setup';
 import { step } from '../src/sim/step';
 
 const setup = (): MatchSetup => ({
-  seed: 31,
+  seed: 1, // a typical map: the proxy, not the layout, is under test
   size: 'small',
   players: [
     { faction: 0, team: 0, human: true },

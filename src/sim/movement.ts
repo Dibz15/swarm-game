@@ -1,6 +1,6 @@
-import { DT, HOLD_EXTRA, Kind, LEASH, LEVEL, MAX_LEVEL, POWER, TERRAIN, TRAITS, UNIT_STATS, UPGRADE_COST } from './constants';
-import { T_NEBULA, T_RIFT } from './terrain';
-import { pushFx, removeUnit, UNIT_FEEDING, type World } from './world';
+import { DT, HOLD_EXTRA, Kind, LEASH, LEVEL, MAX_LEVEL, POWER, STRAINS, TERRAIN, TRAITS, UNIT_STATS, UPGRADE_COST, VARIANTS } from './constants';
+import { riftDps, T_NEBULA, T_RIFT } from './terrain';
+import { maxHp, pushFx, removeUnit, UNIT_FEEDING, UNIT_RETREAT, WILD_HEART, type Nest, type World } from './world';
 
 const MAX_SEP_SCAN = 22;
 const STEER = 0.3;
@@ -14,23 +14,76 @@ function holdRadius(w: World, x: number, y: number): number {
   return 0;
 }
 
+/** The nearest nest p owns, or null. */
+function nearestOwn(w: World, p: number, x: number, y: number): Nest | null {
+  let best: Nest | null = null, bestD = Infinity;
+  for (const n of w.nests) {
+    if (n.owner !== p) continue;
+    const d = (n.x - x) ** 2 + (n.y - y) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * Skirmish (#60): a badly hurt Raider falls back to its nearest nest, heals
+ * in its ring, then returns to its orders. Returns the nest to head for, or
+ * null when it isn't retreating.
+ */
+function skirmish(w: World, i: number): Nest | null {
+  const max = maxHp(w, i);
+  const S = STRAINS.skirmish;
+  if (w.state[i] !== UNIT_RETREAT && w.hp[i] >= max * S.flee) return null;
+  const nest = nearestOwn(w, w.owner[i], w.x[i], w.y[i]);
+  if (!nest) {
+    w.state[i] = 0;
+    return null;
+  }
+  w.state[i] = UNIT_RETREAT;
+  const dx = nest.x - w.x[i], dy = nest.y - w.y[i];
+  if (dx * dx + dy * dy <= nest.r * nest.r) {
+    w.hp[i] = Math.min(max, w.hp[i] + S.heal * DT);
+    if (w.hp[i] >= max * S.back) {
+      w.state[i] = 0;
+      return null;
+    }
+  }
+  return nest;
+}
+
 export function updateMovement(w: World): void {
   const g = w.grid;
   const n = w.n;
   const W = w.width, H = w.height;
   const tr = w.terrain;
   for (let i = 0; i < n; i++) {
-    if (!w.alive[i]) continue;
+    // The Bloom's heart is rooted (heart.ts).
+    if (!w.alive[i] || w.wild[i] === WILD_HEART) continue;
     const st = UNIT_STATS[w.kind[i]];
     const x = w.x[i], y = w.y[i];
+    const fm = w.factions[w.owner[i]].mods;
+    const fortified = w.fortify[i] > w.tick;
+    const surged = w.surge[i] > w.tick;
+    // Mend: a Surge heals instead of speeding them up.
+    if (surged && fm.mend) {
+      const max = maxHp(w, i);
+      w.hp[i] = Math.min(max, w.hp[i] + (max * VARIANTS.mend.heal) / (POWER.surgeTicks * fm.surgeTicks));
+    }
     let spd =
-      st.speed * (w.surge[i] > w.tick ? POWER.surgeSpeed : 1) * (w.fortify[i] > w.tick ? POWER.fortifySlow : 1);
+      st.speed * fm.kind[w.kind[i]].speed * (surged && !fm.mend ? POWER.surgeSpeed : 1) * (fortified ? (fm.fortifyRoot ? 0 : POWER.fortifySlow) : 1);
+    if (w.called[i] > w.tick) spd *= STRAINS.call.speed;
     if (tr.hasFields) {
       const fl = tr.flagsAt(x, y);
       if (fl & T_NEBULA) spd *= TERRAIN.nebulaSlow;
-      // Rift damage lands with everything else next tick.
-      if (fl & T_RIFT) w.dmg[i] += TERRAIN.riftDps * DT;
-    }
+      // Rift heat builds inside and drains outside; its damage lands with everything else next tick.
+      if (fl & T_RIFT) {
+        if (w.heat[i] < TERRAIN.rift.heatTicks) w.heat[i]++;
+        w.dmg[i] += riftDps(w.heat[i]) * DT;
+      } else if (w.heat[i]) w.heat[i] = Math.max(0, w.heat[i] - TERRAIN.rift.cool);
+    } else if (w.heat[i]) w.heat[i] = 0;
     let desX = 0, desY = 0;
 
     if (w.state[i] === UNIT_FEEDING) {
@@ -71,7 +124,21 @@ export function updateMovement(w: World): void {
       }
     }
 
-    if (w.state[i] !== UNIT_FEEDING) {
+    const refuge = w.state[i] !== UNIT_FEEDING && !w.ghost[i] && fm.kind[w.kind[i]].skirmish ? skirmish(w, i) : null;
+    if (refuge) {
+      // Falling back: straight for the nest, through the fight.
+      const dx = refuge.x - x, dy = refuge.y - y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d > refuge.r * 0.5) {
+        if (tr.hasPaths && tr.steer(x, y, refuge.x, refuge.y, w.tick)) {
+          desX = tr.ox * spd;
+          desY = tr.oy * spd;
+        } else {
+          desX = (dx / d) * spd;
+          desY = (dy / d) * spd;
+        }
+      }
+    } else if (w.state[i] !== UNIT_FEEDING) {
       const dx = w.ox[i] - x, dy = w.oy[i] - y;
       const d = Math.sqrt(dx * dx + dy * dy);
       const ar = w.arrive[i];
@@ -111,9 +178,12 @@ export function updateMovement(w: World): void {
     let sepX = 0, sepY = 0;
     const sep = st.sep;
     const sep2 = sep * sep;
-    // Dots also count nearby friendly Dots for the pack bonus (used next tick).
-    const isDot = w.kind[i] === Kind.Dot;
-    const pack2 = TRAITS.pack.radius * TRAITS.pack.radius;
+    // Dots also count nearby friendly Dots for the pack bonus (used next tick),
+    // and Shields count Shields for Phalanx.
+    const kind = w.kind[i];
+    const isDot = kind === Kind.Dot;
+    const isTank = kind === Kind.Tank;
+    const near2 = isDot ? TRAITS.pack.radius * TRAITS.pack.radius : STRAINS.phalanx.radius * STRAINS.phalanx.radius;
     const me = w.owner[i];
     let pack = 0;
     const gcx = g.cx(x), gcy = g.cy(y);
@@ -131,7 +201,7 @@ export function updateMovement(w: World): void {
           if (j === i || !w.alive[j]) continue;
           const ddx = x - w.x[j], ddy = y - w.y[j];
           const dd = ddx * ddx + ddy * ddy;
-          if (isDot && dd < pack2 && w.owner[j] === me && w.kind[j] === Kind.Dot) pack++;
+          if ((isDot || isTank) && dd < near2 && w.owner[j] === me && w.kind[j] === kind && !w.ghost[j]) pack++;
           if (dd < sep2) {
             if (dd > 1e-6) {
               const d = Math.sqrt(dd);
@@ -147,7 +217,8 @@ export function updateMovement(w: World): void {
       }
     }
 
-    w.pack[i] = pack;
+    if (isTank) w.guard[i] = Math.min(255, pack);
+    else w.pack[i] = pack;
 
     let vx = w.vx[i] + (desX + sepX - w.vx[i]) * STEER;
     let vy = w.vy[i] + (desY + sepY - w.vy[i]) * STEER;

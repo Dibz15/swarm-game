@@ -5,7 +5,7 @@ import { worldHash } from '../src/sim/hash';
 import { generateMap, TERRAIN_LEVELS, type MapSize } from '../src/sim/mapgen';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
-import { capsuleDist, Terrain, type TerrainSpec } from '../src/sim/terrain';
+import { capsuleDist, riftDps, Terrain, type TerrainSpec } from '../src/sim/terrain';
 import { spawnUnit, World } from '../src/sim/world';
 import { botMatch } from './helpers';
 
@@ -75,20 +75,41 @@ describe('walls', () => {
 });
 
 describe('fields', () => {
-  it('nebula slows, rifts burn', () => {
-    const w = walled({
-      walls: [],
-      fields: [
-        { kind: 'nebula', x1: 200, y1: 250, x2: 200, y2: 250, r: 60 },
-        { kind: 'rift', x1: 600, y1: 250, x2: 600, y2: 250, r: 30 },
-      ],
-    });
+  it('nebula slows', () => {
+    const w = walled({ walls: [], fields: [{ kind: 'nebula', x1: 200, y1: 250, x2: 200, y2: 250, r: 60 }] });
     const slow = spawnUnit(w, 0, Kind.Dot, 200, 250, 260, 250, 2);
     const fast = spawnUnit(w, 0, Kind.Dot, 200, 420, 260, 420, 2);
-    const burn = spawnUnit(w, 1, Kind.Tank, 600, 250, 600, 250, 4);
+    spawnUnit(w, 1, Kind.Dot, 790, 490, 790, 490, 2);
     for (let t = 0; t < 15; t++) step(w, []);
     expect(w.x[slow] - 200).toBeLessThan((w.x[fast] - 200) * (TERRAIN.nebulaSlow + 0.1));
-    expect(w.hp[burn]).toBeLessThan(34 - TERRAIN.riftDps * 0.4);
+  });
+
+  // #58: a dash across costs a scratch; standing in it kills.
+  it('a rift burns hotter the longer a unit stays, and cools once it leaves', () => {
+    const w = walled({ walls: [], fields: [{ kind: 'rift', x1: 400, y1: 100, x2: 400, y2: 400, r: 13 }] });
+    spawnUnit(w, 1, Kind.Dot, 790, 490, 790, 490, 2);
+    const dash = spawnUnit(w, 0, Kind.Dot, 360, 200, 360, 200, 2);
+    const stay = spawnUnit(w, 0, Kind.Tank, 400, 300, 400, 300, 2);
+    w.grid.build(w);
+    applyCommand(w, { t: 'move', p: 0, units: [w.uid[dash]], x: 440, y: 200, nest: -1 });
+    for (let t = 0; t < 3 * TICK_HZ; t++) step(w, []);
+    expect(w.x[dash]).toBeGreaterThan(420);
+    expect(10 - w.hp[dash]).toBeLessThan(1.5);
+    expect(w.heat[dash]).toBe(0);
+    expect(34 - w.hp[stay]).toBeGreaterThan(9);
+    expect(riftDps(TERRAIN.rift.heatTicks)).toBe(TERRAIN.rift.maxDps);
+    expect(riftDps(0)).toBe(TERRAIN.rift.minDps);
+  });
+
+  it('units cut across a thin rift line, but go round a wide one when the way round is short', () => {
+    const thin = new Terrain({ walls: [], fields: [{ kind: 'rift', x1: 400, y1: -20, x2: 400, y2: 440, r: 13 }], crystals: [] }, 800, 500);
+    // The way round is ~2x longer; crossing costs a little more than straight.
+    expect(thin.pathDist(200, 150, 600, 150, 0)).toBeLessThan(470);
+    // A pool as wide as the widest the maps make: the path skirts it, even where
+    // the tiles round it cost no more than the straight line (#58).
+    const pool = new Terrain({ walls: [], fields: [{ kind: 'rift', x1: 400, y1: 150, x2: 400, y2: 150, r: 30 }], crystals: [] }, 800, 500);
+    const t = pool.trace(200, 150, 600, 150, 0);
+    for (let k = 0; k < t.length; k += 2) expect(Math.hypot(t[k] - 400, t[k + 1] - 150)).toBeGreaterThan(26);
   });
 
   it('a crystal charges energy only for an uncontested holder', () => {
@@ -106,15 +127,26 @@ describe('fields', () => {
     for (let t = 0; t < 8; t++) step(w, []);
     expect(w.crystals[0].holder).toBe(-1);
   });
+
+  it("a crystal's value scales what it pays (#114)", () => {
+    const gain = (value?: number) => {
+      const w = walled({ walls: [], crystals: [{ x: 400, y: 250, r: 30, value }] });
+      spawnUnit(w, 0, Kind.Tank, 400, 250, 400, 250, 2);
+      spawnUnit(w, 1, Kind.Dot, 790, 490, 790, 490, 2);
+      for (let t = 0; t < 2 * TICK_HZ; t++) step(w, []);
+      return w.factions[0].energy - w.factions[1].energy;
+    };
+    expect(gain(1.5) / gain()).toBeCloseTo(1.5, 1);
+  });
 });
 
 describe('terrain mapgen', () => {
-  it('keeps every nest reachable and clear of walls, on all sizes and in portrait', () => {
+  it('keeps every nest reachable and clear of walls, on all sizes and shapes', () => {
     for (const size of ['small', 'medium', 'large'] as MapSize[]) {
       for (const players of [2, 3, 5]) {
-        for (const portrait of [false, true]) {
+        for (const alt of [0, 1]) {
           for (let s = 0; s < 4; s++) {
-            const m = generateMap({ seed: 900 + s, size, players, portrait, terrain: 'heavy' });
+            const m = generateMap({ seed: 900 + s + alt * 97, size, players, terrain: 'heavy' });
             const t = new Terrain(m.terrain, m.width, m.height);
             expect(t.connected(m.nests.map((n) => [n.x, n.y]))).toBe(true);
             for (const n of m.nests) for (const c of m.terrain.walls) expect(capsuleDist(c, n.x, n.y)).toBeGreaterThan(40);
@@ -146,9 +178,11 @@ describe('terrain mapgen', () => {
     expect(count('standard')).toBeLessThan(count('heavy'));
   });
 
+  // The terrain can change which form the seed picks (a ring needs something
+  // to build its void from), so hold the form still.
   it('terrain does not reshuffle the nests', () => {
-    const a = generateMap({ seed: 31, size: 'large', players: 4 });
-    const b = generateMap({ seed: 31, size: 'large', players: 4, terrain: 'heavy' });
+    const a = generateMap({ seed: 31, size: 'large', players: 4, form: 'classic' });
+    const b = generateMap({ seed: 31, size: 'large', players: 4, terrain: 'heavy', form: 'classic' });
     expect(b.nests).toEqual(a.nests);
   });
 });

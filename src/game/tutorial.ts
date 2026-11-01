@@ -49,7 +49,7 @@ export interface Mission {
   teaches: string;
   /** debrief bullets */
   learned: string[];
-  setup: (portrait: boolean) => MatchSetup;
+  setup: () => MatchSetup;
   locked: Lock[];
   /** hold the game for a few seconds whenever the instruction changes, so it can be read first */
   readPause?: boolean;
@@ -70,33 +70,18 @@ function map(nests: NestSpec[], o: { walls?: Capsule[]; fields?: FieldSpec[]; cr
   return { width: W, height: H, nests, terrain: { walls: o.walls ?? [], fields: o.fields ?? [], crystals: o.crystals ?? [] }, events: o.events ?? none };
 }
 
-/** Portrait screens get the map transposed, the same way generated maps turn. */
-function orient(m: MapSpec, portrait: boolean): MapSpec {
-  if (!portrait) return m;
-  const p = <T extends { x: number; y: number }>(o: T): T => ({ ...o, x: o.y, y: o.x });
-  const c = <T extends Capsule>(o: T): T => ({ ...o, x1: o.y1, y1: o.x1, x2: o.y2, y2: o.x2 });
-  const pt = ([x, y]: [number, number]): [number, number] => [y, x];
-  return {
-    width: m.height,
-    height: m.width,
-    nests: m.nests.map(p),
-    terrain: { walls: m.terrain.walls.map(c), fields: m.terrain.fields.map(c), crystals: m.terrain.crystals.map(p) },
-    events: { ...m.events, swarmSpawns: m.events.swarmSpawns.map(pt), dropSpots: m.events.dropSpots.map(pt), colossusPaths: m.events.colossusPaths.map((l) => l.map(pt)) },
-  };
-}
-
-const solo = (m: MapSpec, portrait: boolean, energy = 0): MatchSetup => ({
+const solo = (m: MapSpec, energy = 0): MatchSetup => ({
   seed: 1701,
   size: 'small',
-  map: orient(m, portrait),
+  map: m,
   endless: true,
   players: [{ faction: 0, team: 0, human: true, energy }],
 });
 
-const versus = (m: MapSpec, portrait: boolean, personality: 'turtler' | 'expander', energy = 0, passive = false, unitCap = 0, prod?: number): MatchSetup => ({
+const versus = (m: MapSpec, personality: 'turtler' | 'expander', energy = 0, passive = false, unitCap = 0, prod?: number): MatchSetup => ({
   seed: 1702,
   size: 'small',
-  map: orient(m, portrait),
+  map: m,
   players: [
     { faction: 0, team: 0, human: true, energy },
     { faction: 1, team: 1, human: false, bot: { difficulty: 0, personality, passive }, unitCap, prod },
@@ -193,7 +178,7 @@ export const MISSIONS: Mission[] = [
     teaches: 'Select your dots, send them, and capture nests.',
     learned: ['Select dots, then give them an order.', 'Nests you capture make more dots.'],
     locked: ALL_POWERS,
-    setup: (portrait) => solo(map([nest(170, 340, NestType.Hive, 0, 12), nest(480, 300, NestType.Hive, -1, 3), nest(820, 400, NestType.Hive, -1, 6)]), portrait),
+    setup: () => solo(map([nest(170, 340, NestType.Hive, 0, 12), nest(480, 300, NestType.Hive, -1, 3), nest(820, 400, NestType.Hive, -1, 6)])),
     steps: [
       {
         text: {
@@ -221,13 +206,12 @@ export const MISSIONS: Mission[] = [
     teaches: 'Send new dots where they are needed, and meet the three unit types.',
     learned: ['A nest’s rally point sends its new dots straight to the front.', 'Hives make Swarmers, Forges make Shields, Spires make Spears.', 'Swarmers beat Spears, Spears beat Shields, Shields beat Swarmers.'],
     locked: ALL_POWERS,
-    setup: (portrait) =>
+    setup: () =>
       solo(
         map(
           [nest(160, 340, NestType.Hive, 0, 12), nest(470, 180, NestType.Forge, -1, 7), nest(560, 500, NestType.Hive, -1, 5), nest(900, 340, NestType.Spire, -1, 10)],
           { walls: [wall(700, 140, 700, 280), wall(700, 400, 700, 540)] },
         ),
-        portrait,
       ),
     steps: [
       {
@@ -266,7 +250,7 @@ export const MISSIONS: Mission[] = [
     teaches: 'Fight an enemy, use energy for Surge, and knock a player out.',
     learned: ['Fights start on their own when armies meet: bring more dots.', 'Energy builds over time and from captures; Surge spends it for a burst of speed and damage.', 'A player with no nests and no dots is out.'],
     locked: ['nova', 'upgrade', 'fortify', 'barrage', 'blink', 'lockdown'],
-    setup: (portrait) =>
+    setup: () =>
       versus(
         map(
           [
@@ -278,7 +262,6 @@ export const MISSIONS: Mission[] = [
           ],
           { walls: [wall(560, 60, 560, 250), wall(560, 430, 560, 620)] },
         ),
-        portrait,
         'turtler',
         30,
         // A lesson, not a race: it defends but never comes for your nests,
@@ -323,7 +306,7 @@ export const MISSIONS: Mission[] = [
     learned: ['Feeding dots into a nest levels it up: faster spawns and a turret.', 'Holding a nest type unlocks its power: a Spire gives Barrage, which reaches targets near your nests.', 'Nova blasts everything around the selected dots: save it for big fights.'],
     locked: ['fortify', 'blink', 'lockdown'],
     readPause: true,
-    setup: (portrait) =>
+    setup: () =>
       solo(
         map(
           [
@@ -340,7 +323,6 @@ export const MISSIONS: Mission[] = [
             events: { params: { swarm: { first: 100000, every: 35, size: 32 }, drop: null, colossus: [], regrow: 0 }, swarmSpawns: [[780, 40]], dropSpots: [[420, 340], [560, 420]], colossusPaths: [] },
           },
         ),
-        portrait,
         100,
       ),
     steps: [
@@ -392,7 +374,7 @@ export const MISSIONS: Mission[] = [
     locked: ['fortify', 'blink', 'lockdown'],
     readPause: true,
     // 5 of 9 nests: room to lose one to a raid and keep the countdown going.
-    setup: (portrait) => ({
+    setup: () => ({
       domShare: 0.55,
       ...versus(
         map(
@@ -414,7 +396,6 @@ export const MISSIONS: Mission[] = [
             crystals: [{ x: 300, y: 340, r: 34 }],
           },
         ),
-        portrait,
         'turtler',
         0,
         false,

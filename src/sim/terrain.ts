@@ -28,6 +28,8 @@ export interface CrystalSpec {
   x: number;
   y: number;
   r: number;
+  /** energy rate as a multiple of TERRAIN.crystalEnergy (default 1): sparse maps have fewer, richer crystals (#114) */
+  value?: number;
 }
 
 /**
@@ -37,6 +39,12 @@ export interface CrystalSpec {
 export interface CaveSpec {
   carves: Capsule[];
   zone: Capsule[] | null;
+  /**
+   * Open ground mapgen found nobody could reach (#98), as rows of path tiles
+   * [x1, x2, y] (tile centres, px): it turns to rock on the rock grid itself,
+   * out to the old rock edge.
+   */
+  fill?: [number, number, number][];
 }
 
 export interface TerrainSpec {
@@ -53,6 +61,15 @@ export const TILE = 16;
 export const T_BLOCK = 1;
 export const T_NEBULA = 2;
 export const T_RIFT = 4;
+/** a tile in the core of a wide rift (`TERRAIN.riftWide`/`riftDeep`): crossing there would burn a unit up */
+export const T_DEEP = 8;
+
+/** Rift damage per second at `heat` ticks of heat (#58): a ramp on heat squared. */
+export function riftDps(heat: number): number {
+  const { minDps, maxDps, heatTicks } = TERRAIN.rift;
+  const f = Math.min(1, heat / heatTicks);
+  return minDps + (maxDps - minDps) * f * f;
+}
 
 /** Squared distance from (x, y) to segment (x1, y1)-(x2, y2). */
 export function segDist2(x: number, y: number, x1: number, y1: number, x2: number, y2: number): number {
@@ -101,6 +118,8 @@ export interface RockGrid {
 }
 
 const rockCache = new WeakMap<CaveSpec, RockGrid>();
+/** A cave's rock-zone distances, kept by the zone itself: caves that only differ in their carves share it. */
+const zoneCache = new WeakMap<Capsule[], { cols: number; rows: number; d: Float32Array }>();
 
 /** Min signed capsule distance per grid point, within ROCK_PAD of each capsule. */
 function unionDist(caps: Capsule[], cols: number, rows: number): Float32Array {
@@ -122,17 +141,95 @@ function unionDist(caps: Capsule[], cols: number, rows: number): Float32Array {
   return g;
 }
 
+/** open patches of fewer grid cells than this are specks (about a 50 px blob) */
+const SPECK_CELLS = 40;
+
+/**
+ * Turn the open ground under `tiles` (path tile rows, as in CaveSpec.fill:
+ * a pocket and the blocked tiles round it, so it reaches the old rock edge)
+ * and any enclosed speck of open ground to rock, in place.
+ * Its cells then get a rock depth from a chamfer walk to the open ground
+ * that's left, as do old rock cells that were only shallow because of it.
+ */
+function plug(d: Float32Array, cols: number, rows: number, tiles: [number, number, number][]): void {
+  const n = cols * rows, half = TILE / 2;
+  const mark = new Uint8Array(n);
+  let any = false;
+  for (const [x1, x2, y] of tiles) {
+    const gy0 = Math.max(0, Math.ceil((y - half) / ROCK_RES)), gy1 = Math.min(rows - 1, Math.floor((y + half) / ROCK_RES));
+    const gx0 = Math.max(0, Math.ceil((x1 - half) / ROCK_RES)), gx1 = Math.min(cols - 1, Math.floor((x2 + half) / ROCK_RES));
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const k = gy * cols + gx;
+      if (d[k] > 0) {
+        mark[k] = 1;
+        any = true;
+      }
+    }
+  }
+  // Specks: enclosed open patches too small to hold a path tile, so mapgen
+  // can't list them. Smaller than a crystal's hold ring, nothing needs them.
+  const seen = new Uint8Array(n), queue = new Int32Array(n);
+  for (let s0 = 0; s0 < n; s0++) {
+    if (seen[s0] || mark[s0] || d[s0] <= 0) continue;
+    let head = 0, tail = 0;
+    seen[s0] = 1;
+    queue[tail++] = s0;
+    while (head < tail) {
+      const k = queue[head++], x = k % cols;
+      for (const v of [x > 0 ? k - 1 : -1, x < cols - 1 ? k + 1 : -1, k - cols, k + cols]) {
+        if (v < 0 || v >= n || seen[v] || mark[v] || d[v] <= 0) continue;
+        seen[v] = 1;
+        queue[tail++] = v;
+      }
+    }
+    if (tail < SPECK_CELLS) {
+      for (let q = 0; q < tail; q++) mark[queue[q]] = 1;
+      any = true;
+    }
+  }
+  if (!any) return;
+  // Chamfer distance (px) from every cell to the open ground left.
+  const D = new Float32Array(n), DIAG = ROCK_RES * 1.41421356;
+  for (let k = 0; k < n; k++) D[k] = d[k] > 0 && !mark[k] ? 0 : 1e9;
+  const relax = (k: number, x: number, y: number, dx: number, dy: number) => {
+    const xx = x + dx, yy = y + dy;
+    if (xx < 0 || yy < 0 || xx >= cols || yy >= rows) return;
+    const c = D[yy * cols + xx] + (dx && dy ? DIAG : ROCK_RES);
+    if (c < D[k]) D[k] = c;
+  };
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+    const k = y * cols + x;
+    relax(k, x, y, -1, 0); relax(k, x, y, -1, -1); relax(k, x, y, 0, -1); relax(k, x, y, 1, -1);
+  }
+  for (let y = rows - 1; y >= 0; y--) for (let x = cols - 1; x >= 0; x--) {
+    const k = y * cols + x;
+    relax(k, x, y, 1, 0); relax(k, x, y, 1, 1); relax(k, x, y, 0, 1); relax(k, x, y, -1, 1);
+  }
+  for (let k = 0; k < n; k++) {
+    const depth = Math.min(ROCK_PAD, Math.max(0.5, D[k] - ROCK_RES / 2));
+    if (mark[k]) d[k] = -depth;
+    // Old rock whose nearest open ground was the pocket.
+    else if (d[k] <= 0 && depth > -d[k] + ROCK_RES) d[k] = -depth;
+  }
+}
+
 /** The rock distance grid for a cave, built once per spec and shared (sim, mapgen, renderer). */
 export function rockGrid(cave: CaveSpec, width: number, height: number): RockGrid {
   const hit = rockCache.get(cave);
   if (hit) return hit;
   const cols = Math.ceil(width / ROCK_RES) + 1, rows = Math.ceil(height / ROCK_RES) + 1;
   const open = unionDist(cave.carves, cols, rows);
-  const zone = cave.zone ? unionDist(cave.zone, cols, rows) : null;
+  let zone: Float32Array | null = null;
+  if (cave.zone) {
+    const z = zoneCache.get(cave.zone);
+    zone = z && z.cols === cols && z.rows === rows ? z.d : unionDist(cave.zone, cols, rows);
+    zoneCache.set(cave.zone, { cols, rows, d: zone });
+  }
   // Rock = zone minus carves. Its signed distance (negative inside rock) is
   // the max of the zone's and the carves' inverted one: positive in the open.
   const d = new Float32Array(cols * rows);
   for (let k = 0; k < d.length; k++) d[k] = Math.max(zone ? zone[k] : -ROCK_PAD, -open[k]);
+  plug(d, cols, rows, cave.fill ?? []);
   const g = { cols, rows, d };
   rockCache.set(cave, g);
   return g;
@@ -222,7 +319,10 @@ export class Terrain {
         }
       }
     }
-    for (const f of spec.fields) this.raster(f, 0, f.kind === 'nebula' ? T_NEBULA : T_RIFT);
+    for (const f of spec.fields) {
+      this.raster(f, 0, f.kind === 'nebula' ? T_NEBULA : T_RIFT);
+      if (f.kind === 'rift' && f.r > TERRAIN.riftWide) this.raster(f, -TERRAIN.riftDeep, T_DEEP);
+    }
 
     this.ccols = Math.ceil(width / CELL) + 1;
     this.crows = Math.ceil(height / CELL) + 1;
@@ -436,7 +536,7 @@ export class Terrain {
   /** Movement cost multiplier (x10) for entering a tile. */
   private cost(t: number, diag: boolean): number {
     const f = this.flags[t];
-    const m = f & T_RIFT ? TERRAIN.riftCost : f & T_NEBULA ? TERRAIN.nebulaCost : 1;
+    const m = f & T_DEEP ? TERRAIN.riftDeepCost : f & T_RIFT ? TERRAIN.riftCost : f & T_NEBULA ? TERRAIN.nebulaCost : 1;
     return Math.round((diag ? 14 : 10) * m);
   }
 
@@ -525,10 +625,35 @@ export class Terrain {
     }
 
     // Where the cheapest path is as cheap as open ground, nothing is in the
-    // way: head straight for the target instead of zig-zagging on tiles.
+    // way: head straight for the target instead of zig-zagging on tiles. On
+    // eight-way tiles a way round a field often costs no more than the line
+    // itself, so with fields the line must also clear them (#58): a tile's
+    // line is clear if it is off every field and the tiles the line passes
+    // between next (straight on, and diagonally) are clear. Tiles are decided
+    // ring by ring out from the target, so those are known.
     const sx = seed % cols, sy = (seed / cols) | 0;
+    const FIELD = T_NEBULA | T_RIFT;
+    let clear: Uint8Array | null = null;
+    if (this.hasFields) {
+      clear = new Uint8Array(n);
+      const ring = (t: number) => Math.max(Math.abs((t % cols) - sx), Math.abs(((t / cols) | 0) - sy));
+      const start = new Int32Array(Math.max(cols, rows) + 2);
+      for (let t = 0; t < n; t++) start[ring(t) + 1]++;
+      for (let r = 1; r < start.length; r++) start[r] += start[r - 1];
+      const order = new Int32Array(n);
+      for (let t = 0; t < n; t++) order[start[ring(t)]++] = t;
+      clear[seed] = 1;
+      for (let k = 0; k < n; k++) {
+        const t = order[k];
+        if (t === seed || flags[t] & FIELD) continue;
+        const tx = t % cols, ty = (t / cols) | 0;
+        const ax = Math.abs(sx - tx), ay = Math.abs(sy - ty), gx = Math.sign(sx - tx), gy = Math.sign(sy - ty);
+        const diag = t + gy * cols + gx, on = ax > ay ? t + gx : ay > ax ? t + gy * cols : diag;
+        if (clear[on] && (ax === 0 || ay === 0 || clear[diag])) clear[t] = 1;
+      }
+    }
     for (let t = 0; t < n; t++) {
-      if (dist[t] === UNREACHED || t === seed) continue;
+      if (dist[t] === UNREACHED || t === seed || (clear && !clear[t])) continue;
       const dx = Math.abs((t % cols) - sx), dy = Math.abs(((t / cols) | 0) - sy);
       const open = 10 * Math.max(dx, dy) + 4 * Math.min(dx, dy);
       if (dist[t] <= open) dir[t] = STRAIGHT;
@@ -642,12 +767,11 @@ export class Terrain {
     return f.dist[t] !== UNREACHED ? t : this.nearestFree(t);
   }
 
-  /** Is every listed point reachable from the first? (mapgen validation) */
-  connected(points: readonly [number, number][]): boolean {
-    if (points.length < 2) return true;
+  /** Tiles a walker can reach from (x, y), 4-connected. */
+  private reach(x: number, y: number): Uint8Array {
     const n = this.cols * this.rows;
     const seen = new Uint8Array(n);
-    const start = this.nearestFree(this.tileOf(points[0][0], points[0][1]));
+    const start = this.nearestFree(this.tileOf(x, y));
     const queue = new Int32Array(n);
     let head = 0, tail = 0;
     queue[tail++] = start;
@@ -664,10 +788,58 @@ export class Terrain {
         queue[tail++] = v;
       }
     }
+    return seen;
+  }
+
+  /** Is every listed point reachable from the first? (mapgen validation) */
+  connected(points: readonly [number, number][]): boolean {
+    if (points.length < 2) return true;
+    const seen = this.reach(points[0][0], points[0][1]);
     for (const [x, y] of points) {
       const t = this.tileOf(x, y);
       if (this.flags[t] & T_BLOCK || !seen[t]) return false;
     }
     return true;
+  }
+
+  /**
+   * Open ground nobody can walk to from (x, y), as runs of tiles along each
+   * row: [x1, x2, y] tile centers, px. For mapgen to fill in (#98). With
+   * `rim`, also the blocked tiles round it that touch no reachable tile, so
+   * the fill reaches the rock edge without narrowing anyone's way.
+   */
+  cutOff(x: number, y: number, rim = false): [number, number, number][] {
+    const seen = this.reach(x, y);
+    const { cols, rows } = this;
+    const lost = new Uint8Array(cols * rows);
+    for (let k = 0; k < lost.length; k++) if (!seen[k] && !(this.flags[k] & T_BLOCK)) lost[k] = 1;
+    if (rim) {
+      const near = (k: number, set: Uint8Array) => {
+        const tx = k % cols, ty = (k / cols) | 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const xx = tx + dx, yy = ty + dy;
+          if (xx >= 0 && yy >= 0 && xx < cols && yy < rows && set[yy * cols + xx] === 1) return true;
+        }
+        return false;
+      };
+      const edge: number[] = [];
+      for (let k = 0; k < lost.length; k++) if (this.flags[k] & T_BLOCK && near(k, lost) && !near(k, seen)) edge.push(k);
+      for (const k of edge) lost[k] = 2;
+    }
+    const out: [number, number, number][] = [];
+    for (let ty = 0; ty < rows; ty++) {
+      for (let tx = 0; tx < cols; ) {
+        const k = ty * cols + tx;
+        if (!lost[k]) {
+          tx++;
+          continue;
+        }
+        let e = tx;
+        while (e + 1 < cols && lost[k + e + 1 - tx]) e++;
+        out.push([(tx + 0.5) * TILE, (e + 0.5) * TILE, (ty + 0.5) * TILE]);
+        tx = e + 1;
+      }
+    }
+    return out;
   }
 }
