@@ -11,6 +11,7 @@ import { MAP_H, bloomGapWith, type Bloom, type RunNode, type RunState } from '..
 import { FACTION_HEX } from '../content/factions';
 import { generateMap, type MapSpec } from '../sim/mapgen';
 import { mapParamsOf } from '../sim/setup';
+import { ROCK_RES, rockGrid } from '../sim/terrain';
 
 export const BLOOM = '#c04a9a';
 export const DIFF_COLOR = ['#b4ff39', '#ffb627', '#ff6b4a', '#ff3cac'] as const;
@@ -156,7 +157,7 @@ function mapSprite(run: RunState, n: RunNode, style: 'constellation' | 'minimap'
   return cv;
 }
 
-const ROCK = 'rgb(70, 85, 150)';
+const ROCK = [70, 85, 150];
 
 /**
  * A top-down picture of a battle map at scale `s` from (ox, oy): cave rock,
@@ -175,25 +176,26 @@ export function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: 
   g.lineCap = 'round';
   const cave = m.terrain.cave;
   if (cave) {
-    // Rock everywhere in the zone, with the chambers and tunnels carved out.
-    // Drawn solid, then laid on see-through, so the overlapping pieces of
-    // noise rock don't stack into stripes.
-    const rock = document.createElement('canvas');
-    rock.width = g.canvas.width;
-    rock.height = g.canvas.height;
-    const r = rock.getContext('2d')!;
-    r.lineCap = 'round';
-    r.fillStyle = r.strokeStyle = ROCK;
-    if (cave.zone) for (const z of cave.zone) capsule(z, r);
-    else r.fillRect(X(0), Y(0), m.width * s, m.height * s);
-    r.globalCompositeOperation = 'destination-out';
-    r.strokeStyle = '#000';
-    for (const c of cave.carves) capsule(c, r);
-    r.globalCompositeOperation = 'source-over';
-    r.strokeStyle = ROCK;
-    for (const c of cave.fill ?? []) capsule(c, r);
+    // The rock as the game has it: its distance grid, one pixel a cell,
+    // scaled up. Drawn solid, then laid on see-through.
+    const grid = rockGrid(cave, m.width, m.height);
+    const cells = document.createElement('canvas');
+    cells.width = grid.cols;
+    cells.height = grid.rows;
+    const c = cells.getContext('2d')!;
+    const img = c.createImageData(grid.cols, grid.rows);
+    for (let k = 0; k < grid.d.length; k++) {
+      if (grid.d[k] > 0) continue;
+      img.data[k * 4] = ROCK[0];
+      img.data[k * 4 + 1] = ROCK[1];
+      img.data[k * 4 + 2] = ROCK[2];
+      img.data[k * 4 + 3] = 255;
+    }
+    c.putImageData(img, 0, 0);
     g.globalAlpha = 0.55;
-    g.drawImage(rock, 0, 0);
+    g.imageSmoothingEnabled = true;
+    // Grid point k sits at k * ROCK_RES: centre each pixel on its point.
+    g.drawImage(cells, X(-ROCK_RES / 2), Y(-ROCK_RES / 2), grid.cols * ROCK_RES * s, grid.rows * ROCK_RES * s);
     g.globalAlpha = 1;
   }
   if (detail) {

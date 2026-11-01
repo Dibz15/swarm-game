@@ -1413,8 +1413,8 @@ function fairestCave(rng: Rng, cp: CaveParams, f: Frame, crystals: CrystalPlace[
   if (grid) {
     // The grid only roughly knows where rock pieces leave room to walk: fill
     // whatever open ground the first start can't actually reach.
-    const lost = new Terrain({ walls: [], fields: [], crystals: [], cave: best! }, w, h).cutOff(nests[0].x, nests[0].y);
-    if (lost.length) best = { ...best!, fill: lost.map(([x1, x2, y]) => ({ x1, y1: y, x2, y2: y, r: TILE - TERRAIN.wallMargin - 1 })) };
+    const lost = new Terrain({ walls: [], fields: [], crystals: [], cave: best! }, w, h).cutOff(nests[0].x, nests[0].y, true);
+    if (lost.length) best = { ...best!, fill: lost };
   }
   return best!;
 }
