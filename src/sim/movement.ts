@@ -1,5 +1,5 @@
 import { DT, HOLD_EXTRA, Kind, LEASH, LEVEL, MAX_LEVEL, POWER, STRAINS, TERRAIN, TRAITS, UNIT_STATS, UPGRADE_COST, VARIANTS } from './constants';
-import { T_NEBULA, T_RIFT } from './terrain';
+import { riftDps, T_NEBULA, T_RIFT } from './terrain';
 import { maxHp, pushFx, removeUnit, UNIT_FEEDING, UNIT_RETREAT, WILD_HEART, type Nest, type World } from './world';
 
 const MAX_SEP_SCAN = 22;
@@ -78,9 +78,12 @@ export function updateMovement(w: World): void {
     if (tr.hasFields) {
       const fl = tr.flagsAt(x, y);
       if (fl & T_NEBULA) spd *= TERRAIN.nebulaSlow;
-      // Rift damage lands with everything else next tick.
-      if (fl & T_RIFT) w.dmg[i] += TERRAIN.riftDps * DT;
-    }
+      // Rift heat builds inside and drains outside; its damage lands with everything else next tick.
+      if (fl & T_RIFT) {
+        if (w.heat[i] < TERRAIN.rift.heatTicks) w.heat[i]++;
+        w.dmg[i] += riftDps(w.heat[i]) * DT;
+      } else if (w.heat[i]) w.heat[i] = Math.max(0, w.heat[i] - TERRAIN.rift.cool);
+    } else if (w.heat[i]) w.heat[i] = 0;
     let desX = 0, desY = 0;
 
     if (w.state[i] === UNIT_FEEDING) {

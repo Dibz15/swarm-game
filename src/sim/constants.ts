@@ -290,12 +290,26 @@ export const TERRAIN = {
   losGrace: 3,
   /** flow-field cost multipliers: units route around slow or dangerous ground when it pays */
   nebulaCost: 1.6,
-  riftCost: 3,
+  /** low enough that a thin rift line is worth cutting across; long seams and pools still add up */
+  riftCost: 1.8,
+  /**
+   * ...but heat builds with time inside (#58), so the core of a wide rift (a
+   * pool or a rift sea, wider than `riftWide`) costs far more, from `riftDeep` in.
+   * Rift lines are thinner, so crossing one stays cheap.
+   */
+  riftWide: 20,
+  riftDeep: 8,
+  riftDeepCost: 6,
   maxFields: 96,
   /** Nebula: movement speed multiplier */
   nebulaSlow: 0.55,
-  /** Rift: damage per second to anything standing in it */
-  riftDps: 2.4,
+  /**
+   * Rift (#58): heat builds while a unit stands in it (one tick per tick, up to
+   * `heatTicks`) and drains `cool` ticks per tick outside. Damage per second
+   * climbs from `minDps` to `maxDps` with heat squared: a dash costs a scratch,
+   * staying or fighting inside kills.
+   */
+  rift: { minDps: 1, maxDps: 12, heatTicks: 3 * TICK_HZ, cool: 2 },
   /** Crystal: energy per second for the only team standing on it */
   crystalEnergy: 1.1,
 };
