@@ -7,15 +7,15 @@
 // The rival is Brutal with 10-dot broods by default: at Normal or Hard the
 // proxy wins nearly every battle, so win rates can't move. The proxy doesn't
 // know Blood price: with its energy never spent, it casts (and pays) far more.
+// Battles run on the balance pool (scripts/balance/pool.ts: WORKERS,
+// BUDGET_MIN, NOCACHE) and are cached, so widening N replays only the new seeds.
 // Usage: [IDS=spikes,echo] [N=6] [SEEDS=0] [SIZE=10] [DIFF=3] npx vite-node scripts/reward-probe.ts
 import { nodeSetup } from '../src/campaign/battle';
 import { newBrood } from '../src/campaign/broods';
 import { REWARD, REWARDS, type Tier } from '../src/campaign/rewards';
 import { newRun, type RunState } from '../src/campaign/run';
 import { Kind, TICK_HZ } from '../src/sim/constants';
-import { createWorld } from '../src/sim/setup';
-import { step } from '../src/sim/step';
-import { Proxy } from '../src/proxy/proxy';
+import { BudgetError, Pool } from './balance/pool';
 
 const N = Number(process.env.N ?? 6);
 const SEEDS = Number(process.env.SEEDS ?? 0);
@@ -24,8 +24,10 @@ const DIFF = Number(process.env.DIFF ?? 3);
 const IDS = process.env.IDS ? process.env.IDS.split(',') : REWARDS.map((r) => r.id).filter((id) => id !== 'hunger');
 const CAP = 10 * 60 * TICK_HZ;
 
+const pool = await Pool.open();
+
 /** One battle: a 1v1 against a DIFF bot next to the start of seed `k`'s run, with `id` held (or nothing). */
-function battle(k: number, id: string | null): { won: boolean; secs: number } {
+async function battle(k: number, id: string | null): Promise<{ won: boolean; secs: number }> {
   const r = REWARD[id ?? ''];
   const second = r?.kind !== undefined && r.kind !== Kind.Dot ? r.kind : Kind.Tank;
   const run: RunState = newRun(`reward-probe-${SEEDS + k}`, 0, 'swarm', 0);
@@ -36,30 +38,30 @@ function battle(k: number, id: string | null): { won: boolean; secs: number } {
   else if (r) run.perks.push(r.id);
   const node = run.nodes[run.start].links.find((l) => run.nodes[l].kind === 'conquest' && !run.nodes[l].domain) ?? run.nodes[run.start].links[0];
   Object.assign(run.nodes[node], { difficulty: DIFF, rivals: 1 });
-  const w = createWorld(nodeSetup(run, node, run.fielded));
-  const proxy = new Proxy(run.color, { skill: 1 });
-  while (!w.over && w.tick < CAP) {
-    step(w, proxy.think(w));
-    w.fx = [];
-    w.deaths = [];
-  }
-  return { won: w.over && w.winnerTeam === w.teamOf[run.color], secs: w.tick / TICK_HZ };
+  const res = await pool.battle({ setup: nodeSetup(run, node, run.fielded), human: run.color, proxy: { skill: 1 }, cap: CAP });
+  return { won: res.won, secs: res.ticks / TICK_HZ };
 }
 
-const arm = (id: string | null) => {
-  let wins = 0, secs = 0;
-  for (let k = 0; k < N; k++) {
-    const b = battle(k, id);
-    wins += +b.won;
-    secs += b.secs;
-  }
-  return { rate: wins / N, secs: secs / N };
+const arm = async (id: string | null) => {
+  const bs = await Promise.all(Array.from({ length: N }, (_, k) => battle(k, id)));
+  return { rate: bs.filter((b) => b.won).length / N, secs: bs.reduce((s, b) => s + b.secs, 0) / N };
 };
 
-const base = arm(null);
+// Every arm at once, so the pool stays full; printed in order.
+let arms: Awaited<ReturnType<typeof arm>>[];
+try {
+  arms = await Promise.all([null, ...IDS].map(arm));
+} catch (e) {
+  if (!(e instanceof BudgetError)) throw e;
+  console.log(e.message);
+  await pool.close();
+  process.exit(2);
+}
+await pool.close();
+const base = arms[0];
 console.log(`baseline: won ${(100 * base.rate).toFixed(0)}%, ${base.secs.toFixed(0)} s (N=${N}, seeds ${SEEDS}..${SEEDS + N - 1}, difficulty ${DIFF})`);
-const rows = IDS.map((id) => {
-  const a = arm(id);
+const rows = IDS.map((id, i) => {
+  const a = arms[i + 1];
   console.log(`  ${id.padEnd(15)} ${(100 * a.rate).toFixed(0).padStart(3)}%  ${a.secs.toFixed(0).padStart(4)} s`);
   return { id, delta: a.rate - base.rate, secs: a.secs - base.secs };
 });
@@ -72,3 +74,4 @@ rows.forEach((o, k) => {
   const now = REWARD[o.id].tier;
   console.log(`  ${o.id.padEnd(15)} ${o.delta >= 0 ? '+' : ''}${(100 * o.delta).toFixed(0).padStart(3)} pts  ${o.secs >= 0 ? '+' : ''}${o.secs.toFixed(0).padStart(4)} s  ${tier}${tier === now ? '' : ` · now ${now}`}`);
 });
+console.log(`\n${pool.summary()}`);
