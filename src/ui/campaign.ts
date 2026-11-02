@@ -670,7 +670,7 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
       return `<article class="unlock-card${own ? ' on' : ''}">
         <span class="icon-art">${unlockIcon(u)}</span>
         <div class="who"><b>${d.name}</b><small>${d.gives}</small><small>Power: ${d.power}</small></div>
-        ${own ? '<span class="state">Unlocked</span>' : price(unlockCost(u), 'Unlock', `unlock:${u}`)}
+        ${own ? '<span class="state">Unlocked</span>' : price(unlockCost(run, u), 'Unlock', `unlock:${u}`)}
       </article>`;
     };
     body.innerHTML = `<p class="hint">Until a nest type is unlocked, it spawns Swarmers for you and gives no power.</p>

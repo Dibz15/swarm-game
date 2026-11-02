@@ -61,8 +61,25 @@ export interface RunOutcome {
   bought: Record<string, number>;
   deaths: number;
   rescues: number;
+  /** camp visits (#96): how far into the run (depth / heart depth), biomass banked, and whether it covered the wish list */
+  camps: Camp[];
   /** warlords (#66): how each ended up, and domain battles fought and won */
   lords: { broken: number; eaten: number; fought: number; avoided: number; battles: number; wins: number };
+}
+
+export interface Camp {
+  t: number;
+  banked: number;
+  /** the bank covered everything a player could want here (wishCost) */
+  all: boolean;
+}
+
+/** Everything a player could want at camp (#96): heal every wounded brood, every unlock left, one grow per brood. */
+export function wishCost(run: RunState): number {
+  const heals = run.broods.filter((b) => b.wounded).length * COST.heal;
+  const unlocks = [...UNLOCKS, 'nova' as Unlock].filter((u) => !unlocked(run, u)).reduce((s, u) => s + unlockCost(run, u), 0);
+  const grows = run.broods.reduce((s, b) => s + COST.grow(b), 0);
+  return heals + unlocks + grows;
 }
 
 export interface RunOptions {
@@ -123,7 +140,7 @@ export function spend(run: RunState, bought: Record<string, number>): void {
   const buy = (what: string, ok: boolean) => ok && (bought[what] = (bought[what] ?? 0) + 1);
   for (const b of run.broods) if (b.wounded && run.broods.filter(fit).length < maxFielded(run)) buy('heal', heal(run, b.id));
   const wanted: Unlock[] = [...new Set(run.broods.map((b) => KIND_NEST[b.kind]))].filter((t) => UNLOCKS.includes(t));
-  for (const u of [...wanted, 'nova' as Unlock, ...UNLOCKS]) if (!unlocked(run, u) && run.biomass >= unlockCost(u) + 10) buy(`unlock ${u}`, unlock(run, u));
+  for (const u of [...wanted, 'nova' as Unlock, ...UNLOCKS]) if (!unlocked(run, u) && run.biomass >= unlockCost(run, u) + 10) buy(`unlock ${u}`, unlock(run, u));
   const big = [...run.broods].sort((a, b) => b.size - a.size)[0];
   while (big && big.size >= big.cap - 2 && run.biomass >= COST.grow(big) + 30 && grow(run, big.id)) buy('grow', true);
 }
@@ -138,7 +155,7 @@ export async function playRun(fight: Fight | Pool, seed: number, o: RunOptions):
   const run = newRun(`probe-${seed}`, 0, o.pack, 0, o.difficulty);
   const out: RunOutcome = {
     seed, pack: o.pack, status: '', turns: 0, broods: 0, biomass: 0, restored: false, at: 0, depth: 0, far: run.nodes[run.heart].depth,
-    battles: [], curve: [], rewards: [], bought: {}, deaths: 0, rescues: 0,
+    battles: [], curve: [], rewards: [], bought: {}, deaths: 0, rescues: 0, camps: [],
     lords: { broken: 0, eaten: 0, fought: 0, avoided: 0, battles: 0, wins: 0 },
   };
   const met = new Set<number>();
@@ -146,6 +163,7 @@ export async function playRun(fight: Fight | Pool, seed: number, o: RunOptions):
     const picked = pickReward(run);
     if (picked) out.rewards.push(picked);
     run.offer = undefined;
+    if (run.turn > 0) out.camps.push({ t: Math.min(1, run.nodes[run.at].depth / out.far), banked: run.biomass, all: run.biomass >= wishCost(run) });
     spend(run, out.bought);
     const id = pickMove(run);
     const node = run.nodes[id];

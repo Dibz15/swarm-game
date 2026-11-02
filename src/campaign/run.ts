@@ -16,6 +16,7 @@ import { Kind, NestType } from '../sim/constants';
 import type { CaveLevel, MapSize, TerrainLevel } from '../sim/mapgen';
 import {
   COST,
+  UNLOCKS,
   MAX_FIELDED,
   MAX_ROSTER,
   PACKS,
@@ -604,7 +605,9 @@ function restoreCheckpoint(run: RunState, now: number): void {
 // ---- camp -----------------------------------------------------------------
 
 export const unlocked = (run: RunState, u: Unlock): boolean => (u === 'nova' ? run.unlocks.nova : !!(run.unlocks.nests & (1 << u)));
-export const unlockCost = (u: Unlock): number => (u === 'nova' ? COST.nova : COST.nest);
+/** Nova's price is fixed; a nest type costs more for each one already unlocked (#96). */
+export const unlockCost = (run: RunState, u: Unlock): number =>
+  u === 'nova' ? COST.nova : COST.nest + COST.nestStep * UNLOCKS.filter((n) => n !== 'nova' && unlocked(run, n)).length;
 
 /** Spend biomass at the camp. Returns false (and changes nothing) if it can't be done. */
 export function heal(run: RunState, broodId: number): boolean {
@@ -625,8 +628,8 @@ export function grow(run: RunState, broodId: number): boolean {
 }
 
 export function unlock(run: RunState, u: Unlock): boolean {
-  if (unlocked(run, u) || run.biomass < unlockCost(u)) return false;
-  run.biomass -= unlockCost(u);
+  if (unlocked(run, u) || run.biomass < unlockCost(run, u)) return false;
+  run.biomass -= unlockCost(run, u);
   if (u === 'nova') run.unlocks.nova = true;
   else run.unlocks.nests |= 1 << u;
   return true;

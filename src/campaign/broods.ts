@@ -76,9 +76,12 @@ export const UNLOCK_TEXT: Record<string, string> = {
 /** Camp prices (provisional). */
 export const COST = {
   heal: 15,
-  grow: (b: Brood) => 15 + 5 * b.grows,
+  /** rises 10 a grow (#96: it rose 5, and grows were affordable all run) */
+  grow: (b: Brood) => 15 + 10 * b.grows,
   growBy: 4,
   nest: 35,
+  /** each nest type already unlocked adds this to the next (#96) */
+  nestStep: 10,
   nova: 25,
 };
 
@@ -165,9 +168,13 @@ export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport
 }
 
 /** Biomass for a win: the node's base, nests held, survivors and speed. */
+/** most biomass survivors can add to a win */
+export const SURVIVOR_CAP = 10;
+
 export function biomassFor(base: number, r: BattleReport): number {
   if (!r.won) return 0;
   const survivors = r.survivors.reduce((a, b) => a + b, 0);
   const speed = Math.max(0, Math.round((10 * (240 - r.seconds)) / 240));
-  return base + r.nests + Math.floor(survivors / 5) + speed;
+  // Survivors pay at most SURVIVOR_CAP: they snowballed (#96), a big late win paid 20-40 on top of the node.
+  return base + r.nests + Math.min(SURVIVOR_CAP, Math.floor(survivors / 5)) + speed;
 }

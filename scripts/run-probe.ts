@@ -95,4 +95,8 @@ group('difficulty × rivals', (b) => `d${b.difficulty} ×${b.rivals}`);
 group('depth', (b) => `depth ${b.depth}`);
 console.log(`\nrewards taken: ${Object.entries(rewards).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ')}`);
 console.log(`camp: ${Object.entries(bought).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ')}`);
+// The camp economy (#96): spending should still be a choice in the last third.
+const camps = outcomes.flatMap((o) => o.camps);
+const thirds = [0, 1, 2].map((k) => camps.filter((c) => Math.min(2, Math.floor(c.t * 3)) === k));
+console.log(`camp economy by third of the run: ${thirds.map((cs) => `banked ${avg(cs.map((c) => c.banked)).toFixed(0)}, could buy everything ${pct(cs.filter((c) => c.all).length, cs.length)}`).join(' | ')}`);
 console.log(`\n${pool.summary()}`);

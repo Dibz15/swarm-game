@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
-import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
+import { COST, MILITIA, MIN_SIZE, SURVIVOR_CAP, UNLOCKS, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
+import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 
@@ -273,6 +273,20 @@ describe('broods', () => {
     expect(run.fielded).toEqual([a.id]);
   });
 
+  it('grows and nest unlocks cost more as you buy them (#96)', () => {
+    const run = newRun('prices', 0, 'swarm', 0);
+    run.biomass = 1000;
+    const b = run.broods[0];
+    expect(COST.grow(b)).toBe(15);
+    grow(run, b.id);
+    expect(COST.grow(b)).toBe(25);
+    const nests = UNLOCKS.filter((u) => u !== 'nova' && !unlocked(run, u));
+    const first = unlockCost(run, nests[0]);
+    unlock(run, nests[0]);
+    expect(unlockCost(run, nests[1])).toBe(first + COST.nestStep);
+    expect(unlockCost(run, 'nova')).toBe(COST.nova);
+  });
+
   it('winning a rescue node adds a brood, and biomass rewards nests, survivors and speed', () => {
     const run = newRun('rescue', 0, 'swarm', 0);
     const target = moves(run)[0];
@@ -280,7 +294,7 @@ describe('broods', () => {
     const res = resolveTurn(run, target, WIN, run.fielded, 0);
     expect(run.broods.some((b) => b.kind === Kind.Lancer)).toBe(true);
     expect(res.events.some((e) => e.what === 'rescued')).toBe(true);
-    expect(res.biomass).toBe(run.nodes[target].reward + 6 + Math.floor(66 / 5) + 2);
+    expect(res.biomass).toBe(run.nodes[target].reward + 6 + Math.min(SURVIVOR_CAP, Math.floor(66 / 5)) + 2);
     expect(run.biomass).toBe(res.biomass);
   });
 
