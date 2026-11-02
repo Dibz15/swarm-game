@@ -12,7 +12,7 @@ import { pushFx, spawnUnit, WILD_HEART, WILD_SWARM, type HeartRule, type World }
  * alone, it regrows (but never past a phase it lost). Everything random comes from the events' seeded stream.
  */
 export const HEART = {
-  hp: 2000,
+  hp: 1500,
   /** extra hp per node the Bloom swallowed */
   hpPerStrength: 0.06,
   /** drawn size (the sim uses the Colossus's reach) */

@@ -53,7 +53,8 @@ const RESCUE_ODDS = 0.25;
  * share of the fastest the shortest route survives (at Standard's 0.6, one lost
  * battle is almost always survivable and two spread-out ones usually are;
  * measured over 150 seeds). Gentle also holds the Bloom still after a lost
- * battle; the two ends shift the bots a level on some nodes.
+ * battle and costs broods less; the two ends shift the bots a level on some
+ * nodes, and the finale's rivals differ by difficulty.
  * Calibrated with scripts/run-probe.ts against the human proxy's skill dial.
  */
 export type RunDifficulty = 'gentle' | 'standard' | 'hard' | 'brutal';
@@ -66,13 +67,17 @@ export interface DifficultyRules {
   holdOnLoss: boolean;
   /** bot difficulty shift: -1 on Normal nodes (Gentle), +1 on Hard nodes and the finale (Brutal) */
   bots: -1 | 0 | 1;
+  /** the finale's rivals and their bot difficulty (#68: it was the wall, a quarter of attempts won at 3 Hard rivals) */
+  finale: { rivals: number; difficulty: number };
+  /** share of its size a fielded brood keeps after a lost battle */
+  lossKeep: number;
 }
 export const DIFFICULTIES: RunDifficulty[] = ['gentle', 'standard', 'hard', 'brutal'];
 export const RUN_DIFFICULTY: Record<RunDifficulty, DifficultyRules> = {
-  gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, and easier middle battles.', pace: 0.45, holdOnLoss: true, bots: -1 },
-  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.6, holdOnLoss: false, bots: 0 },
-  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.75, holdOnLoss: false, bots: 0 },
-  brutal: { name: 'Brutal', blurb: 'A fast Bloom, and Brutal bots in the late battles and the finale.', pace: 0.8, holdOnLoss: false, bots: 1 },
+  gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, lighter losses, and easier battles.', pace: 0.45, holdOnLoss: true, bots: -1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.75 },
+  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.6, holdOnLoss: false, bots: 0, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
+  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.75, holdOnLoss: false, bots: 0, finale: { rivals: 3, difficulty: 2 }, lossKeep: 0.5 },
+  brutal: { name: 'Brutal', blurb: 'A fast Bloom, and Brutal bots in the late battles and the finale.', pace: 0.8, holdOnLoss: false, bots: 1, finale: { rivals: 2, difficulty: 3 }, lossKeep: 0.5 },
 };
 /** saves from before difficulty were Standard */
 export const difficultyOf = (run: { difficulty?: RunDifficulty }): RunDifficulty => run.difficulty ?? 'standard';
@@ -301,7 +306,7 @@ export function inBloom(b: Bloom, x: number, y: number, time = b.time): boolean 
 function battle(node: RunNode, t: number, rng: Rng, rules: DifficultyRules): void {
   if (node.kind === 'start') return;
   if (node.kind === 'finale') {
-    Object.assign(node, { size: 'large', rivals: 3, difficulty: 2 + Math.max(0, rules.bots), caves: rng.pick<CaveLevel>(['off', 'belt']), terrain: 'standard', reward: 0 });
+    Object.assign(node, { size: 'large', ...rules.finale, caves: rng.pick<CaveLevel>(['off', 'belt']), terrain: 'standard', reward: 0 });
     return;
   }
   // One step at a time: a second rival first (still Easy), then Normal bots, then Hard.
@@ -314,7 +319,10 @@ function battle(node: RunNode, t: number, rng: Rng, rules: DifficultyRules): voi
   // Only Normal eases: in an FFA, Hard bots fight each other harder and leave more
   // openings, so easing Hard nodes to Normal made Gentle runs harder in the probe.
   if (rules.bots < 0 && node.difficulty === 1) node.difficulty = 0;
-  if (rules.bots > 0 && node.difficulty === 2) node.difficulty = 3;
+  // Brutal: Brutal bots on the Hard nodes, but at most two of them (three won 9% in the run probe).
+  if (rules.bots > 0 && node.difficulty === 2) (node.difficulty = 3), (node.rivals = Math.min(2, node.rivals));
+  // Gentle: one rival until the bots turn Normal, and never three (after the draw, so the stream stays the same).
+  if (rules.bots < 0) node.rivals = t < 0.4 ? 1 : Math.min(2, node.rivals);
   node.size = node.rivals <= 1 ? 'small' : 'medium';
   node.caves = rng.pick<CaveLevel>(['off', 'off', 'off', 'belt', 'belt', 'full']);
   node.terrain = rng.pick<TerrainLevel>(['light', 'standard', 'standard', 'heavy']);
@@ -529,7 +537,7 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
     run.log.push({ turn: run.turn, node: id, won });
     const fought = fighters(run.broods, fielded, maxFielded(run)).map((b) => b.id);
     run.fielded = fought.length ? fought : run.fielded;
-    res.events = settleBroods(run.broods, fought, report);
+    res.events = settleBroods(run.broods, fought, report, RUN_DIFFICULTY[difficultyOf(run)].lossKeep);
     res.biomass = biomassFor(node.reward, report) * (run.perks.includes('hunger') ? 2 : 1);
     run.biomass += res.biomass;
   }

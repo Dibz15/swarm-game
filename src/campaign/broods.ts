@@ -129,7 +129,8 @@ export interface BattleReport {
  * win. Loss: fielded broods are wounded and halved; below MIN_SIZE they die.
  * Broods that sat out heal a battle's worth.
  */
-export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport): BroodEvent[] {
+/** After a loss, each fielded brood keeps `keep` of its size (half; Gentle more, RUN_DIFFICULTY). */
+export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport, keep = 0.5): BroodEvent[] {
   const events: BroodEvent[] = [];
   const out = broods.filter((b) => fielded.includes(b.id));
   for (const b of broods) {
@@ -151,7 +152,7 @@ export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport
     return events;
   }
   for (const b of out) {
-    b.size = Math.floor(b.size / 2);
+    b.size = Math.floor(b.size * keep);
     if (b.size < MIN_SIZE) {
       broods.splice(broods.indexOf(b), 1);
       events.push({ name: b.name, kind: b.kind, what: 'died', size: 0 });
