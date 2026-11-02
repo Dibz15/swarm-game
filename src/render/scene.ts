@@ -115,11 +115,12 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
     if (n.capital && n.owner >= 0 && n.owner !== NEUTRAL) {
       r.shape(false, n.x, n.y, n.r * 1.2, 0, 0.92, 0, 0.035, c, 120);
     }
-    // Key nests (#87): a slow ring of four sigil marks, dashed while still sealed.
+    // Key nests (#87): a pulsing gold ring (the holder's color once taken), faint while still sealed.
     if (w.keys.includes(n.id)) {
       const sealed = w.keySealUntil > w.tick;
       const kc = n.owner >= 0 && n.owner !== NEUTRAL ? c : KEY_RGB;
-      for (let k = 0; k < 4; k++) r.shape(false, n.x, n.y, R * 1.7, 0, sealed ? 0.12 : 0.2, o.time * 0.25 + (k * Math.PI) / 2, 0.06, kc, sealed ? 120 : 200);
+      const pulse = 0.5 + 0.5 * Math.sin(o.time * 2.4);
+      r.shape(false, n.x, n.y, R * 1.7, 0, 1, 0, 0.07, kc, Math.round((sealed ? 70 : 140) + 80 * pulse));
       // While sealed, an outer arc runs down to the moment it opens.
       if (sealed) r.shape(false, n.x, n.y, R * 2, 0, (w.keySealUntil - w.tick) / KEYS.seal, 0, 0.03, KEY_RGB, 110);
     }
