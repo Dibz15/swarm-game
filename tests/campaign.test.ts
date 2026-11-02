@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CONQUEST_SHARE, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
+import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
 import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
 import { DIFFICULTIES, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
@@ -393,15 +393,15 @@ describe('rewards', () => {
     tanks.strains = ['plated'];
     run.perks = ['energy'];
     const both = modsFor(run.perks, [dots, tanks]);
-    expect(both.kind[Kind.Dot].speed).toBeCloseTo(1.15);
+    expect(both.kind[Kind.Dot].speed).toBeCloseTo(1.2);
     expect(both.kind[Kind.Tank].hp).toBeCloseTo(1.3);
     expect(both.energyRate).toBeCloseTo(1.15);
     const onlyDots = modsFor(run.perks, [dots]);
     expect(onlyDots.kind[Kind.Tank].hp).toBe(1);
     // The same strain on two broods of one kind doesn't stack.
-    expect(modsFor([], [dots, { ...dots, id: 9 }]).kind[Kind.Dot].speed).toBeCloseTo(1.15);
+    expect(modsFor([], [dots, { ...dots, id: 9 }]).kind[Kind.Dot].speed).toBeCloseTo(1.2);
     const s = nodeSetup(run, run.nodes[run.start].links[0], [dots.id]);
-    expect(s.players[0].mods!.kind[Kind.Dot].speed).toBeCloseTo(1.15);
+    expect(s.players[0].mods!.kind[Kind.Dot].speed).toBeCloseTo(1.2);
   });
 
   it('Feral shuts out power variants and Blood price, and Blood price shuts out Feral', () => {
@@ -418,13 +418,13 @@ describe('rewards', () => {
     expect(offerable(run, REWARD['feral'])).toBe(false);
   });
 
-  it('Lone wolf fields one brood at double size; Hunger doubles biomass and speeds the Bloom', () => {
+  it('Lone wolf fields one brood at LONE_WOLF times its size; Hunger doubles biomass and speeds the Bloom', () => {
     const run = afterWin('pacts');
     offerOf(run, ['lone-wolf']);
     takeReward(run, 'lone-wolf');
     expect(maxFielded(run)).toBe(1);
     expect(run.fielded).toHaveLength(1);
-    expect(armyFor(run, run.broods.map((b) => b.id))).toEqual([{ kind: run.broods[0].kind, count: run.broods[0].size * 2, vet: false }]);
+    expect(armyFor(run, run.broods.map((b) => b.id))).toEqual([{ kind: run.broods[0].kind, count: Math.round(run.broods[0].size * LONE_WOLF), vet: false }]);
 
     const h = afterWin('pacts');
     const step = h.bloom.step;

@@ -4,8 +4,11 @@
  * perks and pacts last the whole run. All of them are numbers in the sim's
  * FactionMods (src/sim/mods.ts). Pure: no DOM.
  *
- * PROVISIONAL: tiers and values are first guesses until the reward-impact
- * probe (phase 7, #68) measures them.
+ * Tiers are thirds of measured impact (#68, scripts/reward-probe.ts): the
+ * win-rate change each gives the human proxy in a 1v1 against a Brutal bot.
+ * Pacts keep rare and are judged on net impact. Power variants the proxy never
+ * casts (Long jump, Echo, Long, Siphon) and Blood price keep their first-guess
+ * tiers until a playtest.
  */
 
 import { Kind, POWER_NEST } from '../sim/constants';
@@ -61,52 +64,52 @@ const variant = (id: string, name: string, power: Power, tier: Tier, text: strin
 
 export const REWARDS: Reward[] = [
   // Swarmer strains
-  strain('frenzy', 'Frenzy', Kind.Dot, 'uncommon', 'Bigger pack bonus: +60% from nearby Swarmers', (k) => (k.pack *= 1.6)),
-  strain('lean', 'Lean', Kind.Dot, 'common', '+15% speed, −15% HP', (k) => ((k.speed *= 1.15), (k.hp *= 0.85))),
-  strain('thick-hide', 'Thick hide', Kind.Dot, 'common', '+25% HP, −10% speed', (k) => ((k.hp *= 1.25), (k.speed *= 0.9))),
+  strain('frenzy', 'Frenzy', Kind.Dot, 'rare', 'Bigger pack bonus: +60% from nearby Swarmers', (k) => (k.pack *= 1.6)),
+  strain('lean', 'Lean', Kind.Dot, 'uncommon', '+20% speed, −10% HP', (k) => ((k.speed *= 1.2), (k.hp *= 0.9))),
+  strain('thick-hide', 'Thick hide', Kind.Dot, 'rare', '+25% HP, −10% speed', (k) => ((k.hp *= 1.25), (k.speed *= 0.9))),
   strain('swarm-call', 'Swarm-call', Kind.Dot, 'uncommon', 'A dying Swarmer rouses those nearby: +25% damage and +20% speed for 2 s', (k) => (k.call = 0.25)),
   // Shield strains
-  strain('plated', 'Plated', Kind.Tank, 'common', '+30% HP', (k) => (k.hp *= 1.3)),
-  strain('bulwark', 'Bulwark', Kind.Tank, 'uncommon', 'Enemies pick Shields as targets from further away', (k) => (k.taunt *= 0.6)),
-  strain('spikes', 'Spikes', Kind.Tank, 'common', 'A quarter of the damage Shields are dealt hits the attacker back', (k) => (k.spikes = 0.25)),
-  strain('phalanx', 'Phalanx', Kind.Tank, 'uncommon', 'Shields take 8% less damage for each Shield beside them (up to 3)', (k) => (k.phalanx = 0.08)),
+  strain('plated', 'Plated', Kind.Tank, 'uncommon', '+30% HP', (k) => (k.hp *= 1.3)),
+  strain('bulwark', 'Bulwark', Kind.Tank, 'common', 'Enemies pick Shields as targets from further away', (k) => (k.taunt *= 0.6)),
+  strain('spikes', 'Spikes', Kind.Tank, 'uncommon', 'A quarter of the damage Shields are dealt hits the attacker back', (k) => (k.spikes = 0.25)),
+  strain('phalanx', 'Phalanx', Kind.Tank, 'common', 'Shields take 8% less damage for each Shield beside them (up to 3)', (k) => (k.phalanx = 0.08)),
   // Spear strains
   strain('barbed', 'Barbed', Kind.Lancer, 'uncommon', '+40% splash radius', (k) => (k.splash *= 1.4)),
-  strain('longshot', 'Longshot', Kind.Lancer, 'common', '+25% range, −15% damage', (k) => ((k.range *= 1.25), (k.dps *= 0.85))),
+  strain('longshot', 'Longshot', Kind.Lancer, 'rare', '+25% range, −15% damage', (k) => ((k.range *= 1.25), (k.dps *= 0.85))),
   strain('quickdraw', 'Quickdraw', Kind.Lancer, 'rare', '+25% damage (faster shots)', (k) => (k.dps *= 1.25)),
-  strain('piercing', 'Piercing', Kind.Lancer, 'uncommon', 'Shots carry on through a line of enemies behind the target', (k) => (k.pierceLine = true)),
+  strain('piercing', 'Piercing', Kind.Lancer, 'rare', 'Shots carry on through a line of enemies behind the target', (k) => (k.pierceLine = true)),
   // Raider strains
   strain('saboteur', 'Saboteur', Kind.Swift, 'common', 'Raiders capture 40% faster still', (k) => (k.capture *= 1.4)),
-  strain('fleet', 'Fleet', Kind.Swift, 'common', '+15% speed', (k) => (k.speed *= 1.15)),
-  strain('skirmish', 'Skirmish', Kind.Swift, 'common', 'Badly hurt Raiders fall back to a nest, heal, and return', (k) => (k.skirmish = true)),
-  strain('arsonist', 'Arsonist', Kind.Swift, 'rare', 'Enemy nests with your Raiders on them lose control 60% faster', (k) => (k.arson = 1.6)),
+  strain('fleet', 'Fleet', Kind.Swift, 'uncommon', '+15% speed', (k) => (k.speed *= 1.15)),
+  strain('skirmish', 'Skirmish', Kind.Swift, 'uncommon', 'Badly hurt Raiders fall back to a nest, heal, and return', (k) => (k.skirmish = true)),
+  strain('arsonist', 'Arsonist', Kind.Swift, 'common', 'Enemy nests with your Raiders on them lose control 60% faster', (k) => (k.arson = 1.6)),
   // Power variants
-  variant('heavy-shell', 'Heavy shell', 'barrage', 'uncommon', 'Barrage: +50% damage budget', (m) => (m.barrageBudget *= 1.5)),
-  variant('cluster', 'Cluster', 'barrage', 'uncommon', 'Barrage: three smaller shells land one after another round the target', (m) => (m.cluster = true)),
-  variant('scorch', 'Scorch', 'barrage', 'uncommon', 'Barrage: a weaker blast, but the ground burns for 6 s', (m) => (m.scorch = true)),
+  variant('heavy-shell', 'Heavy shell', 'barrage', 'common', 'Barrage: +50% damage budget', (m) => (m.barrageBudget *= 1.5)),
+  variant('cluster', 'Cluster', 'barrage', 'common', 'Barrage: three smaller shells land one after another round the target', (m) => (m.cluster = true)),
+  variant('scorch', 'Scorch', 'barrage', 'rare', 'Barrage: a weaker blast, but the ground burns for 6 s', (m) => (m.scorch = true)),
   variant('wide', 'Wide', 'nova', 'common', 'Nova: +35% radius, −25% damage', (m) => ((m.novaRadius *= 1.35), (m.novaDamage *= 0.75))),
   variant('implode', 'Implode', 'nova', 'common', 'Nova: pulls enemies in instead of throwing them out, −25% damage', (m) => (m.implode = true)),
-  variant('overdrive', 'Overdrive', 'surge', 'uncommon', 'Surge: lasts 50% longer and costs 30% less', (m) => ((m.surgeTicks *= 1.5), (m.surgeCost *= 0.7))),
-  variant('mend', 'Mend', 'surge', 'uncommon', 'Surge: heals 35% of HP over its length instead of the speed boost', (m) => (m.mend = true)),
+  variant('overdrive', 'Overdrive', 'surge', 'rare', 'Surge: lasts 50% longer and costs 30% less', (m) => ((m.surgeTicks *= 1.5), (m.surgeCost *= 0.7))),
+  variant('mend', 'Mend', 'surge', 'common', 'Surge: heals 35% of HP over its length instead of the speed boost', (m) => (m.mend = true)),
   variant('long-jump', 'Long jump', 'blink', 'common', 'Blink: +50% range', (m) => (m.blinkRange *= 1.5)),
   variant('echo', 'Echo', 'blink', 'rare', 'Blink: ghosts stay behind for 4 s and draw enemy fire', (m) => (m.echo = true)),
-  variant('root', 'Root', 'fortify', 'uncommon', "Fortify: units can't move, but take 40% less damage again", (m) => ((m.fortifyArmor *= 0.6), (m.fortifyRoot = true))),
+  variant('root', 'Root', 'fortify', 'common', "Fortify: units can't move, but take 40% less damage again", (m) => ((m.fortifyArmor *= 0.6), (m.fortifyRoot = true))),
   variant('thorns', 'Thorns', 'fortify', 'common', 'Fortify: fortified units send 30% of each blow back at the attacker', (m) => (m.thorns = 0.3)),
   variant('long', 'Long', 'lockdown', 'common', 'Lockdown: lasts 50% longer', (m) => (m.lockdownTicks *= 1.5)),
   variant('siphon', 'Siphon', 'lockdown', 'uncommon', 'Lockdown: drains 1.2 energy/s from its owner to you, but is 20% shorter and rests 5 s after', (m) => ((m.lockdownTicks *= 0.8), (m.siphon = 1.2))),
   // Nest and economy perks
   { id: 'capital', name: 'Seasoned capital', text: 'Your capital starts at level 2', family: 'perk', tier: 'rare', apply: (m) => (m.capitalLevel += 1) },
-  { id: 'bastion-range', name: 'Long watch', text: 'Bastion turrets reach 30% further', family: 'perk', tier: 'common', apply: (m) => (m.bastionRange *= 1.3) },
-  { id: 'supply', name: 'Deep stores', text: '+1 supply per nest held', family: 'perk', tier: 'uncommon', apply: (m) => (m.supplyPerNest += 1) },
+  { id: 'bastion-range', name: 'Long watch', text: 'Bastion turrets reach 30% further', family: 'perk', tier: 'rare', apply: (m) => (m.bastionRange *= 1.3) },
+  { id: 'supply', name: 'Deep stores', text: '+1 supply per nest held', family: 'perk', tier: 'common', apply: (m) => (m.supplyPerNest += 1) },
   { id: 'crystals', name: 'Crystal sense', text: 'Crystals charge 25% faster', family: 'perk', tier: 'common', apply: (m) => (m.crystalRate *= 1.25) },
   { id: 'energy', name: 'Rich blood', text: '+15% energy income', family: 'perk', tier: 'uncommon', apply: (m) => (m.energyRate *= 1.15) },
-  { id: 'capture', name: 'Quick claim', text: 'Capture every nest 25% faster', family: 'perk', tier: 'common', apply: (m) => (m.captureRate *= 1.25) },
+  { id: 'capture', name: 'Quick claim', text: 'Capture every nest 25% faster', family: 'perk', tier: 'rare', apply: (m) => (m.captureRate *= 1.25) },
   {
     id: 'drops',
     name: 'Kind skies',
     text: 'Supply drops usually land near you, and you take them 50% faster',
     family: 'perk',
-    tier: 'uncommon',
+    tier: 'common',
     apply: (m) => (m.dropFavour = 1.5),
   },
   { id: 'old-blood', name: 'Old blood', text: 'Level-2 nests spawn veterans (+35% HP), not just level 3', family: 'perk', tier: 'rare', apply: (m) => (m.vetLevel = 2) },
@@ -114,13 +117,13 @@ export const REWARDS: Reward[] = [
   {
     id: 'glass',
     name: 'Glass swarm',
-    text: '+30% damage, −20% HP, for every unit',
+    text: '+35% damage, −15% HP, for every unit',
     family: 'pact',
     tier: 'rare',
-    apply: (m) => m.kind.forEach((k) => ((k.dps *= 1.3), (k.hp *= 0.8))),
+    apply: (m) => m.kind.forEach((k) => ((k.dps *= 1.35), (k.hp *= 0.85))),
   },
   { id: 'hunger', name: 'Hunger', text: 'Double biomass from battles, but the Bloom advances 25% faster', family: 'pact', tier: 'rare', apply: () => {} },
-  { id: 'lone-wolf', name: 'Lone wolf', text: 'Field only one brood, but it fights twice as large', family: 'pact', tier: 'rare', apply: () => {} },
+  { id: 'lone-wolf', name: 'Lone wolf', text: 'Field only one brood, but it fights two and a half times as large', family: 'pact', tier: 'rare', apply: () => {} },
   {
     id: 'blood-price',
     name: 'Blood price',
@@ -137,7 +140,7 @@ export const REWARDS: Reward[] = [
     tier: 'rare',
     apply: (m) => ((m.captureControl = 0.5), (m.spawnRate *= 1.2)),
   },
-  { id: 'feral', name: 'Feral', text: 'No powers at all, but every nest spawns 25% faster', family: 'pact', tier: 'rare', apply: (m) => ((m.noPowers = true), (m.spawnRate *= 1.25)) },
+  { id: 'feral', name: 'Feral', text: 'No powers at all, but every nest spawns 35% faster', family: 'pact', tier: 'rare', apply: (m) => ((m.noPowers = true), (m.spawnRate *= 1.35)) },
 ];
 
 export const REWARD: Record<string, Reward> = Object.fromEntries(REWARDS.map((r) => [r.id, r]));
