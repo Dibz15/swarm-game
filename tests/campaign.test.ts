@@ -4,6 +4,9 @@ import { COST, MILITIA, MIN_SIZE, SURVIVOR_CAP, UNLOCKS, settleBroods, type Batt
 import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
+import { DIFFICULTY } from '../src/sim/ai/bot';
+import { heartSlot } from '../src/sim/heart';
+import { createWorld } from '../src/sim/setup';
 
 const SEEDS = Array.from({ length: 60 }, (_, i) => `seed-${i}`);
 const WIN: BattleReport = { won: true, survivors: [30, 12, 12, 12], nests: 6, seconds: 200 };
@@ -191,12 +194,45 @@ describe('run difficulty', () => {
     expect(near.bloom).toBe(true);
   });
 
+  it('rivals produce by the run difficulty\'s dial, on top of their bot level', () => {
+    for (const d of DIFFICULTIES) {
+      const run = newRun('dial', 0, 'swarm', 0, d);
+      const node = run.nodes.find((n) => n.kind === 'conquest' && n.domain === undefined)!;
+      const bot = nodeSetup(run, node.id).players[1];
+      expect(bot.prod).toBeCloseTo((DIFFICULTY[node.difficulty].prod ?? 1) * RUN_DIFFICULTY[d].rivalProd);
+    }
+  });
+
+  it('a lost finale leaves the heart wounded by heartCarry of the damage, and the next finale starts it there', () => {
+    for (const d of DIFFICULTIES) {
+      const run = newRun('wound', 0, 'swarm', 0, d);
+      run.at = run.nodes[run.heart].links[0];
+      resolveTurn(run, run.heart, { ...LOSS, heart: 0.6 }, run.fielded, 0);
+      expect(run.heartWound).toBeCloseTo(0.6 * RUN_DIFFICULTY[d].heartCarry);
+      expect(nodeSetup(run, run.heart).heart!.wound).toBeCloseTo(0.6 * RUN_DIFFICULTY[d].heartCarry);
+    }
+    const run = newRun('wound', 0, 'swarm', 0);
+    const w = createWorld({ ...nodeSetup(run, run.heart), heart: { strength: 0, rule: 'heart', wound: 0.5 } });
+    const s = heartSlot(w);
+    expect(w.hp[s] / w.heart!.maxHp).toBeCloseTo(0.5);
+    expect(w.heart!.phase).toBe(1);
+  });
+
+  it('a lost battle pays salvage: a share of the node reward', () => {
+    for (const d of DIFFICULTIES) {
+      const run = newRun('salvage', 0, 'swarm', 0, d);
+      const target = moves(run)[0];
+      const res = resolveTurn(run, target, LOSS, run.fielded, 0);
+      expect(res.biomass).toBe(Math.round(run.nodes[target].reward * RUN_DIFFICULTY[d].salvage));
+    }
+  });
+
   it('the finale has the heart, fed by the swallowed nodes; only Brutal adds the rivals to beat', () => {
     for (const difficulty of DIFFICULTIES) {
       const run = newRun('heart', 0, 'swarm', 0, difficulty);
       run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, 5).map((n) => n.id);
       const setup = nodeSetup(run, run.heart);
-      expect(setup.heart).toEqual({ strength: 5, rule: difficulty === 'brutal' ? 'heart+rivals' : 'heart' });
+      expect(setup.heart).toEqual({ strength: 5, rule: difficulty === 'brutal' ? 'heart+rivals' : 'heart', wound: 0 });
       expect(bloomLabel(run, run.heart)).toBe('The heart, fed by 5 nodes');
       const other = run.nodes.find((n) => n.kind === 'conquest')!;
       expect(nodeSetup(run, other.id).heart).toBeUndefined();

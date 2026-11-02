@@ -55,7 +55,9 @@ const RESCUE_ODDS = 0.25;
  * more lost battles a run can take before the Bloom catches it. Gentle also
  * holds the Bloom still after a lost battle and costs broods less; the two ends
  * shift the bots a level on some nodes, and the finale's rivals differ by
- * difficulty. Tuned against the #68 targets (win % at skill 1 / 0.5: Gentle
+ * difficulty. Three smooth dials scale the rest: rival production, how much
+ * of a lost finale's damage the heart keeps, and the salvage a lost battle
+ * pays. Tuned against the #68 targets (win % at skill 1 / 0.5: Gentle
  * 90/60, Standard 70/35, Hard 45, Brutal 20).
  * Calibrated with scripts/run-probe.ts against the human proxy's skill dial.
  */
@@ -73,13 +75,19 @@ export interface DifficultyRules {
   finale: { rivals: number; difficulty: number };
   /** share of its size a fielded brood keeps after a lost battle */
   lossKeep: number;
+  /** rival production, on top of their bot level: a smooth dial where bot levels are steps (#68) */
+  rivalProd: number;
+  /** share of the damage done to the heart in a lost finale that it still bears next time (#68) */
+  heartCarry: number;
+  /** share of the node's reward a lost battle still pays (#68) */
+  salvage: number;
 }
 export const DIFFICULTIES: RunDifficulty[] = ['gentle', 'standard', 'hard', 'brutal'];
 export const RUN_DIFFICULTY: Record<RunDifficulty, DifficultyRules> = {
-  gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, lighter losses, and easier battles.', pace: 0.45, holdOnLoss: true, bots: -1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.75 },
-  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.45, holdOnLoss: false, bots: 0, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
-  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.5, holdOnLoss: false, bots: 0, finale: { rivals: 3, difficulty: 2 }, lossKeep: 0.5 },
-  brutal: { name: 'Brutal', blurb: 'Hard\'s Bloom, Brutal bots in the late battles, and a finale where the rivals must fall too.', pace: 0.5, holdOnLoss: false, bots: 1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
+  gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, lighter losses, and easier battles.', pace: 0.45, holdOnLoss: true, bots: -1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.75, rivalProd: 0.8, heartCarry: 0.75, salvage: 0.35 },
+  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.45, holdOnLoss: false, bots: 0, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5, rivalProd: 0.9, heartCarry: 0.5, salvage: 0.35 },
+  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.5, holdOnLoss: false, bots: 0, finale: { rivals: 3, difficulty: 2 }, lossKeep: 0.5, rivalProd: 1, heartCarry: 0.25, salvage: 0.2 },
+  brutal: { name: 'Brutal', blurb: 'Hard\'s Bloom, Brutal bots in the late battles, and a finale where the rivals must fall too.', pace: 0.5, holdOnLoss: false, bots: 1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5, rivalProd: 1, heartCarry: 0, salvage: 0 },
 };
 /** saves from before difficulty were Standard */
 export const difficultyOf = (run: { difficulty?: RunDifficulty }): RunDifficulty => run.difficulty ?? 'standard';
@@ -196,6 +204,8 @@ export interface RunState {
   visited: number[];
   /** nodes the Bloom has swallowed */
   swallowed: number[];
+  /** the heart's wounds from lost finales: the share of its HP it starts the next one without (heartCarry) */
+  heartWound?: number;
   bloom: Bloom;
   turn: number;
   /** chosen at the start (older saves: Standard, see difficultyOf) */
@@ -481,6 +491,9 @@ function paceFor(nodes: RunNode[], start: number, heart: number, b: Bloom, turns
   return lo;
 }
 
+/** The heart never starts a finale with less than a tenth of its HP. */
+export const HEART_WOUND_MAX = 0.9;
+
 /** The Bloom never grows faster than this a turn. */
 const MAX_STEP = MAP_W / 3;
 
@@ -540,7 +553,9 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
     const fought = fighters(run.broods, fielded, maxFielded(run)).map((b) => b.id);
     run.fielded = fought.length ? fought : run.fielded;
     res.events = settleBroods(run.broods, fought, report, RUN_DIFFICULTY[difficultyOf(run)].lossKeep);
-    res.biomass = biomassFor(node.reward, report) * (run.perks.includes('hunger') ? 2 : 1);
+    // A lost battle still pays salvage: a share of the node's reward.
+    const pay = report.won ? biomassFor(node.reward, report) : Math.round(node.reward * RUN_DIFFICULTY[difficultyOf(run)].salvage);
+    res.biomass = pay * (run.perks.includes('hunger') ? 2 : 1);
     run.biomass += res.biomass;
   }
   if (won) {
@@ -563,6 +578,12 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
       run.status = 'won';
       return res;
     }
+  }
+
+  // A lost finale: the heart keeps a share of the wounds you dealt it.
+  if (report && !report.won && id === run.heart && report.heart !== undefined) {
+    const was = run.heartWound ?? 0;
+    run.heartWound = Math.min(HEART_WOUND_MAX, was + RUN_DIFFICULTY[difficultyOf(run)].heartCarry * Math.max(0, report.heart - was));
   }
 
   // Gentle: the Bloom waits while you recover from a lost battle.

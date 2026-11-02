@@ -7,6 +7,7 @@ import type { EventParams } from '../sim/mapgen';
 import { Rng, hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import { TICK_HZ } from '../sim/constants';
+import { heartSlot } from '../sim/heart';
 import type { World } from '../sim/world';
 import { MILITIA, fighters, veteran, type BattleReport } from './broods';
 import { modsFor } from './rewards';
@@ -55,6 +56,7 @@ export function nodeSetup(run: RunState, id: number, fielded: number[] = []): Ma
   // A standing warlord's stronghold (#100): its capital is a walled citadel to take.
   const hold = !finale && lords[0] && lords[0].stronghold === id && !lords[0].broken;
   const events = bloomEvents(finale ? 1 : pressure(run, id), bloomStrength(run));
+  const rivalProd = RUN_DIFFICULTY[difficultyOf(run)].rivalProd;
   return {
     seed: n.seed,
     size: n.size,
@@ -69,7 +71,7 @@ export function nodeSetup(run: RunState, id: number, fielded: number[] = []): Ma
     stronghold: hold ? { player: 1, scale: Math.max(1, armySize(run, fielded) / STRONGHOLD_ARMY) } : undefined,
     siege: n.kind === 'hold' ? siegeFor(run, n.depth) : undefined,
     // Brutal: after the heart, the rivals still have to be beaten.
-    heart: finale ? { strength: bloomStrength(run), rule: RUN_DIFFICULTY[difficultyOf(run)].bots > 0 ? 'heart+rivals' : 'heart' } : undefined,
+    heart: finale ? { strength: bloomStrength(run), rule: RUN_DIFFICULTY[difficultyOf(run)].bots > 0 ? 'heart+rivals' : 'heart', wound: run.heartWound ?? 0 } : undefined,
     players: [
       {
         faction: run.color,
@@ -82,9 +84,10 @@ export function nodeSetup(run: RunState, id: number, fielded: number[] = []): Ma
       ...factions.slice(0, n.rivals).map((faction, i): PlayerSetup => {
         const personality = rng.pick(PERSONALITIES);
         const lord = lords[i];
-        const plain: PlayerSetup = { faction, team: i + 1, human: false, bot: { difficulty: n.difficulty, personality } };
+        // The run difficulty's rival dial scales production on top of the bot level.
+        const plain: PlayerSetup = { faction, team: i + 1, human: false, prod: (DIFFICULTY[n.difficulty]?.prod ?? 1) * rivalProd, bot: { difficulty: n.difficulty, personality } };
         if (!lord) return plain;
-        const p = warlordPlayer(run, lord, plain);
+        const p = warlordPlayer(run, lord, plain, rivalProd);
         // In its stronghold, the warlord turtles whatever its usual temper.
         // Its three nests from the start would out-produce you: it spawns slower there.
         return hold ? { ...p, prod: p.prod! * STRONGHOLD_PROD, bot: { ...p.bot!, personality: 'turtler', citadel: true } } : p;
@@ -111,12 +114,12 @@ export function siegeFor(run: RunState, depth: number): SiegeSetup {
 }
 
 /** A rival slot as the warlord: its trait in mods (and production, and powers), its personality, weakened by erosion. */
-function warlordPlayer(run: RunState, w: Warlord, slot: PlayerSetup): PlayerSetup {
+function warlordPlayer(run: RunState, w: Warlord, slot: PlayerSetup, rivalProd = 1): PlayerSetup {
   const t = TRAITS[w.trait];
   const mods = defaultMods();
   t.apply(mods);
   const d = slot.bot!.difficulty;
-  const prod = (DIFFICULTY[d]?.prod ?? 1) * (t.prod ?? 1) * Math.max(EROSION_FLOOR, 1 - EROSION * erosion(run, w));
+  const prod = (DIFFICULTY[d]?.prod ?? 1) * rivalProd * (t.prod ?? 1) * Math.max(EROSION_FLOOR, 1 - EROSION * erosion(run, w));
   return { ...slot, mods, prod, bot: { difficulty: d, personality: w.personality, ...(t.noPowers ? { powers: false as const } : {}) } };
 }
 
@@ -181,7 +184,10 @@ export function bloomEvents(p: number, strength: number): EventParams {
 /** The Bloom as a node's battle would meet it right now, for previews. */
 export function bloomLabel(run: RunState, id: number): string {
   const s = bloomStrength(run);
-  if (run.nodes[id].kind === 'finale') return s > 0 ? `The heart, fed by ${s} node${s === 1 ? '' : 's'}` : 'The heart, unfed';
+  if (run.nodes[id].kind === 'finale') {
+    const wound = run.heartWound ? `, ${Math.round(100 * run.heartWound)}% wounded` : '';
+    return (s > 0 ? `The heart, fed by ${s} node${s === 1 ? '' : 's'}` : 'The heart, unfed') + wound;
+  }
   const p = pressure(run, id);
   const word = p > 0.66 ? 'Close' : p > 0.2 ? 'Nearing' : 'Far';
   const swarms = p > 0.66 ? 'its swarms come often' : p > 0.2 ? 'its swarms come' : 'wild swarms are rare';
@@ -193,5 +199,11 @@ export function battleReport(w: World, human: number, won: boolean): BattleRepor
   const survivors = [0, 0, 0, 0];
   for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === human && w.kind[i] < survivors.length) survivors[w.kind[i]]++;
   const nests = w.nests.filter((n) => n.owner === human && n.control >= 1).length;
-  return { won, survivors, nests, seconds: w.tick / TICK_HZ };
+  const report: BattleReport = { won, survivors, nests, seconds: w.tick / TICK_HZ };
+  // The finale: how wounded the heart is, for the next attempt (heartCarry).
+  if (w.heart) {
+    const s = heartSlot(w);
+    report.heart = s < 0 ? 1 : 1 - w.hp[s] / w.heart.maxHp;
+  }
+  return report;
 }

@@ -1217,7 +1217,9 @@ export function runDebrief(run: RunState, node: RunNode, won: boolean, res: Turn
           : 'Your last brood is gone.'
         : won
           ? `${res.warlords.some((w) => w.what === 'broken') ? 'Citadel taken' : `${KIND_LABEL[node.kind]} won`}. +${res.biomass} biomass.`
-          : 'Your swarm falls back. The Bloom advances anyway.';
+          : `Your swarm falls back${res.biomass ? `, salvaging +${res.biomass} biomass` : ''}. ${
+              node.kind === 'finale' && run.heartWound ? `The heart bears its wounds: ${Math.round(100 * run.heartWound)}% of its life is gone. ` : ''
+            }${RUN_DIFFICULTY[difficultyOf(run)].holdOnLoss ? 'The Bloom waits.' : 'The Bloom advances anyway.'}`;
   const events = restored ? [] : res.events;
   const foes = node.kind === 'start' ? [] : rivals(run, node.id);
   const m = el(`

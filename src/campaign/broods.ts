@@ -124,6 +124,8 @@ export interface BattleReport {
   /** nests you held at the end */
   nests: number;
   seconds: number;
+  /** a finale's heart at the end: the share of its HP gone (1 if slain) */
+  heart?: number;
 }
 
 /**

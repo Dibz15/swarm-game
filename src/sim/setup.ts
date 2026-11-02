@@ -50,7 +50,7 @@ export interface MatchSetup {
   /** share of nests needed for domination, instead of the map size's default */
   domShare?: number;
   /** the Bloom's heart (campaign finale): a rooted boss; strength = nodes the Bloom ate */
-  heart?: { strength: number; rule: HeartRule };
+  heart?: { strength: number; rule: HeartRule; wound?: number };
   /** a warlord's stronghold (#100): this player's capital is a walled citadel; a human taking it wins */
   /** Hold the line (#67): the human, walled in, holds its capital against waves */
   siege?: SiegeSetup;
@@ -154,7 +154,7 @@ export function createWorld(setup: MatchSetup): World {
   });
 
   initEvents(w, map.events);
-  if (setup.heart) initHeart(w, setup.heart.strength, setup.heart.rule);
+  if (setup.heart) initHeart(w, setup.heart.strength, setup.heart.rule, setup.heart.wound);
   if (setup.siege) initSiege(w, setup.siege, setup.players.find((p) => p.human)?.faction ?? setup.players[0].faction);
 
   for (const p of setup.players) {
