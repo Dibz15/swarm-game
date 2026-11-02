@@ -11,7 +11,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { DEFAULT_RULE, EARLY_CLASSES, classOf, type BattleClass, type Job, type Result, type Rule } from './battle';
+import { DEFAULT_RULE, EARLY_CLASSES, classOf, type BattleClass, type Job, type PoolJob, type Result, type Rule } from './battle';
 import { CACHE_DIR, Cache, fingerprint, sha } from './cache';
 
 /** How a rule did on a set of played-out battles. */
@@ -39,8 +39,7 @@ export const EARLY_MIN_CALLS = 30;
 
 export const ruleFromEnv = (): Rule => ({ share: Number(process.env.EARLY_SHARE ?? DEFAULT_RULE.share), secs: Number(process.env.EARLY_SECS ?? DEFAULT_RULE.secs) });
 
-/** A probe's job: `early` asks for the pool's rule, which it applies only where the check passed. */
-export type PoolJob = Omit<Job, 'early'> & { early?: boolean };
+export type { PoolJob } from './battle';
 
 export class BudgetError extends Error {
   constructor(minutes: number) {
