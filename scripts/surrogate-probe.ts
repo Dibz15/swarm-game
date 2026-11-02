@@ -7,6 +7,7 @@
 // band, run minutes, the biomass curve and warlords.
 // Usage: npx vite-node scripts/surrogate-probe.ts [runs] [first seed]
 //   DIFFICULTY=gentle,standard (default: all four)   SKILLS=1,0.5 (default: those with targets)
+import { IMPACT_FILE, type ImpactTable } from './balance/impact';
 import type { PackId } from '../src/campaign/broods';
 import type { RunDifficulty } from '../src/campaign/run';
 import { buildPanel, surrogateFight } from './balance/model';
@@ -32,7 +33,9 @@ try {
 await pool.close();
 console.log(`${pool.summary()}\n`);
 
-const fight = surrogateFight(panel);
+const table = pool.cache.read<ImpactTable>(IMPACT_FILE);
+if (!table) console.log('no reward-impact table for this code (npx vite-node scripts/reward-probe.ts): rewards count as the panel average');
+const fight = surrogateFight(panel, Object.fromEntries((table?.items ?? []).map((i) => [i.id, i.logit])));
 const t0 = performance.now();
 for (const difficulty of DIFFS) {
   const skills = process.env.SKILLS ? process.env.SKILLS.split(',').map(Number) : Object.keys(TARGETS[difficulty]).map(Number).sort((a, b) => b - a);

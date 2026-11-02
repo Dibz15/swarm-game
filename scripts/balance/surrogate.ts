@@ -13,9 +13,15 @@
 // is measured at three army sizes); the surrogate draws it once per node per
 // run, so retries share it. Survivors, nests held and minutes come from the
 // band's measured means, won or lost.
+//
+// Rewards (impact.ts): given the reward-impact table, a battle's odds move by
+// the logit impact of the rewards the run brings to it, less what the panel's
+// battles in that band brought on average (they were measured holding the
+// rewards real runs had then). An impact is measured in one kind of battle
+// (a 1v1 against a Brutal bot) and assumed to carry over to the rest.
 import { armyFor } from '../../src/campaign/battle';
-import type { BattleReport } from '../../src/campaign/broods';
-import { RUN_DIFFICULTY, difficultyOf, bloomStrength, pressure, warlordFighting, type RunState } from '../../src/campaign/run';
+import { fighters, type BattleReport } from '../../src/campaign/broods';
+import { RUN_DIFFICULTY, difficultyOf, bloomStrength, maxFielded, pressure, warlordFighting, type RunState } from '../../src/campaign/run';
 import { TICK_HZ } from '../../src/sim/constants';
 import { Rng, hashString } from '../../src/sim/rng';
 import { CAP, type Fight, type Result } from './battle';
@@ -46,6 +52,8 @@ export interface PanelBattle {
   kind: CellKind;
   /** the node measured (run seed and node id): its battles share a hardness */
   node: string;
+  /** the rewards in play: the run's perks and the fielded broods' strains */
+  held: string[];
   band: number;
   shift: number;
   /** the node's bot level and rivals */
@@ -106,14 +114,17 @@ export function features(b: Where): number[] {
 
 // ---- the surrogate -----------------------------------------------------------------
 
-/** The model's win odds for a battle, at a node `hard` sds harder than the usual (0: the median node). */
-export function winOdds(panel: Panel, kind: CellKind, at: Where, hard = 0): number {
+/** The rewards a battle is fought with: the run's perks and the fielded broods' strains. */
+export const heldIn = (run: RunState, fielded: number[]) => [...run.perks, ...new Set(fighters(run.broods, fielded, maxFielded(run)).flatMap((b) => b.strains))];
+
+/** The model's win odds for a battle, at a node `hard` sds harder than the usual (0: the median node), moved by `offset` in logit units (rewards). */
+export function winOdds(panel: Panel, kind: CellKind, at: Where, hard = 0, offset = 0): number {
   const w = panel.weights[kind] ?? panel.weights.conquest!;
   // A kind never seen in this band borrows the nearest band's intercept.
   const seen = (b: number) => panel.battles.some((x) => x.kind === kind && x.band === b);
   let b = at.band;
   for (let d = 1; !seen(b) && d < BANDS; d++) b = seen(at.band - d) ? at.band - d : seen(at.band + d) ? at.band + d : b;
-  return sigmoid(dot(w, features({ ...at, band: b })) - hard * (panel.hardness[kind] ?? 0));
+  return sigmoid(dot(w, features({ ...at, band: b })) - hard * (panel.hardness[kind] ?? 0) + offset);
 }
 
 function outcomeOf(panel: Panel, kind: CellKind, band: number, won: boolean): Outcome {
@@ -127,14 +138,21 @@ function outcomeOf(panel: Panel, kind: CellKind, band: number, won: boolean): Ou
 }
 
 /** A Fight that draws each battle's outcome from the panel's model, seeded by the run and turn. */
-export function surrogateFight(panel: Panel): Fight {
+export function surrogateFight(panel: Panel, impact: Record<string, number> = {}): Fight {
+  const sum = (held: string[]) => held.reduce((s, r) => s + (impact[r] ?? 0), 0);
+  // What the panel's battles brought, per band.
+  const usual = Array.from({ length: BANDS }, (_, band) => {
+    const bs = panel.battles.filter((b) => b.band === band && b.held);
+    return bs.length ? bs.reduce((s, b) => s + sum(b.held), 0) / bs.length : 0;
+  });
   return async (job, { run, id, fielded, army }) => {
     const kind = cellKind(run, id), band = bandOf(run, id);
+    const rewards = sum(heldIn(run, fielded)) - usual[band];
     // The node's hardness: one draw per node per run, so retries share it.
     const h = new Rng(hashString(`hardness:${run.seed}:${id}`));
     const hard = Math.sqrt(-2 * Math.log(1 - h.next())) * Math.cos(2 * Math.PI * h.next());
     const n = run.nodes[id];
-    const p = winOdds(panel, kind, { band, difficulty: n.difficulty, rivals: n.rivals, pressure: pressure(run, id), strength: bloomStrength(run), shift: shiftOf(run), ratio: army / panel.typical[band], skill: job.proxy.skill ?? 1 }, hard);
+    const p = winOdds(panel, kind, { band, difficulty: n.difficulty, rivals: n.rivals, pressure: pressure(run, id), strength: bloomStrength(run), shift: shiftOf(run), ratio: army / panel.typical[band], skill: job.proxy.skill ?? 1 }, hard, rewards);
     const rng = new Rng(hashString(`surrogate:${run.seed}:${run.turn}:${id}`));
     const won = rng.next() < p;
     const o = outcomeOf(panel, kind, band, won);
