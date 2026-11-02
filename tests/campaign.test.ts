@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
 import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { DIFFICULTIES, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
+import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 
@@ -151,9 +151,11 @@ describe('run difficulty', () => {
     }
   });
 
-  it('the Bloom is slower on easier runs, and Gentle holds it still after a loss', () => {
-    const steps = DIFFICULTIES.map((d) => newRun('pace', 0, 'swarm', 0, d).bloom.step);
-    for (let k = 1; k < steps.length; k++) expect(steps[k]).toBeGreaterThan(steps[k - 1]);
+  it('the Bloom is slower on easier runs (Brutal keeps Hard\'s), and Gentle holds it still after a loss', () => {
+    const [gentleStep, standardStep, hardStep, brutalStep] = DIFFICULTIES.map((d) => newRun('pace', 0, 'swarm', 0, d).bloom.step);
+    expect(standardStep).toBeGreaterThan(gentleStep);
+    expect(hardStep).toBeGreaterThan(standardStep);
+    expect(brutalStep).toBe(hardStep);
     const gentle = newRun('pace', 0, 'swarm', 0, 'gentle');
     resolveTurn(gentle, moves(gentle)[0], LOSS, gentle.fielded, 0);
     expect(gentle.bloom.time).toBe(0);
@@ -163,12 +165,17 @@ describe('run difficulty', () => {
   });
 
 
-  it('Gentle has no Normal nodes; Brutal puts Brutal bots on the late nodes and the finale', () => {
+  it('Gentle has no Normal nodes; Brutal puts two Brutal bots at most on the late nodes; the finale is per difficulty', () => {
     for (const seed of SEEDS.slice(0, 20)) {
       expect(newRun(seed, 0, 'swarm', 0, 'gentle').nodes.some((n) => n.difficulty === 1)).toBe(false);
       const brutal = newRun(seed, 0, 'swarm', 0, 'brutal');
-      expect(brutal.nodes[brutal.heart].difficulty).toBe(3);
-      expect(brutal.nodes.some((n) => n.difficulty === 2)).toBe(false);
+      const late = brutal.nodes.filter((n) => n.kind !== 'finale' && n.kind !== 'start' && n.kind !== 'hold');
+      expect(late.some((n) => n.difficulty === 2)).toBe(false);
+      expect(late.filter((n) => n.difficulty === 3).every((n) => n.rivals <= 2)).toBe(true);
+      for (const d of DIFFICULTIES) {
+        const run = newRun(seed, 0, 'swarm', 0, d);
+        expect(run.nodes[run.heart]).toMatchObject(RUN_DIFFICULTY[d].finale);
+      }
     }
   });
 
@@ -224,6 +231,12 @@ describe('broods', () => {
     expect(b.size).toBe(25);
     expect(c.size).toBe(MIN_SIZE); // 2 survivors, floored to the minimum
     expect(ev.some((e) => e.what === 'veteran' && e.name === a.name)).toBe(true);
+  });
+
+  it("a loss costs less on Gentle: a brood keeps RUN_DIFFICULTY's lossKeep of its size", () => {
+    const b = brood({ id: 0, size: 12 });
+    settleBroods([b], [0], LOSS, RUN_DIFFICULTY.gentle.lossKeep);
+    expect(b).toMatchObject({ size: 9, wounded: 1 });
   });
 
   it('a loss wounds and halves fielded broods and kills small ones; wounds heal by sitting out', () => {

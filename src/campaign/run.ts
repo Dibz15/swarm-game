@@ -50,11 +50,12 @@ const RESCUE_ODDS = 0.25;
 
 /**
  * The run's difficulty, chosen when it starts. Mostly the Bloom: its pace is a
- * share of the fastest the shortest route survives (at Standard's 0.6, one lost
- * battle is almost always survivable and two spread-out ones usually are;
- * measured over 150 seeds). Gentle also holds the Bloom still after a lost
- * battle and costs broods less; the two ends shift the bots a level on some
- * nodes, and the finale's rivals differ by difficulty.
+ * share of the fastest the shortest route survives, so the lower it is, the
+ * more lost battles a run can take before the Bloom catches it. Gentle also
+ * holds the Bloom still after a lost battle and costs broods less; the two ends
+ * shift the bots a level on some nodes, and the finale's rivals differ by
+ * difficulty. Tuned against the #68 targets (win % at skill 1 / 0.5: Gentle
+ * 90/60, Standard 70/35, Hard 45, Brutal 20).
  * Calibrated with scripts/run-probe.ts against the human proxy's skill dial.
  */
 export type RunDifficulty = 'gentle' | 'standard' | 'hard' | 'brutal';
@@ -65,7 +66,7 @@ export interface DifficultyRules {
   pace: number;
   /** a lost battle doesn't advance the Bloom */
   holdOnLoss: boolean;
-  /** bot difficulty shift: -1 on Normal nodes (Gentle), +1 on Hard nodes and the finale (Brutal) */
+  /** bot difficulty shift: -1 on Normal nodes (Gentle), +1 on Hard nodes (Brutal, whose finale also needs the rivals beaten) */
   bots: -1 | 0 | 1;
   /** the finale's rivals and their bot difficulty (#68: it was the wall, a quarter of attempts won at 3 Hard rivals) */
   finale: { rivals: number; difficulty: number };
@@ -75,9 +76,9 @@ export interface DifficultyRules {
 export const DIFFICULTIES: RunDifficulty[] = ['gentle', 'standard', 'hard', 'brutal'];
 export const RUN_DIFFICULTY: Record<RunDifficulty, DifficultyRules> = {
   gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, lighter losses, and easier battles.', pace: 0.45, holdOnLoss: true, bots: -1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.75 },
-  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.6, holdOnLoss: false, bots: 0, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
-  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.75, holdOnLoss: false, bots: 0, finale: { rivals: 3, difficulty: 2 }, lossKeep: 0.5 },
-  brutal: { name: 'Brutal', blurb: 'A fast Bloom, and Brutal bots in the late battles and the finale.', pace: 0.8, holdOnLoss: false, bots: 1, finale: { rivals: 2, difficulty: 3 }, lossKeep: 0.5 },
+  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.5, holdOnLoss: false, bots: 0, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
+  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.6, holdOnLoss: false, bots: 0, finale: { rivals: 3, difficulty: 2 }, lossKeep: 0.5 },
+  brutal: { name: 'Brutal', blurb: 'Hard\'s Bloom, Brutal bots in the late battles, and a finale where the rivals must fall too.', pace: 0.6, holdOnLoss: false, bots: 1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
 };
 /** saves from before difficulty were Standard */
 export const difficultyOf = (run: { difficulty?: RunDifficulty }): RunDifficulty => run.difficulty ?? 'standard';
