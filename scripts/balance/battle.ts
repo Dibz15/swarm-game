@@ -2,6 +2,7 @@
 // whatever the setup holds, until the match ends or the cap. Runs inside the
 // pool's workers (worker.ts) and needs nothing from the main thread but the job.
 import { battleReport } from '../../src/campaign/battle';
+import type { RunState } from '../../src/campaign/run';
 import type { BattleReport } from '../../src/campaign/broods';
 import { LEVEL_SPAWN_MULT, NEST_KIND, NEST_SPAWN_MULT, NEUTRAL, TICK_HZ, UNIT_STATS } from '../../src/sim/constants';
 import { createWorld, type MatchSetup } from '../../src/sim/setup';
@@ -26,6 +27,15 @@ export interface Job {
   /** end the battle on this rule (the pool sets it only where early-check.ts passed it) */
   early?: Rule;
 }
+
+/** A probe's job: `early` asks for the pool's rule, which it applies only where the check passed. */
+export type PoolJob = Omit<Job, 'early'> & { early?: boolean };
+
+/** a battle still running after this long counts as a retreat (a loss) */
+export const CAP = 15 * 60 * TICK_HZ;
+
+/** Plays one battle of a run: the job for the pool, and the run state it came from (runs.ts). */
+export type Fight = (job: PoolJob, at: { run: RunState; id: number; fielded: number[]; army: number }) => Promise<Result>;
 
 /** Once a second: the strongest team and its share of army plus production, in hundredths. */
 export interface Trace {

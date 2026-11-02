@@ -1,25 +1,32 @@
-// Whole campaign runs for the balance harness (#18, #68): the human proxy
-// fights every battle (on the pool), and simple policies stand in for the
-// player's choices between battles: the route, which broods to field, the
-// reward to take and what to buy at the camp. The run logic stays on the main
-// thread, so many runs share the pool at once.
+// Whole campaign runs for the balance harness (#18, #68): simple policies
+// stand in for the player's choices between battles (the route, which broods
+// to field, the reward to take and what to buy at the camp), and a Fight plays
+// each battle: the human proxy on the pool, or the surrogate's outcome tables
+// (model.ts). The run logic stays on the main thread, so many runs share the
+// pool at once.
 import { nodeSetup } from '../../src/campaign/battle';
 import { COST, KIND_NEST, UNLOCKS, fit, type PackId, type Unlock } from '../../src/campaign/broods';
 import { REWARD, STRAIN_SLOTS, TIER_WEIGHT } from '../../src/campaign/rewards';
-import { type RunDifficulty, grow, heal, hops, maxFielded, moves, needsBattle, newRun, resolveTurn, takeReward, unlock, unlockCost, unlocked, warlordFighting, type RunState } from '../../src/campaign/run';
+import { type RunDifficulty, bloomStrength, grow, heal, hops, maxFielded, moves, needsBattle, newRun, pressure, resolveTurn, takeReward, unlock, unlockCost, unlocked, warlordFighting, type RunState } from '../../src/campaign/run';
 import type { ProxyKnobs } from '../../src/proxy/proxy';
-import { TICK_HZ } from '../../src/sim/constants';
-import { classOf, type BattleClass, type Result } from './battle';
+import { CAP, classOf, type BattleClass, type Fight, type Result } from './battle';
 import type { Pool } from './pool';
 
-/** a battle still running after this long counts as a retreat (a loss) */
-export const CAP = 15 * 60 * TICK_HZ;
+export { CAP, type Fight };
+
 
 export interface Battle {
+  /** the node fought */
+  node: number;
   kind: string;
   difficulty: number;
   rivals: number;
   depth: number;
+  /** the Bloom's pressure on the node and its strength, at the battle */
+  pressure: number;
+  strength: number;
+  /** earlier battles at this node in the run */
+  retry: number;
   won: boolean;
   capped: boolean;
   /** ended by the early-decision rule, so `minutes` stops at the call */
@@ -45,7 +52,11 @@ export interface RunOutcome {
   restored: boolean;
   at: number;
   depth: number;
+  /** the heart's depth */
+  far: number;
   battles: Battle[];
+  /** biomass earned so far, after each battle */
+  curve: number[];
   rewards: string[];
   bought: Record<string, number>;
   deaths: number;
@@ -119,12 +130,15 @@ export function spend(run: RunState, bought: Record<string, number>): void {
 
 // ---- a run ---------------------------------------------------------------------
 
-/** One run, `probe-${seed}`, with its battles on the pool. */
-export async function playRun(pool: Pool, seed: number, o: RunOptions): Promise<RunOutcome> {
+export const poolFight = (pool: Pool): Fight => (job) => pool.battle(job);
+
+/** One run, `probe-${seed}`, its battles played by `fight` (a Pool plays them on the pool). */
+export async function playRun(fight: Fight | Pool, seed: number, o: RunOptions): Promise<RunOutcome> {
+  const play: Fight = typeof fight === 'function' ? fight : poolFight(fight);
   const run = newRun(`probe-${seed}`, 0, o.pack, 0, o.difficulty);
   const out: RunOutcome = {
-    seed, pack: o.pack, status: '', turns: 0, broods: 0, biomass: 0, restored: false, at: 0, depth: 0,
-    battles: [], rewards: [], bought: {}, deaths: 0, rescues: 0,
+    seed, pack: o.pack, status: '', turns: 0, broods: 0, biomass: 0, restored: false, at: 0, depth: 0, far: run.nodes[run.heart].depth,
+    battles: [], curve: [], rewards: [], bought: {}, deaths: 0, rescues: 0,
     lords: { broken: 0, eaten: 0, fought: 0, avoided: 0, battles: 0, wins: 0 },
   };
   const met = new Set<number>();
@@ -144,17 +158,21 @@ export async function playRun(pool: Pool, seed: number, o: RunOptions): Promise<
     const setup = nodeSetup(run, id, fielded);
     const me = setup.players[0];
     const army = (me.army ?? []).reduce((s, a) => s + a.count, 0);
-    const res = await pool.battle({ setup, human: me.faction, proxy: { skill: o.skill, knobs: o.knobs, novaLocked: !run.unlocks.nova }, cap: CAP, early: o.early });
+    const res = await play({ setup, human: me.faction, proxy: { skill: o.skill, knobs: o.knobs, novaLocked: !run.unlocks.nova }, cap: CAP, early: o.early }, { run, id, fielded, army });
     if (lord) {
       met.add(lord.id);
       out.lords.battles++;
       if (res.won) out.lords.wins++;
     }
     out.battles.push({
+      node: id,
       kind: node.kind,
       difficulty: node.difficulty,
       rivals: node.rivals,
       depth: node.depth,
+      pressure: pressure(run, id),
+      strength: bloomStrength(run),
+      retry: out.battles.filter((b) => b.node === id).length,
       won: res.won,
       capped: res.capped,
       decided: res.decided,
@@ -167,6 +185,7 @@ export async function playRun(pool: Pool, seed: number, o: RunOptions): Promise<
     });
     const turn = resolveTurn(run, id, res.report, fielded, 0);
     out.biomass += turn.biomass;
+    out.curve.push(out.biomass);
     out.deaths += turn.events.filter((e) => e.what === 'died').length;
     out.rescues += turn.events.filter((e) => e.what === 'rescued').length;
     if (turn.checkpoint === 'restored') out.restored = true;
