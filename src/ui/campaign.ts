@@ -950,7 +950,7 @@ export function runMap(
         rows.push(`<dt>Siege</dt><dd>Hold for ${Math.floor(sg.seconds / 60)}:${String(sg.seconds % 60).padStart(2, '0')} · a wave every ${sg.every}s, the first ${sg.size} strong and growing</dd>`);
       }
       // #87: what wins it.
-      if (n.kind === 'domination' && !fortress) rows.push(`<dt>Key nests</dt><dd>${keyNests(n.rivals)}, ringed in gold · sealed for the first ${KEYS.seal / TICK_HZ / 60 === 1 ? 'minute' : `${KEYS.seal / TICK_HZ}s`}, with twice the guards</dd>`);
+      if (n.kind === 'domination' && !fortress) rows.push(`<dt>Key nests</dt><dd>${keyNests(n.rivals)}, ringed in gold · sealed for the first ${KEYS.seal / TICK_HZ / 60 === 1 ? 'minute' : `${KEYS.seal / TICK_HZ}s`}, with 50% more guards</dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
       const lord = warlordOf(run, n.id);
       if (lord) {

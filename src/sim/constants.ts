@@ -289,7 +289,7 @@ export const DOMINATION = {
 export const KEYS = {
   ticks: 20 * TICK_HZ,
   seal: 60 * TICK_HZ,
-  garrison: 2,
+  garrison: 1.5,
   /** key nests are at least this far apart (px) */
   apart: 220,
 };
