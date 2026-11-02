@@ -85,7 +85,7 @@ export const REWARDS: Reward[] = [
   strain('arsonist', 'Arsonist', Kind.Swift, 'common', 'Enemy nests with your Raiders on them lose control 60% faster', (k) => (k.arson = 1.6)),
   // Power variants
   variant('heavy-shell', 'Heavy shell', 'barrage', 'common', 'Barrage: +50% damage budget', (m) => (m.barrageBudget *= 1.5)),
-  variant('cluster', 'Cluster', 'barrage', 'common', 'Barrage: three smaller shells land one after another round the target', (m) => (m.cluster = true)),
+  variant('cluster', 'Cluster', 'barrage', 'common', 'Barrage: three smaller shells, each on a different knot of enemies near the target', (m) => (m.cluster = true)),
   variant('scorch', 'Scorch', 'barrage', 'rare', 'Barrage: a weaker blast, but the ground burns for 6 s', (m) => (m.scorch = true)),
   variant('wide', 'Wide', 'nova', 'common', 'Nova: +35% radius, −25% damage', (m) => ((m.novaRadius *= 1.35), (m.novaDamage *= 0.75))),
   variant('implode', 'Implode', 'nova', 'common', 'Nova: pulls enemies in instead of throwing them out, −25% damage', (m) => (m.implode = true)),
@@ -123,7 +123,7 @@ export const REWARDS: Reward[] = [
     apply: (m) => m.kind.forEach((k) => ((k.dps *= 1.35), (k.hp *= 0.85))),
   },
   { id: 'hunger', name: 'Hunger', text: 'Double biomass from battles, but the Bloom advances 25% faster', family: 'pact', tier: 'rare', apply: () => {} },
-  { id: 'lone-wolf', name: 'Lone wolf', text: 'Field only one brood, but it fights two and a half times as large', family: 'pact', tier: 'rare', apply: () => {} },
+  { id: 'lone-wolf', name: 'Lone wolf', text: 'Field only one brood, but it fights three times as large, as veterans', family: 'pact', tier: 'rare', apply: () => {} },
   {
     id: 'blood-price',
     name: 'Blood price',
@@ -140,7 +140,7 @@ export const REWARDS: Reward[] = [
     tier: 'rare',
     apply: (m) => ((m.captureControl = 0.5), (m.spawnRate *= 1.2)),
   },
-  { id: 'feral', name: 'Feral', text: 'No powers at all, but every nest spawns 35% faster', family: 'pact', tier: 'rare', apply: (m) => ((m.noPowers = true), (m.spawnRate *= 1.35)) },
+  { id: 'feral', name: 'Feral', text: 'No powers at all, but every nest spawns 40% faster', family: 'pact', tier: 'rare', apply: (m) => ((m.noPowers = true), (m.spawnRate *= 1.4)) },
 ];
 
 export const REWARD: Record<string, Reward> = Object.fromEntries(REWARDS.map((r) => [r.id, r]));

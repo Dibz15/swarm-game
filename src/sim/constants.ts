@@ -90,10 +90,10 @@ export const PACTS = {
   bloodPerUnit: 6,
 };
 
-/** Power variants with a rule of their own (#60). Cluster's budget raised from 0.75 on measured impact (#68); the rest PROVISIONAL. */
+/** Power variants with a rule of their own (#60). Cluster's budget raised from 0.75 on measured impact (#68), its shells aimed at knots of enemies (#125); the rest PROVISIONAL. */
 export const VARIANTS = {
-  /** Cluster: three shells this far from the aim point, each this much of the radius and budget, landing `stagger` ticks apart */
-  cluster: { spread: 55, r: 0.6, budget: 0.9, stagger: 5 },
+  /** Cluster: three shells on the knots of enemies within `reach` of the aim point, each this much of the radius and budget, landing `stagger` ticks apart */
+  cluster: { reach: 90, r: 0.6, budget: 0.9, stagger: 5 },
   /** Scorch: the impact's budget share, and a burn of `dps` that lasts `ticks` */
   scorch: { budget: 0.6, dps: 5, ticks: 6 * 30 },
   /** Implode: damage share (the knockback pulls in instead) */

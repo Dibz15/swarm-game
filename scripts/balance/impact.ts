@@ -4,14 +4,16 @@
 // of the reward's kind (Shields for Swarmer strains and everything else) and a
 // Spear brood, every nest type unlocked. Each army has its own baseline: a
 // Raider strain is measured against Raiders without it, not against Shields. Strains go on the matching brood; anything else is held
-// as a perk. Hunger does nothing in battle, so it's skipped.
+// as a perk. Hunger does nothing in battle, so it's skipped. Lone wolf's
+// one brood takes turns: the Swarmers on one seed, the second brood on the
+// next, the Spears on the third.
 // The rival is Brutal with 10-dot broods by default: at Normal or Hard the
 // proxy wins nearly every battle, so win rates can't move.
 //
 // Seeds are common to every arm, so an item's impact is the mean of paired
 // differences (item minus baseline, seed by seed). Sequential stopping: every
-// item starts at N_START seeds and doubles them, up to N_MAX, only while its
-// interval straddles a line that decides it: a tier boundary (the thirds of
+// item starts at N_START seeds and doubles them, up to N_MAX, while it has
+// fewer than N_DECIDE or its interval straddles a line that decides it: a tier boundary (the thirds of
 // the current impacts), the must-pick line or zero. Rewards differ by a few
 // points, so it takes hundreds of seeds; a battle is about half a second, so
 // the whole sweep is ten minutes or so on the pool.
@@ -29,6 +31,8 @@ type Battler = { battle(job: PoolJob): Promise<Result> };
 
 export const N_START = 16;
 export const N_MAX = 384;
+/** no item is decided on fewer seeds: a lucky or unlucky start can clear a line by chance (Cluster stopped at 64 seeds, 9 points off its 384-seed impact, #125) */
+export const N_DECIDE = 128;
 /** a must-pick: more than this many points... */
 export const MUST_PICK = 0.15;
 /** ...or more than this many times the median impact, once the median is at least MEDIAN_FLOOR */
@@ -85,7 +89,8 @@ function battle(pool: Battler, o: Required<ImpactOptions>, k: number, id: string
   const r = REWARD[id ?? ''];
   const run: RunState = newRun(`reward-probe-${o.seeds + k}`, 0, 'swarm', 0);
   run.broods = [Kind.Dot, second, Kind.Lancer].map((kind, b) => ({ ...newBrood(b, kind, run.seed, []), size: o.size, cap: o.size }));
-  run.fielded = run.broods.map((b) => b.id);
+  // Lone wolf fields one brood: each brood in turn, seed by seed, since a player picks which.
+  run.fielded = id === 'lone-wolf' ? [run.broods[k % run.broods.length].id] : run.broods.map((b) => b.id);
   run.unlocks = { nests: 0xff, nova: true };
   if (r?.family === 'strain') run.broods.find((b) => b.kind === r.kind)!.strains.push(r.id);
   else if (r) run.perks.push(r.id);
@@ -151,7 +156,7 @@ export async function measureImpact(pool: Battler, opts: ImpactOptions = {}, log
       return { id, n, delta, half, secs, logit: unused ? 0 : logit(clamp(rate + delta)) - logit(clamp(rate)), unused };
     });
     lines = linesOf(items.filter((i) => !i.unused));
-    const open = items.filter((i) => !i.unused && i.n < N_MAX && [lines.lower, lines.upper, lines.mustPick, 0].some((x) => straddles(i, x)));
+    const open = items.filter((i) => !i.unused && i.n < N_MAX && (i.n < N_DECIDE || [lines.lower, lines.upper, lines.mustPick, 0].some((x) => straddles(i, x))));
     log(`round ${round}: ${items.length} items, ${open.length} undecided`);
     if (!open.length) break;
     for (const i of open) want.set(i.id, Math.min(N_MAX, 2 * i.n));

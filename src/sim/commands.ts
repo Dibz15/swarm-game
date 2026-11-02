@@ -68,6 +68,34 @@ export function feedNeed(n: { control: number; level: number; feedProgress: numb
 
 const scratch: number[] = [];
 
+/**
+ * Cluster's three aim points (#125): greedily, the enemy within `reach` of
+ * (x, y) with the most enemies within `r` of it not yet under a shell. A shell
+ * with nobody left to cover lands on the aim point.
+ */
+function clusterAims(w: World, p: number, x: number, y: number, reach: number, r: number): [number, number][] {
+  queryRadius(w, x, y, reach, scratch);
+  const foes = scratch.filter((j) => w.hostile(w.owner[j], p));
+  const near = (a: number, b: number) => (w.x[a] - w.x[b]) ** 2 + (w.y[a] - w.y[b]) ** 2 <= r * r;
+  const covered = new Set<number>();
+  const out: [number, number][] = [];
+  for (let k = 0; k < 3; k++) {
+    let best = -1, most = 0;
+    for (const a of foes) {
+      let m = 0;
+      for (const b of foes) if (!covered.has(b) && near(a, b)) m++;
+      if (m > most) (most = m), (best = a);
+    }
+    if (best < 0) {
+      out.push([x, y]);
+      continue;
+    }
+    out.push([w.x[best], w.y[best]]);
+    for (const b of foes) if (near(best, b)) covered.add(b);
+  }
+  return out;
+}
+
 /** uids -> slots, keeping only idle-able units owned by p */
 function resolve(w: World, p: number, uids: number[]): number[] {
   const out: number[] = [];
@@ -307,21 +335,13 @@ export function applyCommand(w: World, c: Command): void {
       const r = POWER.barrageRadius * powerBoost(w, c.p, 'barrage');
       const impact = w.tick + barrageFlight(x - from.x, y - from.y);
       if (f.mods.cluster) {
-        // Cluster: three smaller shells in a triangle round the aim point, one after another.
+        // Cluster: three smaller shells, each on a different knot of enemies near the aim point, one after another.
         const C = VARIANTS.cluster;
-        const dx = x - from.x, dy = y - from.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
-        const ux = dx / d, uy = dy / d;
-        const at: [number, number][] = [
-          [ux, uy],
-          [-ux * 0.5 - uy * 0.87, -uy * 0.5 + ux * 0.87],
-          [-ux * 0.5 + uy * 0.87, -uy * 0.5 - ux * 0.87],
-        ];
-        at.forEach(([ox, oy], k) => {
-          const bx = clamp(x + ox * C.spread, 0, w.width), by = clamp(y + oy * C.spread, 0, w.height);
+        clusterAims(w, c.p, x, y, C.reach, r * C.r).forEach(([bx, by], k) => {
           w.barrages.push({ x: bx, y: by, owner: c.p, impact: impact + k * C.stagger, r: r * C.r, x0: from.x, y0: from.y, t0: w.tick, budget: C.budget });
         });
       } else w.barrages.push({ x, y, owner: c.p, impact, r, x0: from.x, y0: from.y, t0: w.tick });
-      pushFx(w, 'barrage', x, y, c.p, f.mods.cluster ? r + VARIANTS.cluster.spread : r);
+      pushFx(w, 'barrage', x, y, c.p, f.mods.cluster ? VARIANTS.cluster.reach : r);
       return;
     }
 
