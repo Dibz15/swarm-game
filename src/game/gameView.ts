@@ -7,7 +7,7 @@ import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import type { AudioEngine } from '../audio/engine';
-import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
+import { DAMAGE_VS, KEYS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
 import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, surgeCost } from '../sim/commands';
 import { inArmy, type Nest, type World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
@@ -74,6 +74,8 @@ export class GameView {
   private supplyNests = 0;
   private supplyToastTick = -1e9;
   private bloomToasted = false;
+  /** the tick of the last Bloom surge wave toasted (-1: none yet) */
+  private surgeWave = -1;
   /** a campaign warlord in this battle (#66, #100): its units' look, its citadel's marker */
   warlord: { faction: number; trait: TraitId } | null = null;
   /** the citadel's walls were breached (sounded once) */
@@ -469,6 +471,17 @@ export class GameView {
           if (!this.bloomToasted) toast('The Bloom sends its swarms. They hunt every army alike', '#d65c4e');
           this.bloomToasted = true;
           break;
+        case 'surgeWarn':
+          sfx.escalation();
+          camera.shake = Math.min(1, camera.shake + 0.4);
+          toast(`The Bloom is coming for this field: it surges in ${e.r}s, and every wave grows`, '#d65c4e');
+          break;
+        case 'bloomSurge':
+          rings.add({ x: e.x, y: e.y, r0: 40 + e.r * 3, r1: 20, dur: 1.1, c: FERAL, thick: 4 });
+          sfx.swarmHorn();
+          if (this.surgeWave !== w.tick) toast(this.surgeWave < 0 ? 'The Bloom surges! End this battle before it ends you' : `The Bloom surges again, ${e.r} strong`, '#d65c4e');
+          this.surgeWave = w.tick;
+          break;
         case 'heartWindup':
           rings.add({ x: e.x, y: e.y, r0: e.r * 1.6, r1: e.r, dur: 0.9, c: FERAL, thick: 2 });
           sfx.heartWindup(e.x, e.y);
@@ -564,8 +577,9 @@ export class GameView {
         case 'domStart': {
           const mine = w.teamOf[e.f] === w.teamOf[this.human];
           sfx.domStart(mine);
-          if (mine) toast(`You are dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
-          else toast(`${FACTION_NAMES[e.f]} is dominating! Take back a nest to stop them`, '#ff5d73');
+          const keys = w.keys.length;
+          if (mine) toast(keys ? `You hold every key nest! Keep all ${keys} for ${KEYS.ticks / TICK_HZ}s to win` : `You are dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
+          else toast(keys ? `${FACTION_NAMES[e.f]} holds every key nest! Take one back to stop them` : `${FACTION_NAMES[e.f]} is dominating! Take back a nest to stop them`, '#ff5d73');
           for (const n of w.nests) {
             if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === w.teamOf[e.f]) {
               rings.add({ x: n.x, y: n.y, r0: n.r, r1: n.r * 3, dur: 0.8, c: FACTION_RGB[n.owner], thick: 3 });

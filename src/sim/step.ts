@@ -1,5 +1,5 @@
 import { siegeVictory } from './siege';
-import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, POWER, TERRAIN, VARIANTS, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
+import { BALANCE, DOMINATION, DT, KEYS, ENERGY, ESCALATION, POWER, TERRAIN, VARIANTS, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
 import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
@@ -220,6 +220,11 @@ function checkVictory(w: World): void {
     return;
   }
 
+  if (w.keys.length) {
+    keyVictory(w, aliveTeams);
+    return;
+  }
+
   const need = Math.ceil(w.nests.length * w.domShare);
   for (const t of aliveTeams) {
     if (nestsByTeam[t] >= need) {
@@ -254,6 +259,46 @@ function teamFace(w: World, team: number): number {
   return best;
 }
 
+/** The team holding every key nest, fully, or -1. */
+function keyHolder(w: World): number {
+  let team = -1;
+  for (const k of w.keys) {
+    const n = w.nests[k];
+    if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1) return -1;
+    const t = w.teamOf[n.owner];
+    if (team >= 0 && t !== team) return -1;
+    team = t;
+  }
+  return team;
+}
+
+/**
+ * Key nests (#87): a team holding all of them counts down KEYS.ticks to win.
+ * The countdown pauses while any key nest is contested, and resets if one falls.
+ */
+function keyVictory(w: World, aliveTeams: Set<number>): void {
+  const holder = keyHolder(w);
+  for (const t of aliveTeams) {
+    if (t !== holder) {
+      if (w.domTicks[t] > 0) pushFx(w, 'domBreak', 0, 0, teamFace(w, t));
+      w.domTicks[t] = 0;
+      continue;
+    }
+    if (w.domTicks[t] === 0) {
+      pushFx(w, 'domStart', 0, 0, teamFace(w, t));
+      w.domTicks[t] = 1;
+    }
+    if (w.keys.some((k) => w.nests[k].contested)) continue;
+    w.domTicks[t] += 15;
+    if (w.domTicks[t] >= KEYS.ticks) {
+      w.over = true;
+      w.winnerTeam = t;
+      w.winReason = 'domination';
+      return;
+    }
+  }
+}
+
 export interface DominationStatus {
   team: number;
   /** faction to show for the team */
@@ -265,12 +310,20 @@ export interface DominationStatus {
   need: number;
   /** nests rivals must take back to break it */
   toBreak: number;
+  /** key nests (#87): `need` is the key nests, and the countdown is `paused` while any is contested */
+  keys?: boolean;
+  paused?: boolean;
 }
 
 /** The team currently dominating, or null. */
 export function dominationStatus(w: World): DominationStatus | null {
   for (let t = 0; t < w.domTicks.length; t++) {
     if (w.domTicks[t] <= 0) continue;
+    if (w.keys.length) {
+      // Key nests: hold all of them; take any one back to break it.
+      const paused = w.keys.some((k) => w.nests[k].contested);
+      return { team: t, face: teamFace(w, t), left: Math.max(0, KEYS.ticks - w.domTicks[t]), held: w.keys.length, need: w.keys.length, toBreak: 1, keys: true, paused };
+    }
     let held = 0;
     for (const n of w.nests) if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === t) held++;
     const need = Math.ceil(w.nests.length * w.domShare);

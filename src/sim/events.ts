@@ -1,7 +1,7 @@
-import { DT, ENERGY, EVENTS, Kind, MAX_LEVEL, NEST_KIND, NEUTRAL, NUM_FACTIONS, TICK_HZ, TRAITS, UNIT_STATS, escalation } from './constants';
+import { DT, ENERGY, EVENTS, Kind, MAX_LEVEL, NEST_KIND, NEUTRAL, NUM_FACTIONS, SURGE, TICK_HZ, TRAITS, UNIT_STATS, escalation } from './constants';
 import { groupArrive } from './commands';
 import type { EventSpec } from './mapgen';
-import { TAU, dcos, dsin } from './mathx';
+import { TAU, dcos, dpow, dsin } from './mathx';
 import { updateHeart } from './heart';
 import { updateSiege } from './siege';
 import { Rng } from './rng';
@@ -54,10 +54,29 @@ export function updateEvents(w: World): void {
   if (ev.swarms.length && t % EVENTS.swarmRethink === 0) for (const s of ev.swarms) steerSwarm(w, s);
   if (w.heart) updateHeart(w);
   if (w.siege) updateSiege(w);
+  if (w.bloomSurge) updateSurge(w);
   ev.swarms = ev.swarms.filter((s) => (s.uids = s.uids.filter((u) => w.uidToSlot.has(u))).length > 0);
   if (ev.colossi.length) updateColossi(w);
   if (ev.drops.length) updateDrops(w);
   if (p.regrow > 0 && t % TICK_HZ === 0) regrow(w, p.regrow);
+}
+
+// ---- Conquest's late surge (#87) ---------------------------------------------
+
+/** The warning, then a wave of Bloom swarms from spread edge spawns, each wave bigger. */
+function updateSurge(w: World): void {
+  const s = w.bloomSurge!, ev = w.events!;
+  const spawns = ev.spec.swarmSpawns;
+  if (w.tick === s.warnAt) pushFx(w, 'surgeWarn', w.width / 2, w.height / 2, NEUTRAL, SURGE.warn);
+  if (w.tick !== s.next || !spawns.length) return;
+  const size = Math.round(s.size * dpow(s.grow, s.wave));
+  for (let k = 0; k < s.swarms; k++) {
+    const [sx, sy] = spawns[(s.wave + Math.floor((k * spawns.length) / s.swarms)) % spawns.length];
+    releaseSwarm(w, sx, sy, size, null);
+    pushFx(w, 'bloomSurge', sx, sy, NEUTRAL, size);
+  }
+  s.wave++;
+  s.next += s.every;
 }
 
 // ---- wild swarm ------------------------------------------------------------

@@ -6,7 +6,7 @@
 import type { AudioEngine } from '../audio/engine';
 import { mountCreatures } from '../art/creature';
 import { BLOOM, BloomField, MapFx, battleMapCanvas, cardMap, bloomGapView, sigilCanvas, drawIcon, glyph, nodeRadius, tendrils, wobble } from './runmapfx';
-import { bloomLabel, rivals, siegeFor, warlordOf, type Rival } from '../campaign/battle';
+import { CONQUEST_SHARE, bloomLabel, keyNests, rivals, siegeFor, warlordOf, type Rival } from '../campaign/battle';
 import { FORTRESS_LABEL } from '../sim/fortify';
 import { STRONGHOLD_WEIGHT, TRAITS, trophyOf } from '../campaign/warlords';
 import { broodCreature, broodTemper } from '../campaign/character';
@@ -39,7 +39,7 @@ import {
 } from '../campaign/run';
 import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, type Reward } from '../campaign/rewards';
 import { COST, KIND_NAME, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
-import { Kind, NestType } from '../sim/constants';
+import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
 import { DIFFICULTY_NAMES, type Personality } from '../sim/ai/bot';
@@ -941,6 +941,9 @@ export function runMap(
         const sg = siegeFor(run, n.depth);
         rows.push(`<dt>Siege</dt><dd>Hold for ${Math.floor(sg.seconds / 60)}:${String(sg.seconds % 60).padStart(2, '0')} · a wave every ${sg.every}s, the first ${sg.size} strong and growing</dd>`);
       }
+      // #87: what wins it.
+      if (n.kind === 'domination' && !fortress) rows.push(`<dt>Goal</dt><dd>Hold all ${keyNests(n.rivals)} key nests (gold) for ${KEYS.ticks / TICK_HZ}s. They're sealed for the first minute.</dd>`);
+      if (n.kind === 'conquest' && !fortress) rows.push(`<dt>Goal</dt><dd>Wipe out the rivals, or hold ${Math.round(CONQUEST_SHARE * 100)}% of the nests. After ${SURGE.after / 60} minutes the Bloom surges in.</dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
       const lord = warlordOf(run, n.id);
       if (lord) {

@@ -93,6 +93,8 @@ export type FxType =
   | 'domStart'
   | 'domBreak'
   | 'bloomSwarm'
+  | 'surgeWarn'
+  | 'bloomSurge'
   | 'heartWindup'
   | 'heartPulse'
   | 'heartPhase'
@@ -103,6 +105,17 @@ export type FxType =
   | 'boonOffer'
   | 'boonTaken'
   | 'swarmCall';
+
+export interface SurgeState {
+  /** ticks: the warning, then the first wave; waves after it come `every` apart */
+  warnAt: number;
+  next: number;
+  every: number;
+  size: number;
+  grow: number;
+  swarms: number;
+  wave: number;
+}
 
 export interface FxEvent {
   type: FxType;
@@ -359,6 +372,12 @@ export class World {
   heart: HeartState | null = null;
   /** a stronghold's citadel nest (#100): a human taking it wins; -1 if none */
   citadel = -1;
+  /** key nests (#87): holding all of them wins; none outside campaign Domination */
+  keys: number[] = [];
+  /** key nests can't be taken before this tick */
+  keySealUntil = 0;
+  /** Conquest's late Bloom surge (#87), or null */
+  bloomSurge: SurgeState | null = null;
   /** Hold the line (#67), or null */
   siege: SiegeState | null = null;
   bots: Bot[] = [];

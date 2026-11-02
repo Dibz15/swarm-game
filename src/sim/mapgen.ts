@@ -1,5 +1,5 @@
 import { fortify, type FortressInfo } from './fortify';
-import { NEST_RADIUS, NestType, TERRAIN } from './constants';
+import { KEYS, NEST_RADIUS, NestType, TERRAIN } from './constants';
 import { PI, TAU, datan2, dcos, dsin, fbm, ridged } from './mathx';
 import { Rng } from './rng';
 import { TILE, Terrain, capsuleDist, emptyTerrain, type Capsule, type CaveSpec, type FieldSpec, type TerrainSpec } from './terrain';
@@ -125,6 +125,8 @@ export interface MapParams {
   /** cave layout preset or explicit params (default: open map) */
   caves?: CaveLevel | CaveParams;
   events?: EventLevel | EventParams;
+  /** key nests to mark (#87: campaign Domination) */
+  keys?: number;
   /** nests per player sector, including the natural expansion (default by size) */
   nestsPerSector?: number;
   /** relative odds of each nest type, indexed by NestType */
@@ -167,6 +169,8 @@ export interface NestSpec {
   garrison: number;
   /** a player's nest is their capital unless this is false (hand-authored maps) */
   capital?: boolean;
+  /** a key nest (#87): campaign Domination is won by holding all of them */
+  key?: boolean;
 }
 
 export interface MapSpec {
@@ -626,7 +630,31 @@ export function generateMap(p: MapParams): MapSpec {
   // A fortress goes up last, on its own stream: the rest is the same map.
   // Every wild-swarm spawn must reach it too (Hold the line's waves come from them).
   if (p.fortress !== undefined) spec.fortress = fortify(spec, p.fortress, p.size, new Rng(p.seed ^ 0x51f0a7), events.swarmSpawns) ?? undefined;
+  if (p.keys) markKeys(spec, P, p.keys);
   return spec;
+}
+
+/**
+ * Key nests (#87): `count` neutral nests, each as far as it can be from the
+ * nearest start (so nobody's natural expansion is one), at least KEYS.apart
+ * from each other. Their guards are KEYS.garrison times the usual.
+ */
+function markKeys(spec: MapSpec, P: number, count: number): void {
+  const caps = spec.nests.slice(0, P);
+  const d2 = (a: NestSpec, b: NestSpec) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+  const fromStarts = (n: NestSpec) => Math.min(...caps.map((c) => d2(c, n)));
+  const pool = spec.nests
+    .map((n, i) => ({ n, i, d: fromStarts(n) }))
+    .filter((c) => c.n.player < 0)
+    .sort((a, b) => b.d - a.d || a.i - b.i);
+  const picked: NestSpec[] = [];
+  for (const c of pool) {
+    if (picked.length >= count) break;
+    if (picked.some((k) => d2(k, c.n) < KEYS.apart ** 2)) continue;
+    c.n.key = true;
+    c.n.garrison = Math.round(c.n.garrison * KEYS.garrison);
+    picked.push(c.n);
+  }
 }
 
 /**

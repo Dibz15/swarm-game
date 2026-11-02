@@ -1,5 +1,5 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, TERRAIN, UNIT_FEEDING, UNIT_RETREAT, UNIT_STATS, UPGRADE_COST, VARIANTS } from '../sim/index';
+import { bastionRange, DAMAGE_VS, DOMINATION, EVENTS, KEYS, Kind, NEUTRAL, NestType, POWER, TERRAIN, UNIT_FEEDING, UNIT_RETREAT, UNIT_STATS, UPGRADE_COST, VARIANTS } from '../sim/index';
 import { HEART, heartSlot, standingNests } from '../sim/heart';
 import { WILD_HEART, type World } from '../sim/world';
 import type { Renderer } from './renderer';
@@ -24,6 +24,8 @@ const NEST_SPIN = [0.22, 0.1, -0.28, 0.7, 0.12];
 const UNOWNED: RGB = [70, 76, 96];
 /** wild event units: ash red, so they don't read as gray garrisons */
 export const FERAL: RGB = [214, 92, 78];
+/** Key nests (#87): gold, until someone holds one */
+export const KEY_RGB: RGB = [242, 196, 92];
 export const DROP_RGB: RGB = [255, 226, 140];
 const SELECT_MIX = 0.5;
 
@@ -112,6 +114,14 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
     // Capitals wear a second, slowly counter-rotating ring.
     if (n.capital && n.owner >= 0 && n.owner !== NEUTRAL) {
       r.shape(false, n.x, n.y, n.r * 1.2, 0, 0.92, 0, 0.035, c, 120);
+    }
+    // Key nests (#87): a slow ring of four sigil marks, dashed while still sealed.
+    if (w.keys.includes(n.id)) {
+      const sealed = w.keySealUntil > w.tick;
+      const kc = n.owner >= 0 && n.owner !== NEUTRAL ? c : KEY_RGB;
+      for (let k = 0; k < 4; k++) r.shape(false, n.x, n.y, R * 1.7, 0, sealed ? 0.12 : 0.2, o.time * 0.25 + (k * Math.PI) / 2, 0.06, kc, sealed ? 120 : 200);
+      // While sealed, an outer arc runs down to the moment it opens.
+      if (sealed) r.shape(false, n.x, n.y, R * 2, 0, (w.keySealUntil - w.tick) / KEYS.seal, 0, 0.03, KEY_RGB, 110);
     }
     // A warlord's capital wears a crown (#66); a stronghold's citadel a bigger one,
     // and a slow ring of battlements while it stands (#100).

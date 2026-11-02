@@ -6,7 +6,7 @@ import { defaultMods } from '../sim/mods';
 import type { EventParams } from '../sim/mapgen';
 import { Rng, hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
-import { TICK_HZ } from '../sim/constants';
+import { SURGE, TICK_HZ } from '../sim/constants';
 import { heartSlot } from '../sim/heart';
 import type { World } from '../sim/world';
 import { MILITIA, fighters, veteran, type BattleReport } from './broods';
@@ -25,8 +25,10 @@ export const STRONGHOLD_ARMY = 32;
 const armySize = (run: RunState, fielded: number[]) => armyFor(run, fielded).reduce((a, b) => a + b.count, 0);
 /** A warlord's production in its own stronghold (#100): it starts with three nests, not one. */
 export const STRONGHOLD_PROD = 0.7;
-/** Domination nodes: hold half the nests (the usual share is 0.6-0.7). */
+/** Domination nodes: hold half the nests (the usual share is 0.6-0.7); with key nests (#87) the share is only the HUD's guide. */
 const DOMINATION_SHARE = 0.5;
+/** Key nests in a Domination battle (#87): two, three with three rivals. */
+export const keyNests = (rivals: number) => (rivals >= 3 ? 3 : 2);
 
 /** Lone wolf's one brood fights this many times its size, as veterans: as many units as three broods, all of one kind (#68, #125). */
 export const LONE_WOLF = 3;
@@ -70,6 +72,9 @@ export function nodeSetup(run: RunState, id: number, fielded: number[] = []): Ma
     // The citadel's guards grow with the army you bring, so a late-run swarm can't just rush it.
     stronghold: hold ? { player: 1, scale: Math.max(1, armySize(run, fielded) / STRONGHOLD_ARMY) } : undefined,
     siege: n.kind === 'hold' ? siegeFor(run, n.depth) : undefined,
+    // #87: Domination is won on its key nests; a long Conquest brings the Bloom surging in.
+    keys: n.kind === 'domination' && !hold ? keyNests(n.rivals) : undefined,
+    surge: n.kind === 'conquest' && !hold ? { size: Math.round(SURGE.size * swarmScale(bloomStrength(run))) } : undefined,
     // Brutal: after the heart, the rivals still have to be beaten.
     heart: finale ? { strength: bloomStrength(run), rule: RUN_DIFFICULTY[difficultyOf(run)].bots > 0 ? 'heart+rivals' : 'heart', wound: run.heartWound ?? 0 } : undefined,
     players: [

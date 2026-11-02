@@ -147,6 +147,8 @@ function updateControl(w: World, n: Nest): void {
   n.contested = multiTeam || (teamA !== -1 && teamA !== ownerTeam);
 
   if (multiTeam) return; // fighting on the nest freezes control
+  // A key nest (#87) can't be taken while it's sealed.
+  if (w.keySealUntil > w.tick && w.keys.includes(n.id)) return;
 
   if (teamA === -1) {
     // Nobody here: owned nests recover, unowned ones decay.

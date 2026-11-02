@@ -17,7 +17,7 @@ const WAVE_ICON: Record<WaveKind, string> = {
   pincer: svg('<path d="M1 8l4-4v3h6V4l4 4-4 4V9H5v3z"/>'),
   colossus: svg('<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2.4"/><circle cx="8" cy="8" r="2"/>'),
 };
-import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, bloodCost, siphonWait, surgeCost } from '../sim/index';
+import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, KEYS, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, bloodCost, siphonWait, surgeCost } from '../sim/index';
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
@@ -486,10 +486,15 @@ export class Hud {
       this.dom.classList.toggle('urgent', secs <= 10);
       this.dom.classList.toggle('mine', mine);
       (this.dom.children[0] as HTMLElement).textContent = `0:${String(secs).padStart(2, '0')}`;
-      (this.dom.children[1] as HTMLElement).innerHTML = mine
-        ? `<b>You are dominating</b> · hold ${ds.need} of ${w.nests.length} nests`
-        : `<b>${FACTION_NAMES[ds.face]} is dominating</b> · take back ${ds.toBreak} nest${ds.toBreak > 1 ? 's' : ''} to stop it`;
-      ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${(100 * ds.left) / DOMINATION.ticks}%`;
+      const paused = ds.paused ? ' · <b>paused: a key nest is contested</b>' : '';
+      (this.dom.children[1] as HTMLElement).innerHTML = ds.keys
+        ? mine
+          ? `<b>You hold every key nest</b> · keep all ${ds.need}${paused}`
+          : `<b>${FACTION_NAMES[ds.face]} holds every key nest</b> · take one back to stop it${paused}`
+        : mine
+          ? `<b>You are dominating</b> · hold ${ds.need} of ${w.nests.length} nests`
+          : `<b>${FACTION_NAMES[ds.face]} is dominating</b> · take back ${ds.toBreak} nest${ds.toBreak > 1 ? 's' : ''} to stop it`;
+      ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${(100 * ds.left) / (ds.keys ? KEYS.ticks : DOMINATION.ticks)}%`;
     }
 
     // Energy and buttons.
