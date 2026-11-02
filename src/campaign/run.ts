@@ -77,9 +77,9 @@ export interface DifficultyRules {
 export const DIFFICULTIES: RunDifficulty[] = ['gentle', 'standard', 'hard', 'brutal'];
 export const RUN_DIFFICULTY: Record<RunDifficulty, DifficultyRules> = {
   gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, lighter losses, and easier battles.', pace: 0.45, holdOnLoss: true, bots: -1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.75 },
-  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.5, holdOnLoss: false, bots: 0, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
-  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.6, holdOnLoss: false, bots: 0, finale: { rivals: 3, difficulty: 2 }, lossKeep: 0.5 },
-  brutal: { name: 'Brutal', blurb: 'Hard\'s Bloom, Brutal bots in the late battles, and a finale where the rivals must fall too.', pace: 0.6, holdOnLoss: false, bots: 1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
+  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.45, holdOnLoss: false, bots: 0, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
+  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.5, holdOnLoss: false, bots: 0, finale: { rivals: 3, difficulty: 2 }, lossKeep: 0.5 },
+  brutal: { name: 'Brutal', blurb: 'Hard\'s Bloom, Brutal bots in the late battles, and a finale where the rivals must fall too.', pace: 0.5, holdOnLoss: false, bots: 1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5 },
 };
 /** saves from before difficulty were Standard */
 export const difficultyOf = (run: { difficulty?: RunDifficulty }): RunDifficulty => run.difficulty ?? 'standard';

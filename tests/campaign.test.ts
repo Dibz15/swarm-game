@@ -151,9 +151,9 @@ describe('run difficulty', () => {
     }
   });
 
-  it('the Bloom is slower on easier runs (Brutal keeps Hard\'s), and Gentle holds it still after a loss', () => {
+  it('the Bloom is no faster on easier runs (Standard keeps Gentle\'s pace, Brutal Hard\'s), and Gentle holds it still after a loss', () => {
     const [gentleStep, standardStep, hardStep, brutalStep] = DIFFICULTIES.map((d) => newRun('pace', 0, 'swarm', 0, d).bloom.step);
-    expect(standardStep).toBeGreaterThan(gentleStep);
+    expect(standardStep).toBe(gentleStep);
     expect(hardStep).toBeGreaterThan(standardStep);
     expect(brutalStep).toBe(hardStep);
     const gentle = newRun('pace', 0, 'swarm', 0, 'gentle');
