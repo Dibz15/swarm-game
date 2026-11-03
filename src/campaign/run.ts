@@ -248,7 +248,11 @@ function scatter(rng: Rng, want: number, lobes: [number, number, number][]): { x
   return best.slice(0, want);
 }
 
-/** Relative neighbourhood graph: a-b is a link unless some c is closer to both. Always connected. */
+/**
+ * Gabriel graph: a-b is a link unless some c lies inside the circle on a-b as
+ * its diameter. Always connected and never crossing, and (#128) with enough
+ * links that most nodes offer more than one way ahead.
+ */
 function link(pts: { x: number; y: number }[]): number[][] {
   const d = (a: number, b: number) => Math.hypot(pts[a].x - pts[b].x, pts[a].y - pts[b].y);
   const links: number[][] = pts.map(() => []);
@@ -257,7 +261,7 @@ function link(pts: { x: number; y: number }[]): number[][] {
       const ab = d(a, b);
       let blocked = false;
       for (let c = 0; c < pts.length && !blocked; c++) {
-        if (c !== a && c !== b && Math.max(d(a, c), d(b, c)) < ab) blocked = true;
+        if (c !== a && c !== b && d(a, c) ** 2 + d(b, c) ** 2 < ab * ab) blocked = true;
       }
       if (!blocked) {
         links[a].push(b);
@@ -383,7 +387,7 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
   const seed = hashString(`run:${seedText.trim() || 'swarm'}`);
   const rng = new Rng(seed);
   const lobes: [number, number, number][] = [1, 2, 3].map((k) => [rng.range(0.03, 0.09), k + 1, rng.range(0, Math.PI * 2)]);
-  const pts = scatter(rng, 18 + rng.int(7), lobes);
+  const pts = scatter(rng, 24 + rng.int(8), lobes);
   const links = link(pts);
 
   let start = 0, heart = 0;

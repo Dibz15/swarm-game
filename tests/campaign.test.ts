@@ -93,10 +93,10 @@ describe('campaign run generation', () => {
     expect(newRun('ember-tide-8', 0, 'swarm', 1).nodes).not.toEqual(a.nodes);
   });
 
-  it.each(SEEDS)('%s: 18-24 connected nodes in the map, start left and heart right', (seed) => {
+  it.each(SEEDS)('%s: 24-31 connected nodes in the map, start left and heart right', (seed) => {
     const run = newRun(seed, 0, 'swarm', 0);
-    expect(run.nodes.length).toBeGreaterThanOrEqual(18);
-    expect(run.nodes.length).toBeLessThanOrEqual(24);
+    expect(run.nodes.length).toBeGreaterThanOrEqual(24);
+    expect(run.nodes.length).toBeLessThanOrEqual(31);
     expect(hops(run.nodes, run.start).every((d) => d >= 0)).toBe(true);
     for (const n of run.nodes) {
       expect(n.x).toBeGreaterThan(0);
