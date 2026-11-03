@@ -54,7 +54,7 @@ export interface MatchSetup {
   /** a warlord's stronghold (#100): this player's capital is a walled citadel; a human taking it wins */
   /** Hold the line (#67): the human, walled in, holds its capital against waves */
   siege?: SiegeSetup;
-  /** key nests (#87, campaign Domination): holding all of them wins, instead of a share */
+  /** key nests (#87, campaign Domination): scoring on them wins, instead of a share */
   keys?: number;
   /** Conquest's late Bloom surge (#87): on, with SURGE's timing, waves of this base size */
   surge?: { size: number };

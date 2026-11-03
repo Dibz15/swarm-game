@@ -169,7 +169,7 @@ export interface NestSpec {
   garrison: number;
   /** a player's nest is their capital unless this is false (hand-authored maps) */
   capital?: boolean;
-  /** a key nest (#87): campaign Domination is won by holding all of them */
+  /** a key nest (#87): campaign Domination is won by scoring on them */
   key?: boolean;
 }
 

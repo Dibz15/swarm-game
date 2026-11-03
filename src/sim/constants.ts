@@ -281,13 +281,18 @@ export const DOMINATION = {
 };
 
 /**
- * Key nests (#87): a campaign Domination battle is won by holding every key
- * nest at once for `ticks` (paused while any is contested). They sit away from
- * every start, are sealed for the first `seal` ticks (no one can take them), and
- * start with `garrison` times the guards, so a rusher can't grab them early.
+ * Key nests (#87): a campaign Domination battle is scored on its key nests,
+ * king of the hill. Each team scores a point a tick for each key nest it holds
+ * uncontested, and wins at `points` per key nest (all of them held: `points`
+ * ticks; half of them: twice that). Nothing pauses or resets, so a split map
+ * still ends. Past `threat` of the target a team is the one everyone stops.
+ * Key nests sit away from every start, are sealed for the first `seal` ticks
+ * (no one can take them), and start with `garrison` times the guards, so a
+ * rusher can't grab them early.
  */
 export const KEYS = {
-  ticks: 20 * TICK_HZ,
+  points: 45 * TICK_HZ,
+  threat: 0.5,
   seal: 60 * TICK_HZ,
   garrison: 1.5,
   /** key nests are at least this far apart (px) */

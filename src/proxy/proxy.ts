@@ -343,7 +343,7 @@ export class Proxy {
       // recorded human, raid its nests to keep it under the line.
       const leaders = new Set<number>();
       let racing = false;
-      // Key nests (#87): the team holding them all is the one to stop.
+      // Key nests (#87): the team past half the winning score is the one to stop.
       const keyed = w.keys.length > 0;
       for (const [team, k] of held) {
         if (team === w.teamOf[me]) continue;
@@ -367,7 +367,7 @@ export class Proxy {
         if (n.owner === me || (n.owner >= 0 && w.teamOf[n.owner] === w.teamOf[me])) continue;
         const enemy = this.hostile(w, n.owner);
         const key = keyed && w.keys.includes(n.id);
-        // With key nests, only a key nest breaks the leader's hold.
+        // With key nests, only a key nest slows the leader.
         const leader = enemy && leaders.has(w.teamOf[n.owner]) && (!keyed || key);
         // Without the upper hand overall, a push must beat the enemy army nearby too.
         let scout = this.k.scout;

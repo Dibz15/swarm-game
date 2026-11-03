@@ -259,43 +259,54 @@ function teamFace(w: World, team: number): number {
   return best;
 }
 
-/** The team holding every key nest, fully, or -1. */
-function keyHolder(w: World): number {
-  let team = -1;
+/** The key-nest score that wins (#87). */
+export function keyTarget(w: World): number {
+  return KEYS.points * w.keys.length;
+}
+
+/** Key nests each team holds fully and uncontested: what it scores per tick. */
+function keyRates(w: World): Map<number, number> {
+  const rates = new Map<number, number>();
   for (const k of w.keys) {
     const n = w.nests[k];
-    if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1) return -1;
+    if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1 || n.contested) continue;
     const t = w.teamOf[n.owner];
-    if (team >= 0 && t !== team) return -1;
-    team = t;
+    rates.set(t, (rates.get(t) ?? 0) + 1);
   }
-  return team;
+  return rates;
+}
+
+/** The team with the highest key-nest score among the living, or -1 if nobody has scored. */
+function keyLeader(w: World, aliveTeams: Set<number>): number {
+  let best = -1;
+  for (const t of aliveTeams) if (w.keyScore[t] > 0 && (best < 0 || w.keyScore[t] > w.keyScore[best])) best = t;
+  return best;
 }
 
 /**
- * Key nests (#87): a team holding all of them counts down KEYS.ticks to win.
- * The countdown pauses while any key nest is contested, and resets if one falls.
+ * Key nests (#87), king of the hill: each team scores for every key nest it
+ * holds uncontested, and the first to keyTarget wins. The leader past
+ * KEYS.threat is marked in domTicks, so bots and the HUD treat it as dominating.
  */
 function keyVictory(w: World, aliveTeams: Set<number>): void {
-  const holder = keyHolder(w);
-  for (const t of aliveTeams) {
-    if (t !== holder) {
-      if (w.domTicks[t] > 0) pushFx(w, 'domBreak', 0, 0, teamFace(w, t));
-      w.domTicks[t] = 0;
-      continue;
-    }
-    if (w.domTicks[t] === 0) {
-      pushFx(w, 'domStart', 0, 0, teamFace(w, t));
-      w.domTicks[t] = 1;
-    }
-    if (w.keys.some((k) => w.nests[k].contested)) continue;
-    w.domTicks[t] += 15;
-    if (w.domTicks[t] >= KEYS.ticks) {
+  const target = keyTarget(w);
+  for (const [t, rate] of keyRates(w)) {
+    if (!aliveTeams.has(t)) continue;
+    w.keyScore[t] += 15 * rate;
+    if (w.keyScore[t] >= target) {
       w.over = true;
       w.winnerTeam = t;
       w.winReason = 'domination';
       return;
     }
+  }
+  const lead = keyLeader(w, aliveTeams);
+  const threat = lead >= 0 && w.keyScore[lead] >= KEYS.threat * target ? lead : -1;
+  for (let t = 0; t < w.domTicks.length; t++) {
+    if (t === threat) {
+      if (w.domTicks[t] === 0) pushFx(w, 'domStart', 0, 0, teamFace(w, t));
+      w.domTicks[t] = w.keyScore[t];
+    } else w.domTicks[t] = 0;
   }
 }
 
@@ -310,24 +321,36 @@ export interface DominationStatus {
   need: number;
   /** nests rivals must take back to break it */
   toBreak: number;
-  /** key nests (#87): `need` is the key nests, and the countdown is `paused` while any is contested */
+  /** how much of the countdown is left, 0–1 */
+  frac: number;
+  /**
+   * key nests (#87): `held` is the key nests the team scores on now, `need` all
+   * of them, and `left` the time to win at that rate (at one key nest when it
+   * scores on none, which is `paused`)
+   */
   keys?: boolean;
   paused?: boolean;
 }
 
 /** The team currently dominating, or null. */
 export function dominationStatus(w: World): DominationStatus | null {
+  if (w.keys.length) {
+    // Key nests: the leading scorer, once anyone has scored.
+    let lead = -1;
+    for (let t = 0; t < w.keyScore.length; t++) if (w.keyScore[t] > 0 && (lead < 0 || w.keyScore[t] > w.keyScore[lead])) lead = t;
+    if (lead < 0 || teamFace(w, lead) < 0) return null;
+    const target = keyTarget(w);
+    const rate = keyRates(w).get(lead) ?? 0;
+    const togo = Math.max(0, target - w.keyScore[lead]);
+    return { team: lead, face: teamFace(w, lead), left: Math.ceil(togo / Math.max(1, rate)), frac: togo / target, held: rate, need: w.keys.length, toBreak: rate, keys: true, paused: rate === 0 };
+  }
   for (let t = 0; t < w.domTicks.length; t++) {
     if (w.domTicks[t] <= 0) continue;
-    if (w.keys.length) {
-      // Key nests: hold all of them; take any one back to break it.
-      const paused = w.keys.some((k) => w.nests[k].contested);
-      return { team: t, face: teamFace(w, t), left: Math.max(0, KEYS.ticks - w.domTicks[t]), held: w.keys.length, need: w.keys.length, toBreak: 1, keys: true, paused };
-    }
     let held = 0;
     for (const n of w.nests) if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === t) held++;
     const need = Math.ceil(w.nests.length * w.domShare);
-    return { team: t, face: teamFace(w, t), left: Math.max(0, DOMINATION.ticks - w.domTicks[t]), held, need, toBreak: Math.max(1, held - need + 1) };
+    const left = Math.max(0, DOMINATION.ticks - w.domTicks[t]);
+    return { team: t, face: teamFace(w, t), left, frac: left / DOMINATION.ticks, held, need, toBreak: Math.max(1, held - need + 1) };
   }
   return null;
 }

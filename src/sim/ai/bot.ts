@@ -531,7 +531,7 @@ export class Bot {
           value *= 1 - CROWD.neighbor * (1 - nearestRival / homeDist[n.owner]);
         }
         // A team about to win by domination is everyone's problem.
-        // With key nests, only a key nest breaks it.
+        // With key nests, only a key nest slows it.
         if (w.domTicks[w.teamOf[n.owner]] > 0 && (!w.keys.length || key)) {
           value *= DOM_BOT.value;
           margin = Math.min(margin, DOM_BOT.margin);

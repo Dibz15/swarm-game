@@ -578,8 +578,8 @@ export class GameView {
           const mine = w.teamOf[e.f] === w.teamOf[this.human];
           sfx.domStart(mine);
           const keys = w.keys.length;
-          if (mine) toast(keys ? `You hold every key nest! Keep all ${keys} for ${KEYS.ticks / TICK_HZ}s to win` : `You are dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
-          else toast(keys ? `${FACTION_NAMES[e.f]} holds every key nest! Take one back to stop them` : `${FACTION_NAMES[e.f]} is dominating! Take back a nest to stop them`, '#ff5d73');
+          if (mine) toast(keys ? `Halfway to a key-nest win! Keep scoring on the ${keys} key nests` : `You are dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
+          else toast(keys ? `${FACTION_NAMES[e.f]} is halfway to a key-nest win! Take or contest their key nests` : `${FACTION_NAMES[e.f]} is dominating! Take back a nest to stop them`, '#ff5d73');
           for (const n of w.nests) {
             if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === w.teamOf[e.f]) {
               rings.add({ x: n.x, y: n.y, r0: n.r, r1: n.r * 3, dur: 0.8, c: FACTION_RGB[n.owner], thick: 3 });

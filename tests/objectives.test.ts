@@ -4,7 +4,7 @@ import { newRun, type RunState } from '../src/campaign/run';
 import { KEYS, Kind, NEUTRAL, SURGE, TICK_HZ } from '../src/sim/constants';
 import { generateMap } from '../src/sim/mapgen';
 import { createWorld, mapParamsOf } from '../src/sim/setup';
-import { dominationStatus, step } from '../src/sim/step';
+import { dominationStatus, keyTarget, step } from '../src/sim/step';
 import { removeUnit, spawnUnit, type World } from '../src/sim/world';
 
 // Conquest and Domination play differently (#87): key nests, and a late Bloom surge.
@@ -64,41 +64,64 @@ describe('key nests (#87)', () => {
     expect(key.owner === me && key.control > 0).toBe(false);
   });
 
-  it('holding every key nest counts down to a win, pauses while one is contested, and resets if one falls', () => {
+  it('key nests score king of the hill: uncontested holds score, nothing resets, and the target wins', () => {
+    const [r, id] = nodeOf('domination');
+    const w = createWorld(nodeSetup(r, id));
+    const me = w.factions.findIndex((f) => f.human);
+    const rival = w.factions.findIndex((f, i) => f.active && i !== me && i !== NEUTRAL && w.teamOf[i] !== w.teamOf[me]);
+    empty(w);
+    w.keySealUntil = 0;
+    const keys = w.keys.map((k) => w.nests[k]);
+    const target = keyTarget(w);
+    expect(target).toBe(KEYS.points * keys.length);
+    // A split map: each side holds key nests and both score, at their own rates.
+    keys.forEach((n, i) => Object.assign(n, { owner: i === 0 ? rival : me, controller: i === 0 ? rival : me, control: 1 }));
+    run(w, 5 * TICK_HZ);
+    const mine = w.keyScore[w.teamOf[me]], theirs = w.keyScore[w.teamOf[rival]];
+    expect(theirs).toBeGreaterThan(0);
+    expect(mine).toBeCloseTo(theirs * (keys.length - 1), -2);
+    const ds = dominationStatus(w)!;
+    expect(ds).toMatchObject({ team: w.teamOf[me], keys: true, held: keys.length - 1, need: keys.length, paused: false });
+    // Not yet a threat: nobody is past half.
+    expect(w.domTicks[w.teamOf[me]]).toBe(0);
+    // A contested key nest stops scoring for its owner only.
+    for (let k = 0; k < 6; k++) spawnUnit(w, me, Kind.Dot, keys[0].x + k * 3, keys[0].y, keys[0].x, keys[0].y, 0);
+    for (let k = 0; k < 6; k++) spawnUnit(w, rival, Kind.Dot, keys[0].x - k * 3, keys[0].y, keys[0].x, keys[0].y, 0);
+    run(w, 15);
+    if (keys[0].contested) {
+      const held = w.keyScore[w.teamOf[rival]];
+      run(w, TICK_HZ);
+      if (keys[0].contested) expect(w.keyScore[w.teamOf[rival]]).toBe(held);
+    }
+    empty(w);
+    // Losing a key nest slows you, it doesn't reset you.
+    const before = w.keyScore[w.teamOf[me]];
+    Object.assign(keys[1], { owner: -1, control: 0 });
+    run(w, 30);
+    expect(w.keyScore[w.teamOf[me]]).toBeGreaterThanOrEqual(before);
+    // Hold them all: past half you're the threat, and at the target you win.
+    for (const n of keys) Object.assign(n, { owner: me, controller: me, control: 1 });
+    run(w, target);
+    expect(w.over).toBe(true);
+    expect(w.winnerTeam).toBe(w.teamOf[me]);
+    expect(w.winReason).toBe('domination');
+  });
+
+  it('the leader past KEYS.threat is marked dominating, once', () => {
     const [r, id] = nodeOf('domination');
     const w = createWorld(nodeSetup(r, id));
     const me = w.factions.findIndex((f) => f.human);
     empty(w);
     w.keySealUntil = 0;
-    const keys = w.keys.map((k) => w.nests[k]);
-    for (const n of keys) Object.assign(n, { owner: me, controller: me, control: 1 });
-    run(w, 5 * TICK_HZ);
-    const ds = dominationStatus(w)!;
-    expect(ds).toMatchObject({ team: w.teamOf[me], keys: true, need: keys.length, toBreak: 1 });
-    expect(ds.left).toBeLessThan(KEYS.ticks);
-    expect(ds.paused).toBe(false);
-    // A rival on a key nest contests it: the countdown pauses.
-    const rival = w.factions.findIndex((f, i) => f.active && i !== me && i !== NEUTRAL);
-    for (let k = 0; k < 6; k++) spawnUnit(w, rival, Kind.Dot, keys[0].x + k * 3, keys[0].y, keys[0].x, keys[0].y, 0);
-    for (let k = 0; k < 6; k++) spawnUnit(w, me, Kind.Dot, keys[0].x - k * 3, keys[0].y, keys[0].x, keys[0].y, 0);
-    run(w, 15);
-    const held = w.domTicks[w.teamOf[me]];
-    run(w, 2 * TICK_HZ);
-    if (keys[0].contested) {
-      expect(dominationStatus(w)!.paused).toBe(true);
-      expect(w.domTicks[w.teamOf[me]]).toBe(held);
+    for (const k of w.keys) Object.assign(w.nests[k], { owner: me, controller: me, control: 1 });
+    let starts = 0;
+    for (let t = 0; t < keyTarget(w) / w.keys.length - 30 && !w.over; t++) {
+      step(w, []);
+      starts += w.fx.filter((e) => e.type === 'domStart').length;
+      w.fx = [];
     }
-    empty(w);
-    // One falls: reset.
-    Object.assign(keys[0], { owner: -1, control: 0 });
-    run(w, 30);
-    expect(w.domTicks[w.teamOf[me]]).toBe(0);
-    // Hold again, uncontested, for the whole countdown: a win.
-    Object.assign(keys[0], { owner: me, control: 1 });
-    run(w, KEYS.ticks + 30);
-    expect(w.over).toBe(true);
-    expect(w.winnerTeam).toBe(w.teamOf[me]);
-    expect(w.winReason).toBe('domination');
+    expect(starts).toBe(1);
+    expect(w.domTicks[w.teamOf[me]]).toBeGreaterThanOrEqual(KEYS.threat * keyTarget(w));
   });
 });
 

@@ -485,16 +485,16 @@ export class Hud {
       this.dom.style.setProperty('--c', col);
       this.dom.classList.toggle('urgent', secs <= 10);
       this.dom.classList.toggle('mine', mine);
-      (this.dom.children[0] as HTMLElement).textContent = `0:${String(secs).padStart(2, '0')}`;
-      const paused = ds.paused ? ' · <b>paused: a key nest is contested</b>' : '';
+      (this.dom.children[0] as HTMLElement).textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+      const scoring = ds.paused ? '<b>not scoring</b>: no key nest held uncontested' : `scoring on ${ds.held} of ${ds.need} key nests`;
       (this.dom.children[1] as HTMLElement).innerHTML = ds.keys
         ? mine
-          ? `<b>You hold every key nest</b> · keep all ${ds.need}${paused}`
-          : `<b>${FACTION_NAMES[ds.face]} holds every key nest</b> · take one back to stop it${paused}`
+          ? `<b>You lead on key nests</b> · ${scoring}`
+          : `<b>${FACTION_NAMES[ds.face]} leads on key nests</b> · ${scoring}: take or contest theirs`
         : mine
           ? `<b>You are dominating</b> · hold ${ds.need} of ${w.nests.length} nests`
           : `<b>${FACTION_NAMES[ds.face]} is dominating</b> · take back ${ds.toBreak} nest${ds.toBreak > 1 ? 's' : ''} to stop it`;
-      ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${(100 * ds.left) / (ds.keys ? KEYS.ticks : DOMINATION.ticks)}%`;
+      ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${100 * ds.frac}%`;
     }
 
     // Energy and buttons.
