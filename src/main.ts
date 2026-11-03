@@ -49,6 +49,8 @@ class App {
   private demo: LocalSession | null = null;
   private screen: HTMLElement | null = null;
   private modal: HTMLElement | null = null;
+  /** a full-screen modal (the run map) hides the menu and the demo: both pause under it (#130) */
+  private covered = false;
   private endShown = false;
   /** the current match's recording was saved at its end */
   private recSaved = false;
@@ -138,6 +140,8 @@ class App {
     this.modal?.remove();
     this.modal = m;
     if (m) this.ui.appendChild(m);
+    this.covered = !!m?.classList.contains('runmap');
+    this.ui.classList.toggle('covered', this.covered);
   }
 
   private showMenu(): void {
@@ -760,6 +764,9 @@ class App {
       this.updateDemo(g, dt);
       g.render(this.time);
       if (g.result && !this.endShown && this.time - g.resultTime > 1.6) this.showEnd();
+    } else if (this.demo && this.covered) {
+      // Hidden under the run map: keep the score going, but don't step or draw the battle.
+      this.sfx.update(dt, this.demo.world, -1, 'menu');
     } else if (this.demo) {
       const d = this.demo;
       d.update(dt);
@@ -787,12 +794,15 @@ class App {
       });
     }
 
-    this.particles.update(dt);
-    this.rings.update(dt);
-    this.particles.draw(r);
-    this.rings.draw(r);
-    this.camera.update(dt, this.time);
-    r.draw(this.camera, this.time);
+    // Under the run map the canvas keeps its last frame: nothing new to show.
+    if (!this.covered) {
+      this.particles.update(dt);
+      this.rings.update(dt);
+      this.particles.draw(r);
+      this.rings.draw(r);
+      this.camera.update(dt, this.time);
+      r.draw(this.camera, this.time);
+    }
 
     if (this.showPerf) {
       const w = this.game?.world ?? this.demo?.world;
