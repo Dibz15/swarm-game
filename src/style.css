@@ -136,7 +136,8 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 24px 26px;
-  width: min(440px, 100%);
+  /* a little wider on wide screens, so it isn't a narrow strip down the middle */
+  width: min(clamp(440px, 36vw, 600px), 100%);
   box-shadow: 0 20px 80px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(8px);
   max-height: calc(100vh - 32px);
