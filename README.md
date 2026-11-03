@@ -92,6 +92,20 @@ EVENTS=normal npx vite-node scripts/event-probe.ts 4 medium 20   # events per ga
 npx vite-node scripts/trace.ts 5 large 1005             # 30 s timeline of one match
 ```
 
+**Campaign balance (#68):**
+```bash
+npx vite-node scripts/run-probe.ts 24 1                 # whole runs: win %, run minutes, losses by depth, warlords, rewards
+IDS=spikes,echo N=8 npx vite-node scripts/reward-probe.ts   # win-rate change per reward, suggested tiers
+npx vite-node scripts/balance/early-check.ts            # is the early-decision rule safe to use on this code?
+```
+- These play their battles on a pool of worker threads (`scripts/balance/pool.ts`).
+- Results are cached in `.balance-cache/` (gitignored). The cache key covers the job and a fingerprint of the bundled battle code plus the `SUPPLY`/`BOT`/`PERS`/`CROWD`/`CHOKE` overrides, so any change to the sim, campaign or proxy starts afresh.
+- Environment options:
+  - `WORKERS=8` sets the number of threads.
+  - `BUDGET_MIN=60` stops the sweep after that many minutes. Finished battles stay cached, so re-running picks up where it stopped.
+  - `EARLY=1` ends a battle once one team holds over 85% of army plus production for 60 s. It applies only if `early-check.ts` passed on the same code (97% of its calls right over at least 200 battles), and only for the battle classes that passed. Early battles end before the real finish, so their minutes run short.
+  - `NOCACHE=1` replays everything.
+
 **Maps:**
 ```bash
 npx vite-node scripts/terrain-probe.ts heavy 40 7 3     # terrain amounts, connectivity, gen time (+ ASCII map)

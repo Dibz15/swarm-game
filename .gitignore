@@ -4,3 +4,4 @@ dist
 .claude/.cc-writes
 vite.config.ts.timestamp-*
 recordings/
+.balance-cache/
