@@ -10,6 +10,7 @@ import { bloomLabel, rivals, siegeFor, warlordOf, type Rival } from '../campaign
 import { FORTRESS_LABEL } from '../sim/fortify';
 import { STRONGHOLD_WEIGHT, TRAITS, trophyOf } from '../campaign/warlords';
 import { broodCreature, broodTemper } from '../campaign/character';
+import { renderScale } from '../render/resolution';
 import {
   MAP_H,
   MAP_W,
@@ -156,15 +157,23 @@ function homeCam(run: RunState, cw: number, ch: number): Cam {
   return { cx: n.x + 90, cy: n.y, zoom: cw / VIEW_SPAN / fitScale(cw, ch) };
 }
 
-/** Nebula over the parts of the map you haven't reached, cut away around what you know. */
-let fogCanvas: HTMLCanvasElement | null = null;
-function drawFog(g: CanvasRenderingContext2D, run: RunState, known: Set<number>, v: View, cw: number, ch: number, time: number, u: number): void {
-  const f = (fogCanvas ??= document.createElement('canvas'));
-  if (f.width !== cw || f.height !== ch) {
-    f.width = cw;
-    f.height = ch;
+/** The fog's resolution, as a share of the map canvas's: it is all soft gradients, so a quarter is plenty (#130). */
+const FOG_RES = 0.25;
+
+/**
+ * Nebula over the parts of the map you haven't reached, cut away around what you know.
+ * It goes on `f`, a small canvas under the map's that CSS stretches over it, so
+ * the browser scales it up when compositing instead of the map redrawing it full size (#130).
+ */
+function drawFog(f: HTMLCanvasElement, g: CanvasRenderingContext2D, run: RunState, known: Set<number>, v: View, cw: number, ch: number, time: number, u: number): void {
+  const fw = Math.ceil(cw * FOG_RES), fh = Math.ceil(ch * FOG_RES);
+  if (f.width !== fw || f.height !== fh) {
+    f.width = fw;
+    f.height = fh;
   }
   const fg = f.getContext('2d')!;
+  // Drawn in the map canvas's pixels, scaled down onto the small one.
+  fg.setTransform(fw / cw, 0, 0, fh / ch, 0, 0);
   fg.globalCompositeOperation = 'source-over';
   fg.clearRect(0, 0, cw, ch);
   fg.fillStyle = 'rgba(9, 10, 24, 0.94)';
@@ -184,19 +193,6 @@ function drawFog(g: CanvasRenderingContext2D, run: RunState, known: Set<number>,
     fg.fillStyle = grad;
     fg.fillRect(px - r, py - r, r * 2, r * 2);
   }
-  // Faint stars, twinkling: fixed in the sky around the map, just behind it (the far cloud layer's depth).
-  fg.fillStyle = '#dfe4ff';
-  const par = 0.85;
-  for (let k = 0; k < 90; k++) {
-    const h = (m: number) => Math.abs(Math.sin((k + 1) * m + run.seed) * 43758.5453) % 1;
-    const sx = cw / 2 + (v.ox - cw / 2) * par + (h(12.9) * 1600 - 300) * v.s;
-    const sy = ch / 2 + (v.oy - ch / 2) * par + (h(78.2) * 1100 - 240) * v.s;
-    if (sx < 0 || sy < 0 || sx > cw || sy > ch) continue;
-    const tw = Math.max(0, Math.sin(time * (0.4 + h(3.7)) + h(9.1) * 20));
-    fg.globalAlpha = 0.12 + 0.5 * tw * tw * tw;
-    fg.fillRect(sx, sy, (0.8 + h(5.3)) * u, (0.8 + h(5.3)) * u);
-  }
-  fg.globalAlpha = 1;
   // A soft wave of brightness sweeping across.
   const wx = ((time * 0.04) % 1.6 - 0.3) * cw;
   const wave = fg.createLinearGradient(wx - cw * 0.3, 0, wx + cw * 0.3, ch * 0.4);
@@ -207,6 +203,7 @@ function drawFog(g: CanvasRenderingContext2D, run: RunState, known: Set<number>,
   fg.fillRect(0, 0, cw, ch);
   // Clear windows around every known node, breathing softly as the fog moves.
   fg.globalCompositeOperation = 'destination-out';
+  const windows: number[] = [];
   for (const id of known) {
     const n = run.nodes[id];
     const px = v.ox + n.x * v.s, py = v.oy + n.y * v.s;
@@ -216,8 +213,28 @@ function drawFog(g: CanvasRenderingContext2D, run: RunState, known: Set<number>,
     grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
     fg.fillStyle = grad;
     fg.fillRect(px - r, py - r, r * 2, r * 2);
+    windows.push(px, py, r);
   }
-  g.drawImage(f, 0, 0);
+  // Faint stars, twinkling: fixed in the sky around the map, just behind it (the far cloud layer's depth).
+  // Drawn sharp on the map's canvas, faded through the same windows as the fog.
+  g.fillStyle = '#dfe4ff';
+  const par = 0.85;
+  for (let k = 0; k < 90; k++) {
+    const h = (m: number) => Math.abs(Math.sin((k + 1) * m + run.seed) * 43758.5453) % 1;
+    const sx = cw / 2 + (v.ox - cw / 2) * par + (h(12.9) * 1600 - 300) * v.s;
+    const sy = ch / 2 + (v.oy - ch / 2) * par + (h(78.2) * 1100 - 240) * v.s;
+    if (sx < 0 || sy < 0 || sx > cw || sy > ch) continue;
+    let keep = 1;
+    for (let w = 0; w < windows.length; w += 3) {
+      const r = windows[w + 2], d = Math.hypot(sx - windows[w], sy - windows[w + 1]);
+      if (d < r) keep *= Math.max(0, Math.min(1, (d - r * 0.35) / (r * 0.65)));
+    }
+    if (keep <= 0) continue;
+    const tw = Math.max(0, Math.sin(time * (0.4 + h(3.7)) + h(9.1) * 20));
+    g.globalAlpha = (0.12 + 0.5 * tw * tw * tw) * keep;
+    g.fillRect(sx, sy, (0.8 + h(5.3)) * u, (0.8 + h(5.3)) * u);
+  }
+  g.globalAlpha = 1;
 }
 
 function star(g: CanvasRenderingContext2D, x: number, y: number, r: number): void {
@@ -230,14 +247,23 @@ function star(g: CanvasRenderingContext2D, x: number, y: number, r: number): voi
   g.closePath();
 }
 
+/** The Bloom edge's glow: [line width, alpha] from the outside in, a close match for `shadowBlur = 14`. */
+const EDGE_GLOW: readonly (readonly [number, number])[] = [
+  [32, 0.016],
+  [24, 0.03],
+  [17, 0.04],
+  [10, 0.05],
+];
+
 /** The map: Bloom, links, nodes. `front` may lag the run's while it animates. */
 function drawMap(
   c: HTMLCanvasElement,
   run: RunState,
-  opts: { bloomT: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam; fx?: MapFx; ghost?: boolean },
+  opts: { bloomT: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam; fx?: MapFx; ghost?: boolean; fog?: HTMLCanvasElement },
 ): View {
-  const dpr = window.devicePixelRatio || 1;
-  const cw = c.clientWidth * dpr, ch = c.clientHeight * dpr;
+  // Thumbnails stay sharp; the live map follows the Resolution setting.
+  const dpr = opts.thumb ? window.devicePixelRatio || 1 : renderScale();
+  const cw = Math.round(c.clientWidth * dpr), ch = Math.round(c.clientHeight * dpr);
   if (c.width !== cw || c.height !== ch) {
     c.width = cw;
     c.height = ch;
@@ -248,7 +274,7 @@ function drawMap(
   const u = opts.thumb ? dpr * 0.35 : dpr; // pixel unit
   const known = revealed(run);
   g.clearRect(0, 0, cw, ch);
-  if (!opts.thumb) drawFog(g, run, known, v, cw, ch, opts.time, u);
+  if (opts.fog) drawFog(opts.fog, g, run, known, v, cw, ch, opts.time, u);
 
   // The Bloom (#88): its band off the left edge and the circles growing from
   // where you've been, sampled over whatever is in view so it looks endless.
@@ -261,7 +287,8 @@ function drawMap(
   field.fill(g, X, Y, v.s);
   if (!opts.thumb && fx) {
     field.trace();
-    // Spores drifting inside the Bloom, tiled over the view.
+    // Spores drifting inside the Bloom, tiled over the view: one path per step of alpha, not one per spore.
+    const spores: (Path2D | null)[] = [];
     for (let tx = Math.floor(mx0 / 1000); tx <= Math.floor(mx1 / 1000); tx++)
       for (let ty = Math.floor(my0 / 620); ty <= Math.floor(my1 / 620); ty++)
         for (let k = 0; k < 140; k++) {
@@ -269,24 +296,37 @@ function drawMap(
           const sy = ((k * 104729 + run.seed * 3) % 620) + ty * 620;
           if (bloomGapView(b, sx, sy, opts.bloomT) > -8) continue;
           const sw = Math.sin(opts.time * 0.6 + k) * 4;
-          g.fillStyle = `rgba(230, 120, 200, ${0.15 + 0.15 * Math.sin(opts.time * 1.3 + k * 1.7)})`;
-          g.beginPath();
-          g.arc(X(sx + sw), Y(sy), (1.5 + (k % 3)) * u, 0, Math.PI * 2);
-          g.fill();
+          const a = 0.15 + 0.15 * Math.sin(opts.time * 1.3 + k * 1.7);
+          const p = (spores[Math.round(a * 40)] ??= new Path2D());
+          const px = X(sx + sw), py = Y(sy), r = (1.5 + (k % 3)) * u;
+          p.moveTo(px + r, py);
+          p.arc(px, py, r, 0, Math.PI * 2);
         }
+    g.fillStyle = 'rgb(230, 120, 200)';
+    spores.forEach((p, i) => {
+      if (!p) return;
+      g.globalAlpha = i / 40;
+      g.fill(p);
+    });
+    g.globalAlpha = 1;
     // The edge is alive: tendrils feel out, spores shed off and drift.
     tendrils(g, (x, y) => bloomGapView(b, x, y, opts.bloomT) + wob(x, y), field, { x0: mx0, y0: my0, x1: mx1, y1: my1 }, opts.time, X, Y, u);
     fx.spores.shed(fx.dt, Math.min(60, field.nseg * 0.25), field);
     fx.spores.step(fx.dt, opts.time);
     fx.spores.draw(g, X, Y, u);
-    // The glowing edge, with pulses of light running along it.
+    // The glowing edge, with pulses of light running along it. The glow is a
+    // few wide faint strokes: close to a 14 px shadow blur, at a fraction of its cost (#130).
+    const edge = field.path(X, Y);
     g.strokeStyle = BLOOM;
-    g.lineWidth = 2.5 * u;
     g.lineCap = 'round';
-    g.shadowColor = BLOOM;
-    g.shadowBlur = 14 * u;
-    field.stroke(g, X, Y);
-    g.shadowBlur = 0;
+    for (const [w, a] of EDGE_GLOW) {
+      g.globalAlpha = a;
+      g.lineWidth = w * u;
+      g.stroke(edge);
+    }
+    g.globalAlpha = 1;
+    g.lineWidth = 2.5 * u;
+    g.stroke(edge);
     g.strokeStyle = 'rgba(255, 190, 240, 0.75)';
     g.lineWidth = 2 * u;
     field.stroke(g, X, Y, (x, y) => Math.sin(opts.time * 2.2 - x * 0.012 - y * 0.008) > 0.85);
@@ -849,13 +889,15 @@ export function runMap(
           <button class="small" data-a="leave">← All runs</button>
         </header>
         <div class="map-wrap">
-          <canvas></canvas>
+          <canvas class="map-fog"></canvas>
+          <canvas class="map-canvas"></canvas>
           <p class="map-hint">Tap a highlighted territory next to your swarm. Each move is a battle, then the Bloom advances. Tap your swarm to open the camp. Drag to look around.</p>
           <div class="node-veil" hidden><div class="card node-card" role="dialog"></div></div>
         </div>
       </div>
     </div>`);
-  const c = m.querySelector('canvas') as HTMLCanvasElement;
+  const c = m.querySelector('.map-canvas') as HTMLCanvasElement;
+  const fog = m.querySelector('.map-fog') as HTMLCanvasElement;
   const veil = m.querySelector('.node-veil') as HTMLElement;
   const panel = m.querySelector('.node-card') as HTMLElement;
   // Tapping off the card closes it.
@@ -1031,7 +1073,7 @@ export function runMap(
     draw();
   };
 
-  const dpr = () => window.devicePixelRatio || 1;
+  const dpr = renderScale;
   const local = (e: { clientX: number; clientY: number }) => {
     const r = c.getBoundingClientRect();
     return { x: (e.clientX - r.left) * dpr(), y: (e.clientY - r.top) * dpr() };
@@ -1163,7 +1205,8 @@ export function runMap(
       fx.burstDone = true;
       for (const id of fresh) fx.spores.burst(run.nodes[id].x, run.nodes[id].y, 36);
     }
-    view = drawMap(c, run, { bloomT, selected, hover, time, fresh, freshT, cam: cam ?? undefined, fx, ghost: k >= 1 && !moving });
+    // Hidden or not laid out yet: nothing to draw (and a zero-size view would break the fog).
+    if (c.clientWidth > 0 && c.clientHeight > 0) view = drawMap(c, run, { bloomT, selected, hover, time, fresh, freshT, cam: cam ?? undefined, fx, ghost: k >= 1 && !moving, fog });
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

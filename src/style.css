@@ -770,7 +770,9 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
   .run-row { flex-wrap: wrap; }
 }
 
-.runmap { padding: 0; background: rgba(4, 5, 12, 0.94); backdrop-filter: blur(6px); }
+/* Opaque, no backdrop blur: the menu and its battle pause underneath it (#130). */
+.runmap { padding: 0; background: #04050c; }
+#ui.covered > .menu { visibility: hidden; }
 .runmap-frame {
   width: 100%; height: 100%;
   display: grid;
@@ -789,6 +791,7 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .run-stats { display: flex; gap: 12px; align-items: baseline; }
 .map-wrap { position: relative; min-height: 0; overflow: hidden; }
 .map-wrap > canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.map-fog { pointer-events: none; }
 .map-hint {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   width: min(520px, calc(100% - 32px)); margin: 0; padding: 8px 14px;
