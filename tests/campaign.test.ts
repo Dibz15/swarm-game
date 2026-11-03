@@ -418,13 +418,13 @@ describe('rewards', () => {
     expect(offerable(run, REWARD['feral'])).toBe(false);
   });
 
-  it('Lone wolf fields one brood at LONE_WOLF times its size; Hunger doubles biomass and speeds the Bloom', () => {
+  it('Lone wolf fields one brood at LONE_WOLF times its size, as veterans; Hunger doubles biomass and speeds the Bloom', () => {
     const run = afterWin('pacts');
     offerOf(run, ['lone-wolf']);
     takeReward(run, 'lone-wolf');
     expect(maxFielded(run)).toBe(1);
     expect(run.fielded).toHaveLength(1);
-    expect(armyFor(run, run.broods.map((b) => b.id))).toEqual([{ kind: run.broods[0].kind, count: Math.round(run.broods[0].size * LONE_WOLF), vet: false }]);
+    expect(armyFor(run, run.broods.map((b) => b.id))).toEqual([{ kind: run.broods[0].kind, count: Math.round(run.broods[0].size * LONE_WOLF), vet: true }]);
 
     const h = afterWin('pacts');
     const step = h.bloom.step;

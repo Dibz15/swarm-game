@@ -27,14 +27,15 @@ export const STRONGHOLD_PROD = 0.7;
 /** Domination nodes: hold half the nests (the usual share is 0.6-0.7). */
 const DOMINATION_SHARE = 0.5;
 
-/** Lone wolf's one brood fights this many times its size (2 measured −28 points against three broods, #68). */
-export const LONE_WOLF = 2.5;
+/** Lone wolf's one brood fights this many times its size, as veterans: as many units as three broods, all of one kind (#68, #125). */
+export const LONE_WOLF = 3;
 
-/** The fielded broods (fit ones only, at most three) as a starting army; the militia if none. Lone wolf scales it by LONE_WOLF. */
+/** The fielded broods (fit ones only, at most three) as a starting army; the militia if none. Lone wolf scales it by LONE_WOLF and makes it veterans. */
 export function armyFor(run: RunState, fielded: number[]): { kind: number; count: number; vet?: boolean }[] {
   const out = fighters(run.broods, fielded, maxFielded(run));
-  const scale = run.perks.includes('lone-wolf') ? LONE_WOLF : 1;
-  return out.length ? out.map((b) => ({ kind: b.kind, count: Math.round(b.size * scale), vet: veteran(b) })) : [MILITIA];
+  const lone = run.perks.includes('lone-wolf');
+  const scale = lone ? LONE_WOLF : 1;
+  return out.length ? out.map((b) => ({ kind: b.kind, count: Math.round(b.size * scale), vet: lone || veteran(b) })) : [MILITIA];
 }
 
 /** The match for a run node. Same node, same battle (its seed is fixed). */
