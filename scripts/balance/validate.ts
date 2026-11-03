@@ -8,6 +8,7 @@
 // the loss shape rests on a handful of losses.
 // Usage: npx vite-node scripts/balance/validate.ts [full runs per difficulty] [surrogate runs]
 //   (default 36 and 1000)   DIFFICULTY=standard,hard
+import { IMPACT_FILE, type ImpactTable } from './impact';
 import type { PackId } from '../../src/campaign/broods';
 import type { RunDifficulty } from '../../src/campaign/run';
 import { buildPanel, surrogateFight } from './model';
@@ -39,7 +40,9 @@ try {
 await pool.close();
 console.log(`${pool.summary()}\n`);
 
-const fight = surrogateFight(panel);
+const table = pool.cache.read<ImpactTable>(IMPACT_FILE);
+if (!table) console.log('no reward-impact table for this code (npx vite-node scripts/reward-probe.ts): rewards count as the panel average');
+const fight = surrogateFight(panel, Object.fromEntries((table?.items ?? []).map((i) => [i.id, i.logit])));
 const pct = (x: number) => `${(100 * x).toFixed(0)}%`.padStart(4);
 const med = (xs: number[]) => xs[xs.length >> 1] ?? NaN;
 let ok = true;

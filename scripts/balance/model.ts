@@ -14,7 +14,7 @@ import { mixedLogistic } from './fit';
 import type { Pool } from './pool';
 import { pickBroods, playRun } from './runs';
 import { CAP, type Fight } from './battle';
-import { BANDS, KINDS, bandOf, cellKind, features, shiftOf, type CellKind, type Outcome, type Panel, type PanelBattle } from './surrogate';
+import { BANDS, KINDS, bandOf, cellKind, features, heldIn, shiftOf, type CellKind, type Outcome, type Panel, type PanelBattle } from './surrogate';
 
 export * from './surrogate';
 
@@ -149,7 +149,7 @@ async function measure(pool: Pool, s: Snapshot, target: number, typical: number,
   const me = setup.players[0];
   const r = await pool.battle({ setup, human: me.faction, proxy: { skill, novaLocked: !run.unlocks.nova }, cap: CAP });
   return {
-    kind: s.kind, node: `${s.run}:${s.id}`, band: s.band, shift: s.shift, difficulty: run.nodes[s.id].difficulty, rivals: run.nodes[s.id].rivals, pressure: pressure(run, s.id), strength: bloomStrength(run), ratio: army / typical, skill, army,
+    kind: s.kind, node: `${s.run}:${s.id}`, held: heldIn(run, fielded), band: s.band, shift: s.shift, difficulty: run.nodes[s.id].difficulty, rivals: run.nodes[s.id].rivals, pressure: pressure(run, s.id), strength: bloomStrength(run), ratio: army / typical, skill, army,
     won: r.won, capped: r.capped, survivors: r.report.survivors.reduce((a, b) => a + b, 0), nests: r.report.nests, seconds: r.report.seconds,
   };
 }
