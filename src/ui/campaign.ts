@@ -10,6 +10,7 @@ import { bloomLabel, rivals, siegeFor, warlordOf, type Rival } from '../campaign
 import { FORTRESS_LABEL } from '../sim/fortify';
 import { STRONGHOLD_WEIGHT, TRAITS, trophyOf } from '../campaign/warlords';
 import { broodCreature, broodTemper } from '../campaign/character';
+import { renderScale } from '../render/resolution';
 import {
   MAP_H,
   MAP_W,
@@ -260,8 +261,9 @@ function drawMap(
   run: RunState,
   opts: { bloomT: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam; fx?: MapFx; ghost?: boolean; fog?: HTMLCanvasElement },
 ): View {
-  const dpr = window.devicePixelRatio || 1;
-  const cw = c.clientWidth * dpr, ch = c.clientHeight * dpr;
+  // Thumbnails stay sharp; the live map follows the Resolution setting.
+  const dpr = opts.thumb ? window.devicePixelRatio || 1 : renderScale();
+  const cw = Math.round(c.clientWidth * dpr), ch = Math.round(c.clientHeight * dpr);
   if (c.width !== cw || c.height !== ch) {
     c.width = cw;
     c.height = ch;
@@ -1071,7 +1073,7 @@ export function runMap(
     draw();
   };
 
-  const dpr = () => window.devicePixelRatio || 1;
+  const dpr = renderScale;
   const local = (e: { clientX: number; clientY: number }) => {
     const r = c.getBoundingClientRect();
     return { x: (e.clientX - r.left) * dpr(), y: (e.clientY - r.top) * dpr() };
