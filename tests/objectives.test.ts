@@ -181,7 +181,7 @@ describe("Conquest's late Bloom surge (#87)", () => {
       }
     };
     // Keep the battle going: nobody wins in the meantime.
-    w.domShare = 2;
+    w.endless = true;
     watch(s.next + 1 - w.tick);
     expect(warned).toBeGreaterThan(0);
     expect(SURGE.after * TICK_HZ - warned).toBeGreaterThanOrEqual(SURGE.warn * TICK_HZ - 1);

@@ -102,9 +102,14 @@ function regarrisonKeys(w: World): void {
   for (const k of w.keys) {
     const n = w.nests[k];
     if (n.owner !== NEUTRAL) continue;
-    queryRadius(w, n.x, n.y, n.r + 30, scratch);
+    // Once a battle, so a plain scan: the grid misses guards spawned this tick.
+    const r2 = (n.r + 30) * (n.r + 30);
     let guards = 0;
-    for (const s of scratch) if (w.owner[s] === NEUTRAL && w.wild[s] === 0) guards++;
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.owner[i] !== NEUTRAL || w.wild[i] !== 0) continue;
+      const dx = w.x[i] - n.x, dy = w.y[i] - n.y;
+      if (dx * dx + dy * dy <= r2) guards++;
+    }
     const kind = NEST_KIND[n.type] < 0 ? Kind.Dot : NEST_KIND[n.type];
     for (let g = guards; g < n.garrison; g++) {
       const a = (g / n.garrison) * TAU;
