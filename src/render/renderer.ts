@@ -1,6 +1,7 @@
 import type { Camera } from './camera';
 import type { Terrain } from '../sim/terrain';
 import { bakeTerrain, TEX_SCALE } from './terrainTex';
+import { renderScale } from './resolution';
 import { BEAM_FS, BEAM_VS, BG_FS, BG_VS, SHAPE_FS, SHAPE_VS, UNIT_FS, UNIT_VS } from './shaders';
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
@@ -182,7 +183,7 @@ export class Renderer {
   }
 
   resize(): boolean {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = renderScale();
     const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     if (w === this.width && h === this.height && dpr === this.dpr) return false;

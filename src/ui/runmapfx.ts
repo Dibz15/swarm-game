@@ -536,14 +536,22 @@ export class Spores {
     g.save();
     g.globalCompositeOperation = 'lighter';
     g.fillStyle = 'rgb(235, 120, 205)';
+    // One path per step of alpha, not one per spore.
+    const paths: (Path2D | null)[] = [];
     for (let i = 0; i < POOL; i++) {
       const t = this.age[i] / this.life[i];
       if (t >= 1) continue;
-      g.globalAlpha = 0.55 * Math.min(1, t * 6) * (1 - t);
-      g.beginPath();
-      g.arc(X(this.x[i]), Y(this.y[i]), this.size[i] * u, 0, Math.PI * 2);
-      g.fill();
+      const a = 0.55 * Math.min(1, t * 6) * (1 - t);
+      const p = (paths[Math.round(a * 40)] ??= new Path2D());
+      const x = X(this.x[i]), y = Y(this.y[i]), r = this.size[i] * u;
+      p.moveTo(x + r, y);
+      p.arc(x, y, r, 0, Math.PI * 2);
     }
+    paths.forEach((p, k) => {
+      if (!p) return;
+      g.globalAlpha = k / 40;
+      g.fill(p);
+    });
     g.restore();
   }
 }
@@ -576,7 +584,9 @@ export function tendrils(
   const zoomFade = Math.max(0, Math.min(1, (Math.abs(X(10) - X(0)) / u - 1.5) / 2));
   if (zoomFade === 0) return;
   let drawn = 0;
-  g.lineWidth = 1.4 * u;
+  // Batched by how far each has faded in: a stroke path and a tip path per step.
+  const STEPS = 16;
+  const stems: (Path2D | null)[] = [], tips: (Path2D | null)[] = [];
   for (let cx = Math.floor(view.x0 / step); cx <= Math.ceil(view.x1 / step); cx++) {
     for (let cy = Math.floor(view.y0 / step); cy <= Math.ceil(view.y1 / step); cy++) {
       const h = Math.abs(Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453) % 1;
@@ -609,18 +619,29 @@ export function tendrils(
       const len = 10 + k * 22;
       const a = Math.atan2(ny, nx) + Math.sin(time * (0.6 + k * 0.7) + k * 9) * 0.7;
       const ex = x + len * Math.cos(a), ey = y + len * Math.sin(a);
-      g.globalAlpha = fade * zoomFade;
-      g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
-      g.beginPath();
-      g.moveTo(X(x - nx * 2), Y(y - ny * 2));
-      g.quadraticCurveTo(X(x + nx * len * 0.5), Y(y + ny * len * 0.5), X(ex), Y(ey));
-      g.stroke();
-      g.fillStyle = 'rgba(240, 140, 215, 0.8)';
-      g.beginPath();
-      g.arc(X(ex), Y(ey), 1.6 * u, 0, Math.PI * 2);
-      g.fill();
+      const lv = Math.round(fade * STEPS);
+      if (lv === 0) continue;
+      const stem = (stems[lv] ??= new Path2D());
+      stem.moveTo(X(x - nx * 2), Y(y - ny * 2));
+      stem.quadraticCurveTo(X(x + nx * len * 0.5), Y(y + ny * len * 0.5), X(ex), Y(ey));
+      const tip = (tips[lv] ??= new Path2D());
+      tip.moveTo(X(ex) + 1.6 * u, Y(ey));
+      tip.arc(X(ex), Y(ey), 1.6 * u, 0, Math.PI * 2);
     }
   }
+  g.lineWidth = 1.4 * u;
+  g.strokeStyle = 'rgba(205, 85, 170, 0.55)';
+  stems.forEach((p, k) => {
+    if (!p) return;
+    g.globalAlpha = (k / STEPS) * zoomFade;
+    g.stroke(p);
+  });
+  g.fillStyle = 'rgba(240, 140, 215, 0.8)';
+  tips.forEach((p, k) => {
+    if (!p) return;
+    g.globalAlpha = (k / STEPS) * zoomFade;
+    g.fill(p);
+  });
   g.globalAlpha = 1;
 }
 
@@ -726,6 +747,8 @@ export class BloomField {
       this.data = new ImageData(W, H);
     }
     const px = this.data.data, c = this.cell;
+    // The cells with any Bloom in them: only that part is scaled onto the view (#130).
+    let i0 = W, i1 = -1, j0 = H, j1 = -1;
     for (let k = 0; k < W * H; k++) {
       const f = this.vals[k];
       const edge = Math.max(0, Math.min(1, (c * 0.5 - f) / c));
@@ -734,21 +757,40 @@ export class BloomField {
       px[k * 4 + 1] = 40 - 26 * d;
       px[k * 4 + 2] = 120 - 60 * d;
       px[k * 4 + 3] = 255 * edge * (0.55 + 0.3 * d);
+      if (edge > 0) {
+        const i = k % W, j = (k - i) / W;
+        if (i < i0) i0 = i;
+        if (i > i1) i1 = i;
+        if (j < j0) j0 = j;
+        if (j > j1) j1 = j;
+      }
     }
+    if (i1 < 0) return;
+    // A cell of clear margin, so the smoothing fades out at the edge as before.
+    i0 = Math.max(0, i0 - 1);
+    j0 = Math.max(0, j0 - 1);
+    i1 = Math.min(W - 1, i1 + 1);
+    j1 = Math.min(H - 1, j1 + 1);
     img.getContext('2d')!.putImageData(this.data, 0, 0);
     g.imageSmoothingEnabled = true;
-    g.drawImage(img, X(this.gx0 * c) - (c * scale) / 2, Y(this.gy0 * c) - (c * scale) / 2, W * c * scale, H * c * scale);
+    const cs = c * scale;
+    g.drawImage(img, i0, j0, i1 - i0 + 1, j1 - j0 + 1, X(this.gx0 * c) - cs / 2 + i0 * cs, Y(this.gy0 * c) - cs / 2 + j0 * cs, (i1 - i0 + 1) * cs, (j1 - j0 + 1) * cs);
+  }
+
+  /** The traced edge as a path (all segments, or only those `keep` accepts), to stroke once or several times. */
+  path(X: (x: number) => number, Y: (y: number) => number, keep?: (x: number, y: number) => boolean): Path2D {
+    const p = new Path2D();
+    for (let i = 0; i < this.nseg * SEG; i += SEG) {
+      if (keep && !keep(this.seg[i], this.seg[i + 1])) continue;
+      p.moveTo(X(this.seg[i]), Y(this.seg[i + 1]));
+      p.lineTo(X(this.seg[i + 2]), Y(this.seg[i + 3]));
+    }
+    return p;
   }
 
   /** Stroke the traced edge (all segments, or only those `keep` accepts). */
   stroke(g: CanvasRenderingContext2D, X: (x: number) => number, Y: (y: number) => number, keep?: (x: number, y: number) => boolean): void {
-    g.beginPath();
-    for (let i = 0; i < this.nseg * SEG; i += SEG) {
-      if (keep && !keep(this.seg[i], this.seg[i + 1])) continue;
-      g.moveTo(X(this.seg[i]), Y(this.seg[i + 1]));
-      g.lineTo(X(this.seg[i + 2]), Y(this.seg[i + 3]));
-    }
-    g.stroke();
+    g.stroke(this.path(X, Y, keep));
   }
 }
 

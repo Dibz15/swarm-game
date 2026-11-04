@@ -11,6 +11,7 @@ import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
 import { MISSIONS, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
+import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
 
 function el(html: string): HTMLDivElement {
   const d = document.createElement('div');
@@ -303,6 +304,7 @@ export function mobileNotice(h: { ok: () => void; desktop: () => void }): HTMLDi
 }
 
 const MODE_LABEL: Record<UiMode, string> = { auto: 'Auto', mobile: 'Mobile', desktop: 'Desktop' };
+const RES_LABEL: Record<Resolution, string> = { sharp: 'Sharp', balanced: 'Balanced', fast: 'Fast' };
 
 /** Interface mode + volume controls, shared by the Settings screen and the pause menu. */
 function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement {
@@ -313,6 +315,9 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
       <h3>Interface</h3>
       <div class="seg" data-a="mode">${UI_MODES.map((v) => `<button data-v="${v}">${MODE_LABEL[v]}</button>`).join('')}</div>
       <p class="hint">Mobile mode uses bigger touch buttons and touch instructions. Auto picks it on phones and tablets.</p>
+      <h3>Resolution</h3>
+      <div class="seg" data-a="res">${RESOLUTIONS.map((v) => `<button data-v="${v}">${RES_LABEL[v]}</button>`).join('')}</div>
+      <p class="hint">On a high-resolution screen, Balanced and Fast draw battles and the campaign map with fewer pixels. Try them if either stutters.</p>
       <h3>Sound</h3>
       <div class="vols">
         ${vol('master', 'Master')}${vol('sfx', 'Effects')}${vol('ambience', 'Ambience')}${vol('music', 'Music')}
@@ -340,6 +345,15 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
     }),
   );
   mark();
+  const res = [...m.querySelectorAll<HTMLButtonElement>('[data-a=res] button')];
+  const markRes = () => res.forEach((b) => b.classList.toggle('on', b.dataset.v === resolution()));
+  res.forEach((b) =>
+    b.addEventListener('click', () => {
+      setResolution(b.dataset.v as Resolution);
+      markRes();
+    }),
+  );
+  markRes();
   m.querySelectorAll<HTMLInputElement>('[data-vol]').forEach((inp) =>
     inp.addEventListener('input', () => audio.setVolume(inp.dataset.vol as VolumeKind, Number(inp.value) / 100)),
   );

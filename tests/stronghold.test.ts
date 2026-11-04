@@ -123,9 +123,10 @@ describe('stronghold nodes', () => {
   });
 
   // A sanity check, not tuning (#68): the human proxy can take a Normal
-  // stronghold's citadel on some seed. Stops at the first win.
+  // stronghold's citadel on some seed. Stops at the first win. (Seeds 0-5 held
+  // one win, until #128's forward links moved that stronghold: hence 0-11.)
   it('can be taken', () => {
-    const win = [0, 1, 2, 3, 4, 5].find((k) => {
+    const win = Array.from({ length: 12 }, (_, k) => k).find((k) => {
       const [run, id] = hold(k);
       run.nodes[id].difficulty = 1;
       for (const b of run.broods) b.size = 16;
