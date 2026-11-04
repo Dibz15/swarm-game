@@ -637,7 +637,7 @@ export function generateMap(p: MapParams): MapSpec {
 /**
  * Key nests (#87): `count` neutral nests, each as far as it can be from the
  * nearest start (so nobody's natural expansion is one), at least KEYS.apart
- * from each other. Their guards are KEYS.garrison times the usual.
+ * from each other where the map has room. Their guards are KEYS.garrison times the usual.
  */
 function markKeys(spec: MapSpec, P: number, count: number): void {
   const caps = spec.nests.slice(0, P);
@@ -648,12 +648,15 @@ function markKeys(spec: MapSpec, P: number, count: number): void {
     .filter((c) => c.n.player < 0)
     .sort((a, b) => b.d - a.d || a.i - b.i);
   const picked: NestSpec[] = [];
-  for (const c of pool) {
-    if (picked.length >= count) break;
-    if (picked.some((k) => d2(k, c.n) < KEYS.apart ** 2)) continue;
-    c.n.key = true;
-    c.n.garrison = Math.round(c.n.garrison * KEYS.garrison);
-    picked.push(c.n);
+  // A crowded map may not fit them KEYS.apart apart: halve the gap until all are placed.
+  for (let apart = KEYS.apart; picked.length < count && apart >= 1; apart = Math.floor(apart / 2)) {
+    for (const c of pool) {
+      if (picked.length >= count) break;
+      if (c.n.key || picked.some((k) => d2(k, c.n) < apart * apart)) continue;
+      c.n.key = true;
+      c.n.garrison = Math.round(c.n.garrison * KEYS.garrison);
+      picked.push(c.n);
+    }
   }
 }
 

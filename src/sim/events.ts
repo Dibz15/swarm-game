@@ -67,13 +67,14 @@ export function updateEvents(w: World): void {
 function updateSurge(w: World): void {
   const s = w.bloomSurge!, ev = w.events!;
   const spawns = ev.spec.swarmSpawns;
+  if (!spawns.length) return;
   if (w.tick === s.warnAt) pushFx(w, 'surgeWarn', w.width / 2, w.height / 2, NEUTRAL, SURGE.warn);
-  if (w.tick !== s.next || !spawns.length) return;
-  const size = Math.round(s.size * dpow(s.grow, s.wave));
+  if (w.tick !== s.next) return;
+  const size = Math.min(SURGE.max, Math.round(s.size * dpow(s.grow, s.wave)));
   for (let k = 0; k < s.swarms; k++) {
     const [sx, sy] = spawns[(s.wave + Math.floor((k * spawns.length) / s.swarms)) % spawns.length];
-    releaseSwarm(w, sx, sy, size, null);
-    pushFx(w, 'bloomSurge', sx, sy, NEUTRAL, size);
+    const sw = releaseSwarm(w, sx, sy, size, null);
+    if (sw.uids.length) pushFx(w, 'bloomSurge', sx, sy, NEUTRAL, sw.uids.length);
   }
   s.wave++;
   s.next += s.every;

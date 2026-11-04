@@ -264,43 +264,39 @@ export function keyTarget(w: World): number {
   return KEYS.points * w.keys.length;
 }
 
-/** Key nests each team holds fully and uncontested: what it scores per tick. */
-function keyRates(w: World): Map<number, number> {
-  const rates = new Map<number, number>();
+/** Key nests team `t` holds fully and uncontested: what it scores per tick. */
+function keyRate(w: World, t: number): number {
+  let rate = 0;
   for (const k of w.keys) {
     const n = w.nests[k];
-    if (n.owner < 0 || n.owner === NEUTRAL || n.control < 1 || n.contested) continue;
-    const t = w.teamOf[n.owner];
-    rates.set(t, (rates.get(t) ?? 0) + 1);
+    if (n.owner >= 0 && n.owner !== NEUTRAL && n.control >= 1 && !n.contested && w.teamOf[n.owner] === t) rate++;
   }
-  return rates;
+  return rate;
 }
 
 /** The team with the highest key-nest score among the living, or -1 if nobody has scored. */
-function keyLeader(w: World, aliveTeams: Set<number>): number {
+function keyLeader(w: World, alive: (t: number) => boolean): number {
   let best = -1;
-  for (const t of aliveTeams) if (w.keyScore[t] > 0 && (best < 0 || w.keyScore[t] > w.keyScore[best])) best = t;
+  for (let t = 0; t < w.keyScore.length; t++) if (w.keyScore[t] > 0 && alive(t) && (best < 0 || w.keyScore[t] > w.keyScore[best])) best = t;
   return best;
 }
 
 /**
  * Key nests (#87), king of the hill: each team scores for every key nest it
- * holds uncontested, and the first to keyTarget wins. The leader past
- * KEYS.threat is marked in domTicks, so bots and the HUD treat it as dominating.
+ * holds uncontested, and the first to keyTarget wins (the higher score, if two
+ * get there in the same check). The leader past KEYS.threat is marked in
+ * domTicks, so bots and the HUD treat it as dominating.
  */
 function keyVictory(w: World, aliveTeams: Set<number>): void {
   const target = keyTarget(w);
-  for (const [t, rate] of keyRates(w)) {
-    if (!aliveTeams.has(t)) continue;
-    w.keyScore[t] += 15 * rate;
-    if (w.keyScore[t] >= target) {
-      w.over = true;
-      w.winnerTeam = t;
-      w.winReason = 'domination';
-      return;
-    }
+  for (const t of aliveTeams) w.keyScore[t] += 15 * keyRate(w, t);
+  const lead = keyLeader(w, (t) => aliveTeams.has(t));
+  if (lead >= 0 && w.keyScore[lead] >= target) {
+    w.over = true;
+    w.winnerTeam = lead;
+    w.winReason = 'domination';
+    return;
   }
-  const lead = keyLeader(w, aliveTeams);
   const threat = lead >= 0 && w.keyScore[lead] >= KEYS.threat * target ? lead : -1;
   for (let t = 0; t < w.domTicks.length; t++) {
     if (t === threat) {
@@ -336,11 +332,10 @@ export interface DominationStatus {
 export function dominationStatus(w: World): DominationStatus | null {
   if (w.keys.length) {
     // Key nests: the leading scorer, once anyone has scored.
-    let lead = -1;
-    for (let t = 0; t < w.keyScore.length; t++) if (w.keyScore[t] > 0 && (lead < 0 || w.keyScore[t] > w.keyScore[lead])) lead = t;
-    if (lead < 0 || teamFace(w, lead) < 0) return null;
+    const lead = keyLeader(w, (t) => teamFace(w, t) >= 0);
+    if (lead < 0) return null;
     const target = keyTarget(w);
-    const rate = keyRates(w).get(lead) ?? 0;
+    const rate = keyRate(w, lead);
     const togo = Math.max(0, target - w.keyScore[lead]);
     return { team: lead, face: teamFace(w, lead), left: Math.ceil(togo / Math.max(1, rate)), frac: togo / target, held: rate, need: w.keys.length, toBreak: rate, keys: true, paused: rate === 0 };
   }

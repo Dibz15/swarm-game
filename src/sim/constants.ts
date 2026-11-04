@@ -302,7 +302,7 @@ export const KEYS = {
 /**
  * Conquest's late Bloom surge (#87): past `after` seconds, a warning, then a
  * wave of Bloom swarms every `every` seconds from the map's edges, each `grow`
- * times the last, so turtles can't stall a Conquest to the end.
+ * times the last (up to `max` a swarm), so turtles can't stall a Conquest to the end.
  */
 export const SURGE = {
   after: 360,
@@ -312,6 +312,8 @@ export const SURGE = {
   grow: 1.25,
   /** swarms per wave, from spawns spread round the edge */
   swarms: 2,
+  /** no swarm bigger than this, so a long battle's waves can't fill the unit pool */
+  max: 60,
 };
 
 /** Terrain: walls block movement and line of fire; fields change movement and fights. */

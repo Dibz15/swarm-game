@@ -123,6 +123,41 @@ describe('key nests (#87)', () => {
     expect(starts).toBe(1);
     expect(w.domTicks[w.teamOf[me]]).toBeGreaterThanOrEqual(KEYS.threat * keyTarget(w));
   });
+  it('an eliminated leader leaves the HUD to the best living scorer', () => {
+    const [r, id] = nodeOf('domination');
+    const w = createWorld(nodeSetup(r, id));
+    const me = w.factions.findIndex((f) => f.human);
+    const rival = w.factions.findIndex((f, i) => f.active && i !== me && i !== NEUTRAL && w.teamOf[i] !== w.teamOf[me]);
+    w.keyScore[w.teamOf[rival]] = 2000;
+    w.keyScore[w.teamOf[me]] = 1500;
+    for (const f of w.factions) if (f.team === w.teamOf[rival]) f.eliminated = true;
+    expect(dominationStatus(w)?.team).toBe(w.teamOf[me]);
+  });
+
+  it('as the seal opens, a key nest gets back the guards killed while it was sealed', () => {
+    const [r, id] = nodeOf('domination');
+    const w = createWorld(nodeSetup(r, id));
+    const key = w.nests[w.keys[0]];
+    const guards = () => {
+      let g = 0;
+      for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === NEUTRAL && w.wild[i] === 0 && Math.hypot(w.x[i] - key.x, w.y[i] - key.y) <= key.r + 30) g++;
+      return g;
+    };
+    empty(w);
+    expect(guards()).toBe(0);
+    run(w, KEYS.seal + 2);
+    expect(guards()).toBe(key.garrison);
+  });
+
+  it('every Domination node gets all its key nests', () => {
+    for (let k = 0; k < 20; k++) {
+      const r = newRun(`objectives-${k}`, 0, 'swarm', 0);
+      for (const n of r.nodes.filter((o) => o.kind === 'domination' && o.domain === undefined)) {
+        const setup = nodeSetup(r, n.id);
+        expect(generateMap(mapParamsOf(setup)).nests.filter((s) => s.key).length).toBe(setup.keys);
+      }
+    }
+  });
 });
 
 describe("Conquest's late Bloom surge (#87)", () => {

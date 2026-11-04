@@ -39,7 +39,7 @@ import {
 } from '../campaign/run';
 import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, type Reward } from '../campaign/rewards';
 import { COST, KIND_NAME, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
-import { KEYS, Kind, NestType, TICK_HZ } from '../sim/constants';
+import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
 import { DIFFICULTY_NAMES, type Personality } from '../sim/ai/bot';
@@ -68,8 +68,8 @@ const lossText = (keep: number) => (keep === 0.5 ? 'halved' : `cut to ${Math.rou
 
 const KIND_TEXT: Record<RunNode['kind'], string> = {
   start: 'Where the run began.',
-  conquest: 'Wipe out every rival, or hold 80% of the nests for 30 seconds. Past six minutes, the Bloom surges in, every wave bigger.',
-  domination: 'Score on the key nests: hold them all for 45 seconds, or fewer for longer. Or wipe out every rival.',
+  conquest: `Wipe out every rival, or hold 80% of the nests for 30 seconds. Past ${SURGE.after / 60} minutes, the Bloom surges in, every wave bigger.`,
+  domination: `Score on the key nests: hold them all for ${KEYS.points / TICK_HZ} seconds, or fewer for longer. Or wipe out every rival.`,
   hold: "Dug in behind your own walls: keep your capital until the clock runs out, against the Bloom's waves. Its nests in the field feed them; sally out to take them. Every other wave, pick a boon. Lose the capital and you have 20 seconds to take it back.",
   finale: "The final battle: a large map, the Bloom's heart and the rivals around it. Win it to end the run.",
 };
@@ -950,7 +950,7 @@ export function runMap(
         rows.push(`<dt>Siege</dt><dd>Hold for ${Math.floor(sg.seconds / 60)}:${String(sg.seconds % 60).padStart(2, '0')} · a wave every ${sg.every}s, the first ${sg.size} strong and growing</dd>`);
       }
       // #87: what wins it.
-      if (n.kind === 'domination' && !fortress) rows.push(`<dt>Key nests</dt><dd>${keyNests(n.rivals)}, ringed in gold · sealed for the first ${KEYS.seal / TICK_HZ / 60 === 1 ? 'minute' : `${KEYS.seal / TICK_HZ}s`}, with 50% more guards</dd>`);
+      if (n.kind === 'domination' && !fortress) rows.push(`<dt>Key nests</dt><dd>${keyNests(n.rivals)}, ringed in gold · sealed for the first ${KEYS.seal / TICK_HZ / 60 === 1 ? 'minute' : `${KEYS.seal / TICK_HZ}s`}, with ${Math.round((KEYS.garrison - 1) * 100)}% more guards</dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
       const lord = warlordOf(run, n.id);
       if (lord) {
