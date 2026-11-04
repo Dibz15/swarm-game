@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
 import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { DIFFICULTIES, MAP_H, MAP_W, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
+import { DIFFICULTIES, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 
@@ -93,10 +93,10 @@ describe('campaign run generation', () => {
     expect(newRun('ember-tide-8', 0, 'swarm', 1).nodes).not.toEqual(a.nodes);
   });
 
-  it.each(SEEDS)('%s: 18-24 connected nodes in the map, start left and heart right', (seed) => {
+  it.each(SEEDS)('%s: 24-31 connected nodes in the map, start left and heart right', (seed) => {
     const run = newRun(seed, 0, 'swarm', 0);
-    expect(run.nodes.length).toBeGreaterThanOrEqual(18);
-    expect(run.nodes.length).toBeLessThanOrEqual(24);
+    expect(run.nodes.length).toBeGreaterThanOrEqual(24);
+    expect(run.nodes.length).toBeLessThanOrEqual(31);
     expect(hops(run.nodes, run.start).every((d) => d >= 0)).toBe(true);
     for (const n of run.nodes) {
       expect(n.x).toBeGreaterThan(0);
@@ -115,6 +115,46 @@ describe('campaign run generation', () => {
     expect(run.status).toBe('won');
     expect(run.turn).toBeGreaterThanOrEqual(3);
     expect(run.turn).toBeLessThanOrEqual(14);
+  });
+
+  it.each(SEEDS)('%s: every node has a link ahead of it and closer to the heart (#128)', (seed) => {
+    const run = newRun(seed, 0, 'swarm', 0);
+    const h = run.nodes[run.heart];
+    const d = (n: { x: number; y: number }) => Math.hypot(n.x - h.x, n.y - h.y);
+    for (const n of run.nodes) {
+      if (n.id === run.heart) continue;
+      expect(n.links.some((l) => ahead(run.nodes, run.heart, n.id, l) && d(run.nodes[l]) < d(n))).toBe(true);
+    }
+  });
+
+  it.each(SEEDS)('%s: a new battle is only ever offered ahead of you (#128)', (seed) => {
+    const run = newRun(seed, 0, 'swarm', 0);
+    for (let guard = 0; guard < 60 && run.status === 'active'; guard++) {
+      const options = moves(run);
+      for (const n of options) if (!run.visited.includes(n)) expect(ahead(run.nodes, run.heart, run.at, n)).toBe(true);
+      const fresh = options.filter((n) => !run.visited.includes(n));
+      if (!fresh.length) break;
+      // Wander: take the battle furthest off the line to the heart, to visit odd corners.
+      const h = run.nodes[run.heart], at = run.nodes[run.at];
+      const off = (n: number) => Math.abs((run.nodes[n].x - at.x) * (h.y - at.y) - (run.nodes[n].y - at.y) * (h.x - at.x));
+      resolveTurn(run, fresh.reduce((a, b) => (off(b) > off(a) ? b : a)), WIN, run.broods.map((b) => b.id), 0);
+    }
+  });
+
+  it('you can still march back onto a node you took, but not into a new battle behind you (#128)', () => {
+    for (const seed of SEEDS) {
+      const run = newRun(seed, 0, 'swarm', 0);
+      const behind = run.nodes[run.start].links.find((l) => run.nodes[l].links.some((m) => m !== run.start && !ahead(run.nodes, run.heart, l, m)));
+      if (behind === undefined || !moves(run).includes(behind)) continue;
+      resolveTurn(run, behind, WIN, run.broods.map((b) => b.id), 0);
+      if (run.swallowed.includes(run.start)) continue;
+      const options = moves(run);
+      expect(options).toContain(run.start);
+      const back = run.nodes[behind].links.filter((m) => m !== run.start && !ahead(run.nodes, run.heart, behind, m));
+      for (const m of back) expect(options).not.toContain(m);
+      return;
+    }
+    throw new Error('no seed has a node behind the second step');
   });
 
   it('places a checkpoint on most maps and rescues on some nodes', () => {
