@@ -136,7 +136,8 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 24px 26px;
-  width: min(440px, 100%);
+  /* a little wider on wide screens, so it isn't a narrow strip down the middle */
+  width: min(clamp(440px, 36vw, 600px), 100%);
   box-shadow: 0 20px 80px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(8px);
   max-height: calc(100vh - 32px);
@@ -471,10 +472,10 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   .stats th:nth-child(n+5), .stats td:nth-child(n+5) { display: none; }
 }
 
-.vols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; }
+.vols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 18px; }
 .vol { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #c6cceb; }
-.vol span { width: 72px; }
-.vol input { flex: 1; accent-color: var(--accent); padding: 0; }
+.vol span { flex: none; width: 72px; }
+.vol input { flex: 1; min-width: 0; accent-color: var(--accent); padding: 0; }
 .vol select { flex: 1; min-width: 0; }
 @media (max-width: 720px) { .vols { grid-template-columns: 1fr; } }
 
@@ -770,7 +771,9 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
   .run-row { flex-wrap: wrap; }
 }
 
-.runmap { padding: 0; background: rgba(4, 5, 12, 0.94); backdrop-filter: blur(6px); }
+/* Opaque, no backdrop blur: the menu and its battle pause underneath it (#130). */
+.runmap { padding: 0; background: #04050c; }
+#ui.covered > .menu { visibility: hidden; }
 .runmap-frame {
   width: 100%; height: 100%;
   display: grid;
@@ -789,6 +792,7 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .run-stats { display: flex; gap: 12px; align-items: baseline; }
 .map-wrap { position: relative; min-height: 0; overflow: hidden; }
 .map-wrap > canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.map-fog { pointer-events: none; }
 .map-hint {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   width: min(520px, calc(100% - 32px)); margin: 0; padding: 8px 14px;

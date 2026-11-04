@@ -265,7 +265,11 @@ function scatter(rng: Rng, want: number, lobes: [number, number, number][]): { x
   return best.slice(0, want);
 }
 
-/** Relative neighbourhood graph: a-b is a link unless some c is closer to both. Always connected. */
+/**
+ * Gabriel graph: a-b is a link unless some c lies inside the circle on a-b as
+ * its diameter. Always connected and never crossing, and (#128) with enough
+ * links that most nodes offer more than one way ahead.
+ */
 function link(pts: { x: number; y: number }[]): number[][] {
   const d = (a: number, b: number) => Math.hypot(pts[a].x - pts[b].x, pts[a].y - pts[b].y);
   const links: number[][] = pts.map(() => []);
@@ -274,7 +278,7 @@ function link(pts: { x: number; y: number }[]): number[][] {
       const ab = d(a, b);
       let blocked = false;
       for (let c = 0; c < pts.length && !blocked; c++) {
-        if (c !== a && c !== b && Math.max(d(a, c), d(b, c)) < ab) blocked = true;
+        if (c !== a && c !== b && d(a, c) ** 2 + d(b, c) ** 2 < ab * ab) blocked = true;
       }
       if (!blocked) {
         links[a].push(b);
@@ -283,6 +287,49 @@ function link(pts: { x: number; y: number }[]): number[][] {
     }
   }
   return links;
+}
+
+/**
+ * A new battle must lie ahead of you (#128): within this cosine of the line to
+ * the heart (70 degrees off it at most), so you never fight your way back
+ * toward the start, or sideways across the map.
+ */
+export const AHEAD_COS = Math.cos((70 * Math.PI) / 180);
+
+/** Is `to` ahead of `from`, on the way to `heart`? */
+export function ahead(pts: { x: number; y: number }[], heart: number, from: number, to: number): boolean {
+  if (to === heart) return true;
+  const ax = pts[to].x - pts[from].x, ay = pts[to].y - pts[from].y;
+  const hx = pts[heart].x - pts[from].x, hy = pts[heart].y - pts[from].y;
+  return ax * hx + ay * hy >= AHEAD_COS * Math.hypot(ax, ay) * Math.hypot(hx, hy);
+}
+
+/** Do segments p1-p2 and p3-p4 cross (sharing an end doesn't count)? */
+function crosses(p1: { x: number; y: number }, p2: { x: number; y: number }, p3: { x: number; y: number }, p4: { x: number; y: number }): boolean {
+  const side = (a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+  return side(p1, p2, p3) * side(p1, p2, p4) < 0 && side(p3, p4, p1) * side(p3, p4, p2) < 0;
+}
+
+/**
+ * No dead ends (#128): every node links to one that is ahead of it and closer
+ * to the heart, so stepping ahead always reaches the heart. Where the graph
+ * has none, link the nearest such node (one that crosses no link, if any
+ * does). The heart itself always qualifies. Returns how many links it added.
+ */
+function forwardLinks(pts: { x: number; y: number }[], links: number[][], heart: number): number {
+  const d2 = (a: number, b: number) => (pts[a].x - pts[b].x) ** 2 + (pts[a].y - pts[b].y) ** 2;
+  const good = (a: number, b: number) => ahead(pts, heart, a, b) && d2(b, heart) < d2(a, heart);
+  let added = 0;
+  for (let a = 0; a < pts.length; a++) {
+    if (a === heart || links[a].some((b) => good(a, b))) continue;
+    const pool = pts.map((_, b) => b).filter((b) => b !== a && good(a, b)).sort((x, y) => d2(a, x) - d2(a, y));
+    const clear = (b: number) => !links.some((ls, c) => ls.some((e) => c < e && c !== a && c !== b && e !== a && e !== b && crosses(pts[a], pts[b], pts[c], pts[e])));
+    const b = pool.find(clear) ?? pool[0];
+    links[a].push(b);
+    links[b].push(a);
+    added++;
+  }
+  return added;
 }
 
 /** Hops from `from` to every node, avoiding `blocked`. -1 = unreachable. */
@@ -360,7 +407,7 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
   const seed = hashString(`run:${seedText.trim() || 'swarm'}`);
   const rng = new Rng(seed);
   const lobes: [number, number, number][] = [1, 2, 3].map((k) => [rng.range(0.03, 0.09), k + 1, rng.range(0, Math.PI * 2)]);
-  const pts = scatter(rng, 18 + rng.int(7), lobes);
+  const pts = scatter(rng, 24 + rng.int(8), lobes);
   const links = link(pts);
 
   let start = 0, heart = 0;
@@ -368,6 +415,8 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
     if (p.x < pts[start].x) start = i;
     if (p.x > pts[heart].x) heart = i;
   });
+  // On the rounded positions the nodes keep, so the rule holds exactly as play checks it.
+  forwardLinks(pts.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })), links, heart);
   const nodes: RunNode[] = pts.map((p, i) => ({
     id: i,
     x: Math.round(p.x),
@@ -464,12 +513,20 @@ export function newRun(seedText: string, color: number, pack: PackId = 'swarm', 
  * lost battles at each node. Found by bisection on a simulated walk.
  */
 function paceFor(nodes: RunNode[], start: number, heart: number, b: Bloom, turnsPerHop: number): number {
-  const back = hops(nodes, heart);
-  const route = [start];
-  while (route[route.length - 1] !== heart) {
-    const a = route[route.length - 1];
-    route.push(nodes[a].links.reduce((best, n) => (back[n] < back[best] ? n : best)));
+  // The shortest route stepping only ahead (#128), as a player must.
+  const from = nodes.map(() => -1);
+  from[start] = start;
+  const queue = [start];
+  while (queue.length && from[heart] < 0) {
+    const a = queue.shift()!;
+    for (const b of nodes[a].links) {
+      if (from[b] >= 0 || !ahead(nodes, heart, a, b)) continue;
+      from[b] = a;
+      queue.push(b);
+    }
   }
+  const route = [heart];
+  while (route[0] !== start) route.unshift(from[route[0]]);
   const survives = (step: number): boolean => {
     const t: Bloom = { ...b, step, time: 0, seeds: [] };
     for (let i = 0; i + 1 < route.length; i++) {
@@ -499,10 +556,10 @@ const MAX_STEP = MAP_W / 3;
 
 // ---- turns ----------------------------------------------------------------
 
-/** Nodes you can move to from where you stand. */
+/** Nodes you can move to from where you stand: new battles only ahead of you (#128), but any node you've taken. */
 export function moves(run: RunState): number[] {
   if (run.status !== 'active') return [];
-  return run.nodes[run.at].links.filter((n) => !run.swallowed.includes(n));
+  return run.nodes[run.at].links.filter((n) => !run.swallowed.includes(n) && (!needsBattle(run, n) || ahead(run.nodes, run.heart, run.at, n)));
 }
 
 /** Moving onto a node you already took is a free march: no battle, but the Bloom still advances. */
