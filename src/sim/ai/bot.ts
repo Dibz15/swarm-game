@@ -99,6 +99,8 @@ const NOVA_RESERVE = { minArmy: 30, energy: 25 };
 
 /** Breaking a rival's domination. */
 const DOM_BOT = { value: 3, margin: 1.05 };
+/** Key nests (#87): worth this much more once open; while sealed, only worth staging near. */
+const KEY_BOT = { value: 2.5, sealed: 0.6 };
 /** A warlord's citadel (#100): the share of its army kept there, how close counts as there, how hard and from how far it's defended. */
 const CITADEL_BOT = {
   reserve: 0.15,
@@ -510,6 +512,8 @@ export class Bot {
       if (cit && (n.x - cit.x) ** 2 + (n.y - cit.y) ** 2 > CITADEL_BOT.home ** 2) value *= CITADEL_BOT.far;
       value *= 0.6 + 0.4 * n.level;
       value *= counterBonus[n.type];
+      const key = w.keys.includes(n.id);
+      if (key) value *= w.keySealUntil > w.tick ? KEY_BOT.sealed : KEY_BOT.value;
       let margin = this.d.margin * this.p.margin * (capped ? SUPPLY_BOT.margin : 1);
       if (capped) value *= SUPPLY_BOT.value;
       if (n.owner === NEUTRAL || n.owner < 0) value *= opening ? Math.max(this.p.neutral, OPENING.neutral) : this.p.neutral;
@@ -527,7 +531,8 @@ export class Bot {
           value *= 1 - CROWD.neighbor * (1 - nearestRival / homeDist[n.owner]);
         }
         // A team about to win by domination is everyone's problem.
-        if (w.domTicks[w.teamOf[n.owner]] > 0) {
+        // With key nests, only a key nest slows it.
+        if (w.domTicks[w.teamOf[n.owner]] > 0 && (!w.keys.length || key)) {
           value *= DOM_BOT.value;
           margin = Math.min(margin, DOM_BOT.margin);
         }

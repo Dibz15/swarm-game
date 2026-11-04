@@ -76,9 +76,12 @@ export const UNLOCK_TEXT: Record<string, string> = {
 /** Camp prices (provisional). */
 export const COST = {
   heal: 15,
-  grow: (b: Brood) => 15 + 5 * b.grows,
+  /** rises 10 a grow (#96: it rose 5, and grows were affordable all run) */
+  grow: (b: Brood) => 15 + 10 * b.grows,
   growBy: 4,
   nest: 35,
+  /** each nest type already unlocked adds this to the next (#96) */
+  nestStep: 10,
   nova: 25,
 };
 
@@ -121,6 +124,8 @@ export interface BattleReport {
   /** nests you held at the end */
   nests: number;
   seconds: number;
+  /** a finale's heart at the end: the share of its HP gone (1 if slain) */
+  heart?: number;
 }
 
 /**
@@ -129,7 +134,8 @@ export interface BattleReport {
  * win. Loss: fielded broods are wounded and halved; below MIN_SIZE they die.
  * Broods that sat out heal a battle's worth.
  */
-export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport): BroodEvent[] {
+/** After a loss, each fielded brood keeps `keep` of its size (half; Gentle more, RUN_DIFFICULTY). */
+export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport, keep = 0.5): BroodEvent[] {
   const events: BroodEvent[] = [];
   const out = broods.filter((b) => fielded.includes(b.id));
   for (const b of broods) {
@@ -151,7 +157,7 @@ export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport
     return events;
   }
   for (const b of out) {
-    b.size = Math.floor(b.size / 2);
+    b.size = Math.floor(b.size * keep);
     if (b.size < MIN_SIZE) {
       broods.splice(broods.indexOf(b), 1);
       events.push({ name: b.name, kind: b.kind, what: 'died', size: 0 });
@@ -164,9 +170,13 @@ export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport
 }
 
 /** Biomass for a win: the node's base, nests held, survivors and speed. */
+/** most biomass survivors can add to a win */
+export const SURVIVOR_CAP = 10;
+
 export function biomassFor(base: number, r: BattleReport): number {
   if (!r.won) return 0;
   const survivors = r.survivors.reduce((a, b) => a + b, 0);
   const speed = Math.max(0, Math.round((10 * (240 - r.seconds)) / 240));
-  return base + r.nests + Math.floor(survivors / 5) + speed;
+  // Survivors pay at most SURVIVOR_CAP: they snowballed (#96), a big late win paid 20-40 on top of the node.
+  return base + r.nests + Math.min(SURVIVOR_CAP, Math.floor(survivors / 5)) + speed;
 }

@@ -6,7 +6,7 @@
 import type { AudioEngine } from '../audio/engine';
 import { mountCreatures } from '../art/creature';
 import { BLOOM, BloomField, MapFx, battleMapCanvas, cardMap, bloomGapView, sigilCanvas, drawIcon, glyph, nodeRadius, tendrils, wobble } from './runmapfx';
-import { bloomLabel, rivals, siegeFor, warlordOf, type Rival } from '../campaign/battle';
+import { LONE_WOLF, bloomLabel, keyNests, rivals, siegeFor, warlordOf, type Rival } from '../campaign/battle';
 import { FORTRESS_LABEL } from '../sim/fortify';
 import { STRONGHOLD_WEIGHT, TRAITS, trophyOf } from '../campaign/warlords';
 import { broodCreature, broodTemper } from '../campaign/character';
@@ -40,7 +40,7 @@ import {
 } from '../campaign/run';
 import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, type Reward } from '../campaign/rewards';
 import { COST, KIND_NAME, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
-import { Kind, NestType } from '../sim/constants';
+import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
 import { DIFFICULTY_NAMES, type Personality } from '../sim/ai/bot';
@@ -64,12 +64,20 @@ export const KIND_LABEL: Record<RunNode['kind'], string> = {
   hold: 'Hold the line',
   finale: "The Bloom's heart",
 };
+/** What a lost battle leaves a brood, in words. */
+const lossText = (keep: number) => (keep === 0.5 ? 'halved' : `cut to ${Math.round(keep * 100)}%`);
+
 const KIND_TEXT: Record<RunNode['kind'], string> = {
   start: 'Where the run began.',
+  conquest: `Wipe out every rival, or hold 80% of the nests for 30 seconds. Past ${SURGE.after / 60} minutes, the Bloom surges in, every wave bigger.`,
+  domination: `Score on the key nests: hold them all for ${KEYS.points / TICK_HZ} seconds, or fewer for longer. Or wipe out every rival.`,
+  hold: "Dug in behind your own walls: keep your capital until the clock runs out, against the Bloom's waves. Its nests in the field feed them; sally out to take them. Every other wave, pick a boon. Lose the capital and you have 20 seconds to take it back.",
+  finale: "The final battle: a large map, the Bloom's heart and the rivals around it. Win it to end the run.",
+};
+/** A stronghold's Conquest or Domination keeps the plain share rules (#87: no key nests, no surge). */
+const FORT_TEXT: Partial<Record<RunNode['kind'], string>> = {
   conquest: 'Wipe out every rival, or hold 80% of the nests for 30 seconds.',
   domination: 'Hold half the nests for 30 seconds, or wipe out every rival.',
-  hold: "Dug in behind your own walls: keep your capital until the clock runs out, against the Bloom's waves. Its nests in the field feed them; sally out to take them. Every other wave, pick a boon. Lose the capital and you have 20 seconds to take it back.",
-  finale: 'The final battle: a large map against three Hard rivals. Win it to end the run.',
 };
 
 /** A shape per unit kind, matching the in-battle silhouettes as closely as text allows. */
@@ -710,7 +718,7 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
       return `<article class="unlock-card${own ? ' on' : ''}">
         <span class="icon-art">${unlockIcon(u)}</span>
         <div class="who"><b>${d.name}</b><small>${d.gives}</small><small>Power: ${d.power}</small></div>
-        ${own ? '<span class="state">Unlocked</span>' : price(unlockCost(u), 'Unlock', `unlock:${u}`)}
+        ${own ? '<span class="state">Unlocked</span>' : price(unlockCost(run, u), 'Unlock', `unlock:${u}`)}
       </article>`;
     };
     body.innerHTML = `<p class="hint">Until a nest type is unlocked, it spawns Swarmers for you and gives no power.</p>
@@ -983,6 +991,8 @@ export function runMap(
         const sg = siegeFor(run, n.depth);
         rows.push(`<dt>Siege</dt><dd>Hold for ${Math.floor(sg.seconds / 60)}:${String(sg.seconds % 60).padStart(2, '0')} · a wave every ${sg.every}s, the first ${sg.size} strong and growing</dd>`);
       }
+      // #87: what wins it.
+      if (n.kind === 'domination' && !fortress) rows.push(`<dt>Key nests</dt><dd>${keyNests(n.rivals)}, ringed in gold · sealed for the first ${KEYS.seal / TICK_HZ / 60 === 1 ? 'minute' : `${KEYS.seal / TICK_HZ}s`}, with ${Math.round((KEYS.garrison - 1) * 100)}% more guards</dd>`);
       rows.push(`<dt>Bloom</dt><dd>${bloomLabel(run, n.id)}</dd>`);
       const lord = warlordOf(run, n.id);
       if (lord) {
@@ -1008,7 +1018,7 @@ export function runMap(
     panel.innerHTML = `
       <button class="icon close" data-a="close" aria-label="Close">✕</button>
       <h3 class="with-sigil"><span class="sigil-slot"></span>${fortress ? 'Stronghold' : KIND_LABEL[n.kind]}</h3>
-      <p>${fortress ? `Take the warlord's citadel to win, even with rivals left. Or: ${KIND_TEXT[n.kind].charAt(0).toLowerCase()}${KIND_TEXT[n.kind].slice(1)}` : KIND_TEXT[n.kind]}</p>
+      <p>${fortress ? `Take the warlord's citadel to win, even with rivals left. Or: ${(FORT_TEXT[n.kind] ?? KIND_TEXT[n.kind]).charAt(0).toLowerCase()}${(FORT_TEXT[n.kind] ?? KIND_TEXT[n.kind]).slice(1)}` : KIND_TEXT[n.kind]}</p>
       ${rows.length ? `<dl>${rows.join('')}</dl>` : ''}
       ${status ? `<p class="hint">${status}</p>` : ''}
       ${verb ? `<button class="primary" data-a="go">${verb}</button>` : ''}
@@ -1047,7 +1057,7 @@ export function runMap(
         <button class="icon close" data-a="close" aria-label="Close">✕</button>
         <h3>Field your broods</h3>
         <div class="facing"><span class="hint">Facing</span>${rivalStrip(foes, true)}</div>
-        <p class="hint">${max === 1 ? 'One only (Lone wolf), at double size' : `Up to ${max}`}. They are your starting army: win and they take the survivors of their kind; lose and they're wounded and halved.</p>
+        <p class="hint">${max === 1 ? `One only (Lone wolf), at ${LONE_WOLF}× size, as veterans` : `Up to ${max}`}. They are your starting army: win and they take the survivors of their kind; lose and they're wounded and ${lossText(RUN_DIFFICULTY[difficultyOf(run)].lossKeep)}.</p>
         <div class="brood-list">${rows}</div>
         ${fitOnes.length ? '' : '<p class="hint">Every brood is wounded. A militia of 10 Swarmers fights this one, and no brood is at risk.</p>'}
         <div class="row">
@@ -1260,7 +1270,9 @@ export function runDebrief(run: RunState, node: RunNode, won: boolean, res: Turn
           : 'Your last brood is gone.'
         : won
           ? `${res.warlords.some((w) => w.what === 'broken') ? 'Citadel taken' : `${KIND_LABEL[node.kind]} won`}. +${res.biomass} biomass.`
-          : 'Your swarm falls back. The Bloom advances anyway.';
+          : `Your swarm falls back${res.biomass ? `, salvaging +${res.biomass} biomass` : ''}. ${
+              node.kind === 'finale' && run.heartWound ? `The heart bears its wounds: ${Math.round(100 * run.heartWound)}% of its life is gone. ` : ''
+            }${RUN_DIFFICULTY[difficultyOf(run)].holdOnLoss ? 'The Bloom waits.' : 'The Bloom advances anyway.'}`;
   const events = restored ? [] : res.events;
   const foes = node.kind === 'start' ? [] : rivals(run, node.id);
   const m = el(`

@@ -247,6 +247,15 @@ export function drawBattleMap(g: CanvasRenderingContext2D, m: MapSpec, colorOf: 
       g.arc(X(nest.x), Y(nest.y), unit * 0.04, 0, Math.PI * 2);
       g.stroke();
     }
+    // Key nests (#87): a gold ring, so the card shows what Domination is fought over.
+    if (nest.key) {
+      g.globalAlpha = 1;
+      g.strokeStyle = 'rgb(242, 196, 92)';
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.arc(X(nest.x), Y(nest.y), Math.max(3, unit * 0.03), 0, Math.PI * 2);
+      g.stroke();
+    }
   }
   g.globalAlpha = 1;
 }

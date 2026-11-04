@@ -1,5 +1,5 @@
 import { siegeVictory } from './siege';
-import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, POWER, TERRAIN, VARIANTS, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
+import { BALANCE, DOMINATION, DT, KEYS, ENERGY, ESCALATION, POWER, TERRAIN, VARIANTS, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
 import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
@@ -220,6 +220,11 @@ function checkVictory(w: World): void {
     return;
   }
 
+  if (w.keys.length) {
+    keyVictory(w, aliveTeams);
+    return;
+  }
+
   const need = Math.ceil(w.nests.length * w.domShare);
   for (const t of aliveTeams) {
     if (nestsByTeam[t] >= need) {
@@ -254,6 +259,53 @@ function teamFace(w: World, team: number): number {
   return best;
 }
 
+/** The key-nest score that wins (#87). */
+export function keyTarget(w: World): number {
+  return KEYS.points * w.keys.length;
+}
+
+/** Key nests team `t` holds fully and uncontested: what it scores per tick. */
+function keyRate(w: World, t: number): number {
+  let rate = 0;
+  for (const k of w.keys) {
+    const n = w.nests[k];
+    if (n.owner >= 0 && n.owner !== NEUTRAL && n.control >= 1 && !n.contested && w.teamOf[n.owner] === t) rate++;
+  }
+  return rate;
+}
+
+/** The team with the highest key-nest score among the living, or -1 if nobody has scored. */
+function keyLeader(w: World, alive: (t: number) => boolean): number {
+  let best = -1;
+  for (let t = 0; t < w.keyScore.length; t++) if (w.keyScore[t] > 0 && alive(t) && (best < 0 || w.keyScore[t] > w.keyScore[best])) best = t;
+  return best;
+}
+
+/**
+ * Key nests (#87), king of the hill: each team scores for every key nest it
+ * holds uncontested, and the first to keyTarget wins (the higher score, if two
+ * get there in the same check). The leader past KEYS.threat is marked in
+ * domTicks, so bots and the HUD treat it as dominating.
+ */
+function keyVictory(w: World, aliveTeams: Set<number>): void {
+  const target = keyTarget(w);
+  for (const t of aliveTeams) w.keyScore[t] += 15 * keyRate(w, t);
+  const lead = keyLeader(w, (t) => aliveTeams.has(t));
+  if (lead >= 0 && w.keyScore[lead] >= target) {
+    w.over = true;
+    w.winnerTeam = lead;
+    w.winReason = 'domination';
+    return;
+  }
+  const threat = lead >= 0 && w.keyScore[lead] >= KEYS.threat * target ? lead : -1;
+  for (let t = 0; t < w.domTicks.length; t++) {
+    if (t === threat) {
+      if (w.domTicks[t] === 0) pushFx(w, 'domStart', 0, 0, teamFace(w, t));
+      w.domTicks[t] = w.keyScore[t];
+    } else w.domTicks[t] = 0;
+  }
+}
+
 export interface DominationStatus {
   team: number;
   /** faction to show for the team */
@@ -265,16 +317,35 @@ export interface DominationStatus {
   need: number;
   /** nests rivals must take back to break it */
   toBreak: number;
+  /** how much of the countdown is left, 0–1 */
+  frac: number;
+  /**
+   * key nests (#87): `held` is the key nests the team scores on now, `need` all
+   * of them, and `left` the time to win at that rate (at one key nest when it
+   * scores on none, which is `paused`)
+   */
+  keys?: boolean;
+  paused?: boolean;
 }
 
 /** The team currently dominating, or null. */
 export function dominationStatus(w: World): DominationStatus | null {
+  if (w.keys.length) {
+    // Key nests: the leading scorer, once anyone has scored.
+    const lead = keyLeader(w, (t) => teamFace(w, t) >= 0);
+    if (lead < 0) return null;
+    const target = keyTarget(w);
+    const rate = keyRate(w, lead);
+    const togo = Math.max(0, target - w.keyScore[lead]);
+    return { team: lead, face: teamFace(w, lead), left: Math.ceil(togo / Math.max(1, rate)), frac: togo / target, held: rate, need: w.keys.length, toBreak: rate, keys: true, paused: rate === 0 };
+  }
   for (let t = 0; t < w.domTicks.length; t++) {
     if (w.domTicks[t] <= 0) continue;
     let held = 0;
     for (const n of w.nests) if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === t) held++;
     const need = Math.ceil(w.nests.length * w.domShare);
-    return { team: t, face: teamFace(w, t), left: Math.max(0, DOMINATION.ticks - w.domTicks[t]), held, need, toBreak: Math.max(1, held - need + 1) };
+    const left = Math.max(0, DOMINATION.ticks - w.domTicks[t]);
+    return { team: t, face: teamFace(w, t), left, frac: left / DOMINATION.ticks, held, need, toBreak: Math.max(1, held - need + 1) };
   }
   return null;
 }

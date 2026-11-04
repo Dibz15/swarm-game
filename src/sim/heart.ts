@@ -12,7 +12,7 @@ import { pushFx, spawnUnit, WILD_HEART, WILD_SWARM, type HeartRule, type World }
  * alone, it regrows (but never past a phase it lost). Everything random comes from the events' seeded stream.
  */
 export const HEART = {
-  hp: 2000,
+  hp: 1500,
   /** extra hp per node the Bloom swallowed */
   hpPerStrength: 0.06,
   /** drawn size (the sim uses the Colossus's reach) */
@@ -59,13 +59,15 @@ const crowd = new Map<number, number>();
 const pick = new Map<number, number>();
 
 /** Root the heart near the centre, away from the nests, and wake the Bloom nests around it. */
-export function initHeart(w: World, strength: number, rule: HeartRule): void {
+export function initHeart(w: World, strength: number, rule: HeartRule, wound = 0): void {
   if (!w.events) return;
   const [x, y] = heartSpot(w);
   const s = spawnUnit(w, NEUTRAL, Kind.Colossus, x, y, x, y, 4);
   if (s < 0) return;
   const maxHp = HEART.hp * (1 + HEART.hpPerStrength * strength);
-  w.hp[s] = maxHp;
+  // Wounds from a lost finale (campaign heartCarry): it starts short, in the phase that leaves it.
+  w.hp[s] = maxHp * (1 - wound);
+  const frac = 1 - wound;
   w.wild[s] = WILD_HEART;
   // Only the heart launches Bloom-owned strikes.
   w.factions[NEUTRAL].mods = { ...w.factions[NEUTRAL].mods, barrageBudget: HEART.lobBudget };
@@ -84,7 +86,7 @@ export function initHeart(w: World, strength: number, rule: HeartRule): void {
     maxHp,
     strength,
     rule,
-    phase: 0,
+    phase: frac < 1 / 3 ? 2 : frac < 2 / 3 ? 1 : 0,
     nests,
     // Staggered, so the nests don't all release together.
     nestNext: nests.map((_, k) => t + Math.round((HEART.nestEvery * (0.5 + k / Math.max(1, nests.length))) * TICK_HZ)),

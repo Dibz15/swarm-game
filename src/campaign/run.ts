@@ -16,6 +16,7 @@ import { Kind, NestType } from '../sim/constants';
 import type { CaveLevel, MapSize, TerrainLevel } from '../sim/mapgen';
 import {
   COST,
+  UNLOCKS,
   MAX_FIELDED,
   MAX_ROSTER,
   PACKS,
@@ -50,10 +51,14 @@ const RESCUE_ODDS = 0.25;
 
 /**
  * The run's difficulty, chosen when it starts. Mostly the Bloom: its pace is a
- * share of the fastest the shortest route survives (at Standard's 0.6, one lost
- * battle is almost always survivable and two spread-out ones usually are;
- * measured over 150 seeds). Gentle also holds the Bloom still after a lost
- * battle; the two ends shift the bots a level on some nodes.
+ * share of the fastest the shortest route survives, so the lower it is, the
+ * more lost battles a run can take before the Bloom catches it. Gentle also
+ * holds the Bloom still after a lost battle and costs broods less; the two ends
+ * shift the bots a level on some nodes, and the finale's rivals differ by
+ * difficulty. Three smooth dials scale the rest: rival production, how much
+ * of a lost finale's damage the heart keeps, and the salvage a lost battle
+ * pays. Tuned against the #68 targets (win % at skill 1 / 0.5: Gentle
+ * 90/60, Standard 70/35, Hard 45, Brutal 20).
  * Calibrated with scripts/run-probe.ts against the human proxy's skill dial.
  */
 export type RunDifficulty = 'gentle' | 'standard' | 'hard' | 'brutal';
@@ -64,15 +69,25 @@ export interface DifficultyRules {
   pace: number;
   /** a lost battle doesn't advance the Bloom */
   holdOnLoss: boolean;
-  /** bot difficulty shift: -1 on Normal nodes (Gentle), +1 on Hard nodes and the finale (Brutal) */
+  /** bot difficulty shift: -1 on Normal nodes (Gentle), +1 on Hard nodes (Brutal, whose finale also needs the rivals beaten) */
   bots: -1 | 0 | 1;
+  /** the finale's rivals and their bot difficulty (#68: it was the wall, a quarter of attempts won at 3 Hard rivals) */
+  finale: { rivals: number; difficulty: number };
+  /** share of its size a fielded brood keeps after a lost battle */
+  lossKeep: number;
+  /** rival production, on top of their bot level: a smooth dial where bot levels are steps (#68) */
+  rivalProd: number;
+  /** share of the damage done to the heart in a lost finale that it still bears next time (#68) */
+  heartCarry: number;
+  /** share of the node's reward a lost battle still pays (#68) */
+  salvage: number;
 }
 export const DIFFICULTIES: RunDifficulty[] = ['gentle', 'standard', 'hard', 'brutal'];
 export const RUN_DIFFICULTY: Record<RunDifficulty, DifficultyRules> = {
-  gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, and easier middle battles.', pace: 0.45, holdOnLoss: true, bots: -1 },
-  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.6, holdOnLoss: false, bots: 0 },
-  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.75, holdOnLoss: false, bots: 0 },
-  brutal: { name: 'Brutal', blurb: 'A fast Bloom, and Brutal bots in the late battles and the finale.', pace: 0.8, holdOnLoss: false, bots: 1 },
+  gentle: { name: 'Gentle', blurb: 'A slow Bloom that waits while you recover from a loss, lighter losses, and easier battles.', pace: 0.45, holdOnLoss: true, bots: -1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.75, rivalProd: 0.8, heartCarry: 0.75, salvage: 0.35 },
+  standard: { name: 'Standard', blurb: 'The Bloom leaves room for a lost battle or two.', pace: 0.45, holdOnLoss: false, bots: 0, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5, rivalProd: 0.9, heartCarry: 0.5, salvage: 0.35 },
+  hard: { name: 'Hard', blurb: 'A faster Bloom: little room for losses.', pace: 0.5, holdOnLoss: false, bots: 0, finale: { rivals: 3, difficulty: 2 }, lossKeep: 0.5, rivalProd: 1, heartCarry: 0.25, salvage: 0.2 },
+  brutal: { name: 'Brutal', blurb: 'Hard\'s Bloom, Brutal bots in the late battles, and a finale where the rivals must fall too.', pace: 0.5, holdOnLoss: false, bots: 1, finale: { rivals: 2, difficulty: 2 }, lossKeep: 0.5, rivalProd: 1, heartCarry: 0, salvage: 0 },
 };
 /** saves from before difficulty were Standard */
 export const difficultyOf = (run: { difficulty?: RunDifficulty }): RunDifficulty => run.difficulty ?? 'standard';
@@ -189,6 +204,8 @@ export interface RunState {
   visited: number[];
   /** nodes the Bloom has swallowed */
   swallowed: number[];
+  /** the heart's wounds from lost finales: the share of its HP it starts the next one without (heartCarry) */
+  heartWound?: number;
   bloom: Bloom;
   turn: number;
   /** chosen at the start (older saves: Standard, see difficultyOf) */
@@ -348,7 +365,7 @@ export function inBloom(b: Bloom, x: number, y: number, time = b.time): boolean 
 function battle(node: RunNode, t: number, rng: Rng, rules: DifficultyRules): void {
   if (node.kind === 'start') return;
   if (node.kind === 'finale') {
-    Object.assign(node, { size: 'large', rivals: 3, difficulty: 2 + Math.max(0, rules.bots), caves: rng.pick<CaveLevel>(['off', 'belt']), terrain: 'standard', reward: 0 });
+    Object.assign(node, { size: 'large', ...rules.finale, caves: rng.pick<CaveLevel>(['off', 'belt']), terrain: 'standard', reward: 0 });
     return;
   }
   // One step at a time: a second rival first (still Easy), then Normal bots, then Hard.
@@ -361,7 +378,10 @@ function battle(node: RunNode, t: number, rng: Rng, rules: DifficultyRules): voi
   // Only Normal eases: in an FFA, Hard bots fight each other harder and leave more
   // openings, so easing Hard nodes to Normal made Gentle runs harder in the probe.
   if (rules.bots < 0 && node.difficulty === 1) node.difficulty = 0;
-  if (rules.bots > 0 && node.difficulty === 2) node.difficulty = 3;
+  // Brutal: Brutal bots on the Hard nodes, but at most two of them (three won 9% in the run probe).
+  if (rules.bots > 0 && node.difficulty === 2) (node.difficulty = 3), (node.rivals = Math.min(2, node.rivals));
+  // Gentle: one rival until the bots turn Normal, and never three (after the draw, so the stream stays the same).
+  if (rules.bots < 0) node.rivals = t < 0.4 ? 1 : Math.min(2, node.rivals);
   node.size = node.rivals <= 1 ? 'small' : 'medium';
   node.caves = rng.pick<CaveLevel>(['off', 'off', 'off', 'belt', 'belt', 'full']);
   node.terrain = rng.pick<TerrainLevel>(['light', 'standard', 'standard', 'heavy']);
@@ -528,6 +548,9 @@ function paceFor(nodes: RunNode[], start: number, heart: number, b: Bloom, turns
   return lo;
 }
 
+/** The heart never starts a finale with less than a tenth of its HP. */
+export const HEART_WOUND_MAX = 0.9;
+
 /** The Bloom never grows faster than this a turn. */
 const MAX_STEP = MAP_W / 3;
 
@@ -586,8 +609,10 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
     run.log.push({ turn: run.turn, node: id, won });
     const fought = fighters(run.broods, fielded, maxFielded(run)).map((b) => b.id);
     run.fielded = fought.length ? fought : run.fielded;
-    res.events = settleBroods(run.broods, fought, report);
-    res.biomass = biomassFor(node.reward, report) * (run.perks.includes('hunger') ? 2 : 1);
+    res.events = settleBroods(run.broods, fought, report, RUN_DIFFICULTY[difficultyOf(run)].lossKeep);
+    // A lost battle still pays salvage: a share of the node's reward.
+    const pay = report.won ? biomassFor(node.reward, report) : Math.round(node.reward * RUN_DIFFICULTY[difficultyOf(run)].salvage);
+    res.biomass = pay * (run.perks.includes('hunger') ? 2 : 1);
     run.biomass += res.biomass;
   }
   if (won) {
@@ -610,6 +635,12 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
       run.status = 'won';
       return res;
     }
+  }
+
+  // A lost finale: the heart keeps a share of the wounds you dealt it.
+  if (report && !report.won && id === run.heart && report.heart !== undefined) {
+    const was = run.heartWound ?? 0;
+    run.heartWound = Math.min(HEART_WOUND_MAX, was + RUN_DIFFICULTY[difficultyOf(run)].heartCarry * Math.max(0, report.heart - was));
   }
 
   // Gentle: the Bloom waits while you recover from a lost battle.
@@ -652,7 +683,9 @@ function restoreCheckpoint(run: RunState, now: number): void {
 // ---- camp -----------------------------------------------------------------
 
 export const unlocked = (run: RunState, u: Unlock): boolean => (u === 'nova' ? run.unlocks.nova : !!(run.unlocks.nests & (1 << u)));
-export const unlockCost = (u: Unlock): number => (u === 'nova' ? COST.nova : COST.nest);
+/** Nova's price is fixed; a nest type costs more for each one already unlocked (#96). */
+export const unlockCost = (run: RunState, u: Unlock): number =>
+  u === 'nova' ? COST.nova : COST.nest + COST.nestStep * UNLOCKS.filter((n) => n !== 'nova' && unlocked(run, n)).length;
 
 /** Spend biomass at the camp. Returns false (and changes nothing) if it can't be done. */
 export function heal(run: RunState, broodId: number): boolean {
@@ -673,8 +706,8 @@ export function grow(run: RunState, broodId: number): boolean {
 }
 
 export function unlock(run: RunState, u: Unlock): boolean {
-  if (unlocked(run, u) || run.biomass < unlockCost(u)) return false;
-  run.biomass -= unlockCost(u);
+  if (unlocked(run, u) || run.biomass < unlockCost(run, u)) return false;
+  run.biomass -= unlockCost(run, u);
   if (u === 'nova') run.unlocks.nova = true;
   else run.unlocks.nests |= 1 << u;
   return true;

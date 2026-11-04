@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
-import { COST, MILITIA, MIN_SIZE, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { DIFFICULTIES, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlocked, type RunState } from '../src/campaign/run';
+import { COST, MILITIA, MIN_SIZE, SURVIVOR_CAP, UNLOCKS, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
+import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
+import { DIFFICULTY } from '../src/sim/ai/bot';
+import { heartSlot } from '../src/sim/heart';
+import { createWorld } from '../src/sim/setup';
 
 const SEEDS = Array.from({ length: 60 }, (_, i) => `seed-${i}`);
 const WIN: BattleReport = { won: true, survivors: [30, 12, 12, 12], nests: 6, seconds: 200 };
@@ -26,7 +29,7 @@ const brood = (o: Partial<Brood>): Brood => ({ id: 0, name: 'Test', kind: Kind.D
 describe('the following Bloom (#88)', () => {
   it('fuses into one body: the band swells near your trail and fades with distance', () => {
     const run = newRun('swell', 0, 'swarm', 0);
-    run.bloom.seeds = [{ x: run.bloom.front + 150, y: 300, born: 0 }];
+    const seed = { x: run.bloom.front + 150, y: 300, born: 0 };
     run.bloom.time = 3;
     // How far right the Bloom reaches at height y.
     const reach = (y: number) => {
@@ -34,7 +37,14 @@ describe('the following Bloom (#88)', () => {
       while (bloomGap(run.bloom, x, y) < 0) x += 2;
       return x;
     };
-    expect(reach(300)).toBeGreaterThan(reach(300 + 500) + 50);
+    // How much the seed pushes the band out at height y, over the front's own wobble there.
+    const swell = (y: number) => {
+      run.bloom.seeds = [];
+      const plain = reach(y);
+      run.bloom.seeds = [seed];
+      return reach(y) - plain;
+    };
+    expect(swell(300)).toBeGreaterThan(swell(300 + 500) + 50);
     // Far from the trail, the band barely moves.
     run.bloom.time = 6;
     const far = reach(300 + 900);
@@ -191,9 +201,11 @@ describe('run difficulty', () => {
     }
   });
 
-  it('the Bloom is slower on easier runs, and Gentle holds it still after a loss', () => {
-    const steps = DIFFICULTIES.map((d) => newRun('pace', 0, 'swarm', 0, d).bloom.step);
-    for (let k = 1; k < steps.length; k++) expect(steps[k]).toBeGreaterThan(steps[k - 1]);
+  it('the Bloom is no faster on easier runs (Standard keeps Gentle\'s pace, Brutal Hard\'s), and Gentle holds it still after a loss', () => {
+    const [gentleStep, standardStep, hardStep, brutalStep] = DIFFICULTIES.map((d) => newRun('pace', 0, 'swarm', 0, d).bloom.step);
+    expect(standardStep).toBe(gentleStep);
+    expect(hardStep).toBeGreaterThan(standardStep);
+    expect(brutalStep).toBe(hardStep);
     const gentle = newRun('pace', 0, 'swarm', 0, 'gentle');
     resolveTurn(gentle, moves(gentle)[0], LOSS, gentle.fielded, 0);
     expect(gentle.bloom.time).toBe(0);
@@ -203,12 +215,17 @@ describe('run difficulty', () => {
   });
 
 
-  it('Gentle has no Normal nodes; Brutal puts Brutal bots on the late nodes and the finale', () => {
+  it('Gentle has no Normal nodes; Brutal puts two Brutal bots at most on the late nodes; the finale is per difficulty', () => {
     for (const seed of SEEDS.slice(0, 20)) {
       expect(newRun(seed, 0, 'swarm', 0, 'gentle').nodes.some((n) => n.difficulty === 1)).toBe(false);
       const brutal = newRun(seed, 0, 'swarm', 0, 'brutal');
-      expect(brutal.nodes[brutal.heart].difficulty).toBe(3);
-      expect(brutal.nodes.some((n) => n.difficulty === 2)).toBe(false);
+      const late = brutal.nodes.filter((n) => n.kind !== 'finale' && n.kind !== 'start' && n.kind !== 'hold');
+      expect(late.some((n) => n.difficulty === 2)).toBe(false);
+      expect(late.filter((n) => n.difficulty === 3).every((n) => n.rivals <= 2)).toBe(true);
+      for (const d of DIFFICULTIES) {
+        const run = newRun(seed, 0, 'swarm', 0, d);
+        expect(run.nodes[run.heart]).toMatchObject(RUN_DIFFICULTY[d].finale);
+      }
     }
   });
 
@@ -224,12 +241,45 @@ describe('run difficulty', () => {
     expect(near.bloom).toBe(true);
   });
 
+  it('rivals produce by the run difficulty\'s dial, on top of their bot level', () => {
+    for (const d of DIFFICULTIES) {
+      const run = newRun('dial', 0, 'swarm', 0, d);
+      const node = run.nodes.find((n) => n.kind === 'conquest' && n.domain === undefined)!;
+      const bot = nodeSetup(run, node.id).players[1];
+      expect(bot.prod).toBeCloseTo((DIFFICULTY[node.difficulty].prod ?? 1) * RUN_DIFFICULTY[d].rivalProd);
+    }
+  });
+
+  it('a lost finale leaves the heart wounded by heartCarry of the damage, and the next finale starts it there', () => {
+    for (const d of DIFFICULTIES) {
+      const run = newRun('wound', 0, 'swarm', 0, d);
+      run.at = run.nodes[run.heart].links[0];
+      resolveTurn(run, run.heart, { ...LOSS, heart: 0.6 }, run.fielded, 0);
+      expect(run.heartWound).toBeCloseTo(0.6 * RUN_DIFFICULTY[d].heartCarry);
+      expect(nodeSetup(run, run.heart).heart!.wound).toBeCloseTo(0.6 * RUN_DIFFICULTY[d].heartCarry);
+    }
+    const run = newRun('wound', 0, 'swarm', 0);
+    const w = createWorld({ ...nodeSetup(run, run.heart), heart: { strength: 0, rule: 'heart', wound: 0.5 } });
+    const s = heartSlot(w);
+    expect(w.hp[s] / w.heart!.maxHp).toBeCloseTo(0.5);
+    expect(w.heart!.phase).toBe(1);
+  });
+
+  it('a lost battle pays salvage: a share of the node reward', () => {
+    for (const d of DIFFICULTIES) {
+      const run = newRun('salvage', 0, 'swarm', 0, d);
+      const target = moves(run)[0];
+      const res = resolveTurn(run, target, LOSS, run.fielded, 0);
+      expect(res.biomass).toBe(Math.round(run.nodes[target].reward * RUN_DIFFICULTY[d].salvage));
+    }
+  });
+
   it('the finale has the heart, fed by the swallowed nodes; only Brutal adds the rivals to beat', () => {
     for (const difficulty of DIFFICULTIES) {
       const run = newRun('heart', 0, 'swarm', 0, difficulty);
       run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, 5).map((n) => n.id);
       const setup = nodeSetup(run, run.heart);
-      expect(setup.heart).toEqual({ strength: 5, rule: difficulty === 'brutal' ? 'heart+rivals' : 'heart' });
+      expect(setup.heart).toEqual({ strength: 5, rule: difficulty === 'brutal' ? 'heart+rivals' : 'heart', wound: 0 });
       expect(bloomLabel(run, run.heart)).toBe('The heart, fed by 5 nodes');
       const other = run.nodes.find((n) => n.kind === 'conquest')!;
       expect(nodeSetup(run, other.id).heart).toBeUndefined();
@@ -266,6 +316,12 @@ describe('broods', () => {
     expect(ev.some((e) => e.what === 'veteran' && e.name === a.name)).toBe(true);
   });
 
+  it("a loss costs less on Gentle: a brood keeps RUN_DIFFICULTY's lossKeep of its size", () => {
+    const b = brood({ id: 0, size: 12 });
+    settleBroods([b], [0], LOSS, RUN_DIFFICULTY.gentle.lossKeep);
+    expect(b).toMatchObject({ size: 9, wounded: 1 });
+  });
+
   it('a loss wounds and halves fielded broods and kills small ones; wounds heal by sitting out', () => {
     const big = brood({ id: 0, size: 12 });
     const small = brood({ id: 1, size: 6 });
@@ -300,6 +356,20 @@ describe('broods', () => {
     expect(run.fielded).toEqual([a.id]);
   });
 
+  it('grows and nest unlocks cost more as you buy them (#96)', () => {
+    const run = newRun('prices', 0, 'swarm', 0);
+    run.biomass = 1000;
+    const b = run.broods[0];
+    expect(COST.grow(b)).toBe(15);
+    grow(run, b.id);
+    expect(COST.grow(b)).toBe(25);
+    const nests = UNLOCKS.filter((u) => u !== 'nova' && !unlocked(run, u));
+    const first = unlockCost(run, nests[0]);
+    unlock(run, nests[0]);
+    expect(unlockCost(run, nests[1])).toBe(first + COST.nestStep);
+    expect(unlockCost(run, 'nova')).toBe(COST.nova);
+  });
+
   it('winning a rescue node adds a brood, and biomass rewards nests, survivors and speed', () => {
     const run = newRun('rescue', 0, 'swarm', 0);
     const target = moves(run)[0];
@@ -307,7 +377,7 @@ describe('broods', () => {
     const res = resolveTurn(run, target, WIN, run.fielded, 0);
     expect(run.broods.some((b) => b.kind === Kind.Lancer)).toBe(true);
     expect(res.events.some((e) => e.what === 'rescued')).toBe(true);
-    expect(res.biomass).toBe(run.nodes[target].reward + 6 + Math.floor(66 / 5) + 2);
+    expect(res.biomass).toBe(run.nodes[target].reward + 6 + Math.min(SURVIVOR_CAP, Math.floor(66 / 5)) + 2);
     expect(run.biomass).toBe(res.biomass);
   });
 

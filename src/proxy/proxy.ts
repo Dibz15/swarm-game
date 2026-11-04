@@ -32,6 +32,9 @@ const CITADEL_BLOB = 60;
 /** ...once it outnumbers the hostile units within CITADEL_R of it this many times over */
 const CITADEL_EDGE = 1.5;
 const CITADEL_R = 300;
+/** Key nests (#87): worth this much more as a goal once open; while sealed, a little less (nobody can take them yet). */
+const KEY_VALUE = 3;
+const KEY_SEALED = 0.5;
 /** hostile units this close to its capital send a sieged proxy home (#67) */
 const SIEGE_ALARM = 380;
 
@@ -340,8 +343,15 @@ export class Proxy {
       // recorded human, raid its nests to keep it under the line.
       const leaders = new Set<number>();
       let racing = false;
+      // Key nests (#87): the team past half the winning score is the one to stop.
+      const keyed = w.keys.length > 0;
       for (const [team, k] of held) {
-        if (team === w.teamOf[me] || k < need - this.k.domWatch) continue;
+        if (team === w.teamOf[me]) continue;
+        if (keyed) {
+          if (w.domTicks[team] > 0) leaders.add(team), (racing = true);
+          continue;
+        }
+        if (k < need - this.k.domWatch) continue;
         leaders.add(team);
         if (k >= need) racing = true;
       }
@@ -356,7 +366,9 @@ export class Proxy {
       for (const n of w.nests) {
         if (n.owner === me || (n.owner >= 0 && w.teamOf[n.owner] === w.teamOf[me])) continue;
         const enemy = this.hostile(w, n.owner);
-        const leader = enemy && leaders.has(w.teamOf[n.owner]);
+        const key = keyed && w.keys.includes(n.id);
+        // With key nests, only a key nest slows the leader.
+        const leader = enemy && leaders.has(w.teamOf[n.owner]) && (!keyed || key);
         // Without the upper hand overall, a push must beat the enemy army nearby too.
         let scout = this.k.scout;
         if (enemy) {
@@ -377,6 +389,7 @@ export class Proxy {
         if (leader) score *= racing ? 8 : 3;
         else if (racing) score *= 0.3;
         if (enemy && rivals > 1) score *= ((held.get(w.teamOf[n.owner]) ?? 0) / Math.max(1, most)) ** this.k.buffer;
+        if (key) score *= w.keySealUntil > w.tick ? KEY_SEALED : KEY_VALUE;
         if (n.id === this.goal) score *= 1.4;
         if (score > best) {
           best = score;

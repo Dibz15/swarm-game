@@ -280,6 +280,42 @@ export const DOMINATION = {
   ticks: 30 * TICK_HZ,
 };
 
+/**
+ * Key nests (#87): a campaign Domination battle is scored on its key nests,
+ * king of the hill. Each team scores a point a tick for each key nest it holds
+ * uncontested, and wins at `points` per key nest (all of them held: `points`
+ * ticks; half of them: twice that). Nothing pauses or resets, so a split map
+ * still ends. Past `threat` of the target a team is the one everyone stops.
+ * Key nests sit away from every start, are sealed for the first `seal` ticks
+ * (no one can take them), and start with `garrison` times the guards, so a
+ * rusher can't grab them early.
+ */
+export const KEYS = {
+  points: 45 * TICK_HZ,
+  threat: 0.5,
+  seal: 60 * TICK_HZ,
+  garrison: 1.5,
+  /** key nests are at least this far apart (px) */
+  apart: 220,
+};
+
+/**
+ * Conquest's late Bloom surge (#87): past `after` seconds, a warning, then a
+ * wave of Bloom swarms every `every` seconds from the map's edges, each `grow`
+ * times the last (up to `max` a swarm), so turtles can't stall a Conquest to the end.
+ */
+export const SURGE = {
+  after: 360,
+  warn: 20,
+  every: 30,
+  size: 18,
+  grow: 1.25,
+  /** swarms per wave, from spawns spread round the edge */
+  swarms: 2,
+  /** no swarm bigger than this, so a long battle's waves can't fill the unit pool */
+  max: 60,
+};
+
 /** Terrain: walls block movement and line of fire; fields change movement and fights. */
 export const TERRAIN = {
   /** pathing keeps tile centers this far from walls */

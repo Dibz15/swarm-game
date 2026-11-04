@@ -1,4 +1,4 @@
-import { DOMINATION, Kind, LEVEL, MAX_LEVEL, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS } from './constants';
+import { DOMINATION, KEYS, Kind, LEVEL, MAX_LEVEL, NEST_KIND, NEST_RADIUS, NEUTRAL, NUM_FACTIONS, SURGE, TICK_HZ } from './constants';
 import { defaultMods, type FactionMods } from './mods';
 import { Bot, DIFFICULTY, type BotConfig } from './ai/bot';
 import { generateMap, type MapParams, type MapSpec, type CaveLevel, type CaveParams, type EventLevel, type EventParams, type MapFill, type MapForm, type MapLayout, type MapSize, type TerrainLevel, type TerrainParams } from './mapgen';
@@ -50,10 +50,14 @@ export interface MatchSetup {
   /** share of nests needed for domination, instead of the map size's default */
   domShare?: number;
   /** the Bloom's heart (campaign finale): a rooted boss; strength = nodes the Bloom ate */
-  heart?: { strength: number; rule: HeartRule };
+  heart?: { strength: number; rule: HeartRule; wound?: number };
   /** a warlord's stronghold (#100): this player's capital is a walled citadel; a human taking it wins */
   /** Hold the line (#67): the human, walled in, holds its capital against waves */
   siege?: SiegeSetup;
+  /** key nests (#87, campaign Domination): scoring on them wins, instead of a share */
+  keys?: number;
+  /** Conquest's late Bloom surge (#87): on, with SURGE's timing, waves of this base size */
+  surge?: { size: number };
   stronghold?: {
     player: number;
     /** its starting garrisons (citadel and inner nests) are this many times FORTIFY's: matched to the army you bring */
@@ -73,6 +77,7 @@ export function mapParamsOf(setup: MatchSetup): MapParams {
     layout: setup.layout,
     form: setup.form,
     fill: setup.fill,
+    keys: setup.keys,
     fortress: setup.stronghold?.player ?? (setup.siege ? setup.players.findIndex((p) => p.human) : undefined),
   };
 }
@@ -129,6 +134,7 @@ export function createWorld(setup: MatchSetup): World {
       visited: 0,
     });
     if (setup.stronghold && s.player === setup.stronghold.player && s.capital !== false) w.citadel = id;
+    if (s.key) w.keys.push(id);
 
     // Garrisons are made of the nest's own unit kind (tanks guard forges...).
     const gk = s.player >= 0 || NEST_KIND[s.type] < 0 ? Kind.Dot : NEST_KIND[s.type];
@@ -154,7 +160,12 @@ export function createWorld(setup: MatchSetup): World {
   });
 
   initEvents(w, map.events);
-  if (setup.heart) initHeart(w, setup.heart.strength, setup.heart.rule);
+  if (w.keys.length) w.keySealUntil = KEYS.seal;
+  if (setup.surge && w.events) {
+    const at = SURGE.after * TICK_HZ;
+    w.bloomSurge = { warnAt: at - SURGE.warn * TICK_HZ, next: at, every: SURGE.every * TICK_HZ, size: setup.surge.size, grow: SURGE.grow, swarms: SURGE.swarms, wave: 0 };
+  }
+  if (setup.heart) initHeart(w, setup.heart.strength, setup.heart.rule, setup.heart.wound);
   if (setup.siege) initSiege(w, setup.siege, setup.players.find((p) => p.human)?.faction ?? setup.players[0].faction);
 
   for (const p of setup.players) {

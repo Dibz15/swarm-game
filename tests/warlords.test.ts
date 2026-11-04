@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { STRONGHOLD_PROD, nodeSetup, rivals, warlordOf } from '../src/campaign/battle';
 import { biomassFor, type BattleReport } from '../src/campaign/broods';
 import { modsFor } from '../src/campaign/rewards';
-import { finaleWarlords, newRun, resolveTurn, warlordAt, type RunState } from '../src/campaign/run';
+import { RUN_DIFFICULTY, difficultyOf, finaleWarlords, newRun, resolveTurn, warlordAt, type RunState } from '../src/campaign/run';
 import { DOMAIN_WEIGHT, EROSION, STRONGHOLD_WEIGHT, TRAITS, TROPHY } from '../src/campaign/warlords';
 import { DIFFICULTY } from '../src/sim/ai/bot';
 import { Kind } from '../src/sim/constants';
@@ -84,7 +84,7 @@ describe('domain battles', () => {
     const [run, w] = withTrait('swarmlord');
     const lord = nodeSetup(run, w.stronghold).players[1];
     expect(lord.bot!.powers).toBe(false);
-    expect(lord.prod).toBeCloseTo((DIFFICULTY[lord.bot!.difficulty].prod ?? 1) * 1.25 * STRONGHOLD_PROD);
+    expect(lord.prod).toBeCloseTo((DIFFICULTY[lord.bot!.difficulty].prod ?? 1) * RUN_DIFFICULTY[difficultyOf(run)].rivalProd * 1.25 * STRONGHOLD_PROD);
   });
 
   it('the Bloom eating its domain weakens it; eating the stronghold ends it', () => {

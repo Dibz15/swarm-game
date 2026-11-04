@@ -76,6 +76,7 @@ export function updateNests(w: World): void {
     const hard = w.factions[f]?.unitCap ?? 0;
     if (hard > 0) capOf[f] = Math.min(capOf[f], hard);
   }
+  if (w.keys.length && w.tick === w.keySealUntil) regarrisonKeys(w);
   for (const n of w.nests) {
     updateControl(w, n);
     applyArmor(w, n);
@@ -90,6 +91,31 @@ export function updateNests(w: World): void {
       }
     }
     spawn(w, n);
+  }
+}
+
+/**
+ * As the seal opens (#87), each key nest still neutral gets its guards back up
+ * to full, so killing them while it was sealed buys a rusher nothing.
+ */
+function regarrisonKeys(w: World): void {
+  for (const k of w.keys) {
+    const n = w.nests[k];
+    if (n.owner !== NEUTRAL) continue;
+    // Once a battle, so a plain scan: the grid misses guards spawned this tick.
+    const r2 = (n.r + 30) * (n.r + 30);
+    let guards = 0;
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.owner[i] !== NEUTRAL || w.wild[i] !== 0) continue;
+      const dx = w.x[i] - n.x, dy = w.y[i] - n.y;
+      if (dx * dx + dy * dy <= r2) guards++;
+    }
+    const kind = NEST_KIND[n.type] < 0 ? Kind.Dot : NEST_KIND[n.type];
+    for (let g = guards; g < n.garrison; g++) {
+      const a = (g / n.garrison) * TAU;
+      const x = n.x + dcos(a) * n.r * 0.7, y = n.y + dsin(a) * n.r * 0.7;
+      spawnUnit(w, NEUTRAL, kind, x, y, x, y, 6);
+    }
   }
 }
 
@@ -147,6 +173,8 @@ function updateControl(w: World, n: Nest): void {
   n.contested = multiTeam || (teamA !== -1 && teamA !== ownerTeam);
 
   if (multiTeam) return; // fighting on the nest freezes control
+  // A key nest (#87) can't be taken while it's sealed.
+  if (w.keySealUntil > w.tick && w.keys.includes(n.id)) return;
 
   if (teamA === -1) {
     // Nobody here: owned nests recover, unowned ones decay.
