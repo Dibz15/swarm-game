@@ -683,9 +683,9 @@ function restoreCheckpoint(run: RunState, now: number): void {
 // ---- camp -----------------------------------------------------------------
 
 export const unlocked = (run: RunState, u: Unlock): boolean => (u === 'nova' ? run.unlocks.nova : !!(run.unlocks.nests & (1 << u)));
-/** Nova's price is fixed; a nest type costs more for each one already unlocked (#96). */
+/** Nova's price is fixed; a nest type costs COST.nestRise times more for each one already unlocked (#96, #133). */
 export const unlockCost = (run: RunState, u: Unlock): number =>
-  u === 'nova' ? COST.nova : COST.nest + COST.nestStep * UNLOCKS.filter((n) => n !== 'nova' && unlocked(run, n)).length;
+  u === 'nova' ? COST.nova : Math.round(COST.nest * COST.nestRise ** UNLOCKS.filter((n) => n !== 'nova' && unlocked(run, n)).length);
 
 /** Spend biomass at the camp. Returns false (and changes nothing) if it can't be done. */
 export function heal(run: RunState, broodId: number): boolean {

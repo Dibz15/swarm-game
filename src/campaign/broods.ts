@@ -79,9 +79,9 @@ export const COST = {
   /** rises 10 a grow (#96: it rose 5, and grows were affordable all run) */
   grow: (b: Brood) => 15 + 10 * b.grows,
   growBy: 4,
-  nest: 35,
-  /** each nest type already unlocked adds this to the next (#96) */
-  nestStep: 10,
+  nest: 40,
+  /** each nest type already unlocked multiplies the next one's price by this (#133: +10 each, and all four came by battle 3) */
+  nestRise: 1.6,
   nova: 25,
 };
 

@@ -366,7 +366,7 @@ describe('broods', () => {
     const nests = UNLOCKS.filter((u) => u !== 'nova' && !unlocked(run, u));
     const first = unlockCost(run, nests[0]);
     unlock(run, nests[0]);
-    expect(unlockCost(run, nests[1])).toBe(first + COST.nestStep);
+    expect(unlockCost(run, nests[1])).toBe(Math.round(first * COST.nestRise));
     expect(unlockCost(run, 'nova')).toBe(COST.nova);
   });
 
