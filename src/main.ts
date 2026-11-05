@@ -24,7 +24,7 @@ import { fortressGrid } from './ui/fortressGrid';
 import { mapGrid } from './ui/mapGrid';
 import { FORTIFY } from './sim/fortify';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
-import { rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
+import { recruitPick, rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
@@ -267,7 +267,11 @@ class App {
 
   private showRunMap(run: RunState, intro: MapIntro | null = null): void {
     if (this.game) this.showMenu();
-    // A reward waiting to be picked comes first (also when resuming a run).
+    // A rescued brood waiting for a place, then a reward waiting to be picked, come first (also when resuming a run).
+    if (run.recruit && run.status === 'active') {
+      this.setModal(recruitPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro) }));
+      return;
+    }
     if (run.offer && run.status === 'active') {
       this.setModal(rewardPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro) }));
       return;

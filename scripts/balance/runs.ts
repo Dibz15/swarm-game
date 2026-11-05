@@ -5,9 +5,9 @@
 // (model.ts). The run logic stays on the main thread, so many runs share the
 // pool at once.
 import { nodeSetup } from '../../src/campaign/battle';
-import { COST, KIND_NEST, UNLOCKS, fit, type PackId, type Unlock } from '../../src/campaign/broods';
+import { COST, KIND_NEST, MIN_SIZE, UNLOCKS, fit, type PackId, type Unlock } from '../../src/campaign/broods';
 import { REWARD, STRAIN_SLOTS, TIER_WEIGHT } from '../../src/campaign/rewards';
-import { type RunDifficulty, bloomStrength, grow, heal, hops, maxFielded, moves, needsBattle, newRun, pressure, resolveTurn, takeReward, unlock, unlockCost, unlocked, warlordFighting, type RunState } from '../../src/campaign/run';
+import { type RunDifficulty, bloomStrength, grow, heal, hops, maxFielded, moves, needsBattle, newRun, pressure, resolveTurn, skipRecruit, takeRecruit, takeReward, unlock, unlockCost, unlocked, warlordFighting, type RunState } from '../../src/campaign/run';
 import type { ProxyKnobs } from '../../src/proxy/proxy';
 import { CAP, classOf, type BattleClass, type Fight, type Result } from './battle';
 import type { Pool } from './pool';
@@ -67,6 +67,14 @@ export interface RunOutcome {
   lords: { broken: number; eaten: number; fought: number; avoided: number; battles: number; wins: number };
   /** battles won by the camp where every nest type was first owned (#133), or undefined if never */
   allNests?: number;
+  /** broods settled after a win, and how many of those ended at MIN_SIZE (#134: the stall) */
+  settled: number;
+  atMin: number;
+  /** broods small (at most MIN_SIZE + 2) after three or more wins in a row: stuck */
+  stuck: number;
+  /** rescues swapped in for a brood, and let go (#134) */
+  swaps: number;
+  passed: number;
 }
 
 export interface Camp {
@@ -116,6 +124,16 @@ export function pickMove(run: RunState): number {
   return options.reduce((a, b) => (rank(b) < rank(a) ? b : a));
 }
 
+/** A rescued brood waiting with the roster full (#134): swap out the smallest brood if it's smaller, else let it go. */
+export function pickRecruit(run: RunState): 'swap' | 'pass' | null {
+  const r = run.recruit;
+  if (!r) return null;
+  const small = [...run.broods].sort((a, b) => a.size - b.size || b.id - a.id)[0];
+  if (small && small.size < r.size && takeRecruit(run, small.id)) return 'swap';
+  skipRecruit(run);
+  return 'pass';
+}
+
 /** Take the offer's best reward: rarer first; strains onto the biggest brood with room. Pacts only when nothing else. */
 export function pickReward(run: RunState): string | null {
   if (!run.offer) return null;
@@ -157,11 +175,15 @@ export async function playRun(fight: Fight | Pool, seed: number, o: RunOptions):
   const run = newRun(`probe-${seed}`, 0, o.pack, 0, o.difficulty);
   const out: RunOutcome = {
     seed, pack: o.pack, status: '', turns: 0, broods: 0, biomass: 0, restored: false, at: 0, depth: 0, far: run.nodes[run.heart].depth,
-    battles: [], curve: [], rewards: [], bought: {}, deaths: 0, rescues: 0, camps: [],
+    battles: [], curve: [], rewards: [], bought: {}, deaths: 0, rescues: 0, camps: [], settled: 0, atMin: 0, stuck: 0, swaps: 0, passed: 0,
     lords: { broken: 0, eaten: 0, fought: 0, avoided: 0, battles: 0, wins: 0 },
   };
   const met = new Set<number>();
+  const small = new Map<string, number>();
   for (let guard = 0; guard < 80 && run.status === 'active'; guard++) {
+    const rec = pickRecruit(run);
+    if (rec === 'swap') out.swaps++;
+    if (rec === 'pass') out.passed++;
     const picked = pickReward(run);
     if (picked) out.rewards.push(picked);
     run.offer = undefined;
@@ -209,6 +231,16 @@ export async function playRun(fight: Fight | Pool, seed: number, o: RunOptions):
     out.curve.push(out.biomass);
     out.deaths += turn.events.filter((e) => e.what === 'died').length;
     out.rescues += turn.events.filter((e) => e.what === 'rescued').length;
+    if (res.won) {
+      const settled = turn.events.filter((e) => e.what === 'grew' || e.what === 'shrank' || e.what === 'held');
+      out.settled += settled.length;
+      out.atMin += settled.filter((e) => e.size <= MIN_SIZE + 2).length;
+      for (const e of settled) {
+        const k = e.size <= MIN_SIZE + 2 ? (small.get(e.name) ?? 0) + 1 : 0;
+        small.set(e.name, k);
+        if (k === 3) out.stuck++;
+      }
+    }
     if (turn.checkpoint === 'restored') out.restored = true;
   }
   for (const w of run.warlords ?? []) {
