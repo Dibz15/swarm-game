@@ -25,7 +25,8 @@ export interface Brood {
 }
 
 export const MAX_FIELDED = 3;
-export const MAX_ROSTER = 6;
+/** #134: six left nothing to choose; a rescue with the roster full is a swap */
+export const MAX_ROSTER = 4;
 /** a brood below this many dots is spent and dies */
 export const MIN_SIZE = 4;
 /** wins before a brood's starting dots spawn as veterans */
@@ -34,6 +35,8 @@ export const VETERAN_WINS = 2;
 export const MILITIA = { kind: Kind.Dot, count: 10 };
 const START = { size: 12, cap: 16 };
 export const RESCUE_SIZE = 8;
+/** a won battle grows every fielded brood this much on top of its survivors (#134: small broods sat at MIN_SIZE all run) */
+export const WIN_GROWTH = 2;
 
 export const KIND_NAME: Record<number, string> = {
   [Kind.Dot]: 'Swarmers',
@@ -121,6 +124,8 @@ export interface BattleReport {
   won: boolean;
   /** your living units of each kind at the end (index = Kind) */
   survivors: number[];
+  /** each brood's own starting units still alive, by brood id (#134); without it, a kind's survivors are shared as new units */
+  own?: Record<number, number>;
   /** nests you held at the end */
   nests: number;
   seconds: number;
@@ -129,9 +134,10 @@ export interface BattleReport {
 }
 
 /**
- * Apply a battle to the roster. Win: each fielded brood takes its share of
- * your surviving units of its kind (at least MIN_SIZE, at most its cap) and a
- * win. Loss: fielded broods are wounded and halved; below MIN_SIZE they die.
+ * Apply a battle to the roster. Win: each fielded brood keeps its own
+ * surviving units, an equal share of the new units of its kind (those no brood
+ * started with), at least MIN_SIZE, then WIN_GROWTH more (at most its cap),
+ * and a win. Loss: fielded broods are wounded and halved; below MIN_SIZE they die.
  * Broods that sat out heal a battle's worth.
  */
 /** After a loss, each fielded brood keeps `keep` of its size (half; Gentle more, RUN_DIFFICULTY). */
@@ -144,12 +150,15 @@ export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport
     if (b.wounded === 0) events.push({ name: b.name, kind: b.kind, what: 'recovered', size: b.size });
   }
   if (r.won) {
+    const own = (b: Brood) => r.own?.[b.id] ?? 0;
     for (const b of out) {
-      const sameKind = out.filter((o) => o.kind === b.kind).length;
-      const share = Math.floor((r.survivors[b.kind] ?? 0) / sameKind);
+      const sameKind = out.filter((o) => o.kind === b.kind);
+      const fresh = Math.max(0, (r.survivors[b.kind] ?? 0) - sameKind.reduce((s, o) => s + own(o), 0));
+      const share = own(b) + Math.floor(fresh / sameKind.length);
       const before = b.size;
       const wasVet = veteran(b);
-      b.size = Math.max(MIN_SIZE, Math.min(b.cap, share));
+      // The growth comes after the floor, so a brood that lost every unit still climbs from MIN_SIZE.
+      b.size = Math.min(b.cap, Math.max(MIN_SIZE, share) + WIN_GROWTH);
       b.wins++;
       events.push({ name: b.name, kind: b.kind, what: b.size > before ? 'grew' : b.size < before ? 'shrank' : 'held', size: b.size });
       if (!wasVet && veteran(b)) events.push({ name: b.name, kind: b.kind, what: 'veteran', size: b.size });

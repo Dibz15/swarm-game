@@ -29,7 +29,9 @@ import {
   RUN_DIFFICULTY,
   difficultyOf,
   type RunDifficulty,
+  skipRecruit,
   skipReward,
+  takeRecruit,
   takeReward,
   unlock,
   unlockCost,
@@ -39,7 +41,7 @@ import {
   type TurnResult,
 } from '../campaign/run';
 import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, type Reward } from '../campaign/rewards';
-import { COST, KIND_NAME, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
+import { COST, KIND_NAME, KIND_NEST, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
 import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
@@ -673,6 +675,13 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
   const price = (cost: number, label: string, act: string) =>
     `<button data-act="${act}" ${run.biomass >= cost ? '' : 'disabled'}>${label} <span class="cost">${cost}</span></button>`;
 
+  /** Why a small brood stays small (#134): its kind's nest type isn't unlocked, so your nests make Swarmers instead. */
+  const smallWhy = (b: Brood) => {
+    const nest = KIND_NEST[b.kind];
+    if (b.size >= b.cap / 2 || b.kind === Kind.Dot || unlocked(run, nest as Unlock)) return '';
+    return `<p class="why">Your nests make Swarmers until you unlock ${UNLOCK_CARD[nest].name}s: unlock them to grow its ${KIND_NAME[b.kind]}.</p>`;
+  };
+
   const broodsTab = () => {
     const card = (b: Brood, i: number) => {
       const { word } = broodTemper(run, b);
@@ -688,6 +697,7 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
         <p class="kind"><span class="glyph">${KIND_GLYPH[b.kind]}</span> ${KIND_NAME[b.kind]} · ${b.wins} win${b.wins === 1 ? '' : 's'}</p>
         <div class="size-bar" title="${b.size} of ${b.cap} dots"><i style="width:${Math.min(100, (100 * b.size) / b.cap)}%"></i><span>${b.size}/${b.cap}</span></div>
         <p class="state">${b.wounded ? `Wounded · sits out ${b.wounded} battle${b.wounded > 1 ? 's' : ''}` : 'Ready to fight'}</p>
+        ${smallWhy(b)}
         <ul class="strains">${slots}</ul>
         <div class="actions">
           ${b.wounded ? price(COST.heal, 'Heal', `heal:${b.id}`) : ''}
@@ -1008,7 +1018,7 @@ export function runMap(
       }
       if (n.reward) {
         const rescue =
-          n.rescue === undefined ? '' : run.broods.length < MAX_ROSTER ? ` · rescue a ${KIND_NAME[n.rescue]} brood` : ` · a ${KIND_NAME[n.rescue]} brood waits, but your roster is full (${MAX_ROSTER})`;
+          n.rescue === undefined ? '' : run.broods.length < MAX_ROSTER ? ` · rescue a ${KIND_NAME[n.rescue]} brood` : ` · a ${KIND_NAME[n.rescue]} brood waits: your roster is full (${MAX_ROSTER}), so you may swap it for one of yours`;
         rows.push(`<dt>Reward</dt><dd>+${n.reward}+ biomass${rescue}</dd>`);
       }
       if (n.checkpoint) rows.push(`<dt>Checkpoint</dt><dd>${run.checkpointUsed ? 'Already used' : 'Reach it to save the run here, once'}</dd>`);
@@ -1057,7 +1067,7 @@ export function runMap(
         <button class="icon close" data-a="close" aria-label="Close">✕</button>
         <h3>Field your broods</h3>
         <div class="facing"><span class="hint">Facing</span>${rivalStrip(foes, true)}</div>
-        <p class="hint">${max === 1 ? `One only (Lone wolf), at ${LONE_WOLF}× size, as veterans` : `Up to ${max}`}. They are your starting army: win and they take the survivors of their kind; lose and they're wounded and ${lossText(RUN_DIFFICULTY[difficultyOf(run)].lossKeep)}.</p>
+        <p class="hint">${max === 1 ? `One only (Lone wolf), at ${LONE_WOLF}× size, as veterans` : `Up to ${max}`}. They are your starting army: win and each keeps its own survivors, a share of the new units of its kind, and 2 more; lose and they're wounded and ${lossText(RUN_DIFFICULTY[difficultyOf(run)].lossKeep)}.</p>
         <div class="brood-list">${rows}</div>
         ${fitOnes.length ? '' : '<p class="hint">Every brood is wounded. A militia of 10 Swarmers fights this one, and no brood is at risk.</p>'}
         <div class="row">
@@ -1372,6 +1382,42 @@ function rewardNote(run: RunState, r: Reward): string {
     return held ? `Replaces ${REWARD[held].name}` : POWER_LABEL[r.power];
   }
   return r.family === 'pact' ? 'A pact: it has a cost' : 'For the rest of the run';
+}
+
+/** After a won rescue with the roster full (#134): swap the rescued brood for one of yours, or let it go. */
+export function recruitPick(run: RunState, sfx: AudioEngine, h: { done: () => void; save: () => void }): HTMLDivElement {
+  const m = el(`<div class="screen modal dim"><div class="card hub reward-card"></div></div>`);
+  const card = m.firstElementChild as HTMLElement;
+  const r = run.recruit!;
+  const rows = run.broods
+    .map(
+      (b) => `<button class="brood-pick" data-b="${b.id}">
+        <span class="glyph">${KIND_GLYPH[b.kind]}</span>
+        <span class="who"><b>Replace ${esc(b.name)}</b><small>${KIND_NAME[b.kind]} · ${b.size}/${b.cap}${b.wounded ? ' · wounded' : ''}${b.wins ? ` · ${b.wins} win${b.wins === 1 ? '' : 's'}` : ''}${strainText(b, ' · ✦ ')}</small></span>
+      </button>`,
+    )
+    .join('');
+  card.innerHTML = `
+    <div class="eyebrow">${esc(run.seedText)} · turn ${run.turn}</div>
+    <h2>A brood wants to join</h2>
+    <p class="hint"><span class="glyph">${KIND_GLYPH[r.kind]}</span> <b>${esc(r.name)}</b>, ${KIND_NAME[r.kind]}, ${r.size}/${r.cap}. Your roster is full (${MAX_ROSTER}): swap it for one of yours, or let it go.</p>
+    <div class="brood-list">${rows}</div>
+    <div class="row end"><button data-a="skip">Let it go</button></div>`;
+  card.querySelectorAll<HTMLButtonElement>('[data-b]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      if (!takeRecruit(run, Number(btn.dataset.b))) return;
+      sfx.mapSelect();
+      h.save();
+      h.done();
+    }),
+  );
+  card.querySelector('[data-a=skip]')!.addEventListener('click', () => {
+    skipRecruit(run);
+    sfx.mapSelect();
+    h.save();
+    h.done();
+  });
+  return m;
 }
 
 /** After a won battle: pick 1 of 3 rewards, reroll for biomass, or skip. */

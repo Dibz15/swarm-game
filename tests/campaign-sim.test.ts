@@ -3,6 +3,7 @@ import { hasPower } from '../src/sim/commands';
 import { ALL_NEST_TYPES, Kind, NestType, TICK_HZ } from '../src/sim/constants';
 import { createWorld, type MatchSetup } from '../src/sim/setup';
 import { step } from '../src/sim/step';
+import { battleReport } from '../src/campaign/battle';
 
 const setup = (human: Partial<MatchSetup['players'][number]>): MatchSetup => ({
   seed: 77,
@@ -29,6 +30,20 @@ describe('campaign battle rules', () => {
     expect(vets).toBe(5);
     // The rival keeps the default army.
     expect(count(w, 1, Kind.Dot)).toBe(10);
+  });
+
+  it("each brood's starting units carry its id, and the report counts each brood's own survivors (#134)", () => {
+    const w = createWorld(setup({ army: [{ kind: Kind.Dot, count: 7, brood: 3 }, { kind: Kind.Tank, count: 5, brood: 8 }, { kind: Kind.Dot, count: 2 }] }));
+    const tagged = (id: number) => {
+      let n = 0;
+      for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === 0 && w.brood[i] === id + 1) n++;
+      return n;
+    };
+    expect(tagged(3)).toBe(7);
+    expect(tagged(8)).toBe(5);
+    const r = battleReport(w, 0, true);
+    expect(r.own).toEqual({ 3: 7, 8: 5 });
+    expect(r.survivors[Kind.Dot]).toBe(9);
   });
 
   it('a locked nest type spawns Swarmers and grants no power', () => {

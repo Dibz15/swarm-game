@@ -21,7 +21,7 @@ export interface PlayerSetup {
   /** production multiplier, instead of the difficulty's (tutorial opponents) */
   prod?: number;
   /** starting army at the capital, instead of START_UNITS Swarmers (campaign broods) */
-  army?: { kind: number; count: number; vet?: boolean }[];
+  army?: { kind: number; count: number; vet?: boolean; brood?: number }[];
   /** bitmask of usable nest types (default: all); locked ones spawn Swarmers and grant no power */
   nestTypes?: number;
   /** stat modifiers (campaign rewards); default: none */
@@ -142,7 +142,7 @@ export function createWorld(setup: MatchSetup): World {
     // A campaign army (broods) replaces it at the player's capital.
     // (Holding the line, your fortress's capital garrison gives way to your broods too.)
     const army = s.player >= 0 && w.nests[id].capital && (!s.garrison || (setup.siege && setup.players[s.player].human)) ? setup.players[s.player].army : undefined;
-    const kinds: { kind: number; vet: boolean }[] = army ? army.flatMap((a) => Array.from({ length: a.count }, () => ({ kind: a.kind, vet: !!a.vet }))) : [];
+    const kinds: { kind: number; vet: boolean; brood?: number }[] = army ? army.flatMap((a) => Array.from({ length: a.count }, () => ({ kind: a.kind, vet: !!a.vet, brood: a.brood }))) : [];
     const hold = setup.stronghold && s.player === setup.stronghold.player ? (setup.stronghold.scale ?? 1) : 1;
     const count = army ? kinds.length : s.player >= 0 ? Math.round((s.garrison || START_UNITS) * hold) : gk === Kind.Tank ? Math.ceil(s.garrison / 2.2) : s.garrison;
     if (s.player < 0) w.nests[id].garrison = count;
@@ -152,6 +152,8 @@ export function createWorld(setup: MatchSetup): World {
       const x = s.x + dcos(a) * rr, y = s.y + dsin(a) * rr;
       const ar = s.player >= 0 ? r + 14 : 6;
       const u = spawnUnit(w, owner, army ? kinds[k].kind : gk, x, y, s.player >= 0 ? s.x : x, s.player >= 0 ? s.y : y, ar);
+      // Campaign broods (#134): each unit knows its brood, so a brood is credited with its own survivors.
+      if (u >= 0 && army && kinds[k].brood !== undefined) w.brood[u] = kinds[k].brood! + 1;
       if (u >= 0 && army && kinds[k].vet) {
         w.vet[u] = 1;
         w.hp[u] *= LEVEL.veteranHp;

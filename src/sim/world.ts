@@ -355,6 +355,8 @@ export class World {
   readonly vet = new Uint8Array(MAX_UNITS);
   /** neutral event units: WILD_SWARM, WILD_COLOSSUS or WILD_HEART, else 0 */
   readonly wild = new Uint8Array(MAX_UNITS);
+  /** a campaign brood's starting unit (#134): its brood id + 1, else 0 */
+  readonly brood = new Int32Array(MAX_UNITS);
 
   readonly free: number[] = [];
   readonly uidToSlot = new Map<number, number>();
@@ -487,6 +489,7 @@ export function spawnUnit(
   w.guard[i] = 0;
   w.ghost[i] = 0;
   w.wild[i] = 0;
+  w.brood[i] = 0;
   w.vet[i] = 0;
   w.attacker[i] = -1;
   w.attackerUid[i] = 0;

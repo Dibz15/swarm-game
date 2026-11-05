@@ -219,6 +219,8 @@ export interface RunState {
   biomass: number;
   /** run-wide rewards: power variants, perks and pacts (ids in rewards.ts) */
   perks: string[];
+  /** a rescued brood waiting for a place (#134): the roster was full, so it's a swap or let it go */
+  recruit?: Brood;
   /** a reward offer waiting to be picked (saved, so reloading shows the same one) */
   offer?: { ids: string[]; rerolls: number; weight?: Record<'common' | 'uncommon' | 'rare', number> };
   /** rival warlords and their domains (#66; older saves have none) */
@@ -616,10 +618,13 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
     run.biomass += res.biomass;
   }
   if (won) {
-    if (report && node.rescue !== undefined && run.broods.length < MAX_ROSTER) {
+    if (report && node.rescue !== undefined) {
       const b = newBrood(run.nextBrood++, node.rescue, run.seed, run.broods.map((o) => o.name), RESCUE_SIZE);
-      run.broods.push(b);
-      res.events.push({ name: b.name, kind: b.kind, what: 'rescued', size: b.size });
+      // A full roster (#134): it waits for a swap.
+      if (run.broods.length < MAX_ROSTER) {
+        run.broods.push(b);
+        res.events.push({ name: b.name, kind: b.kind, what: 'rescued', size: b.size });
+      } else run.recruit = b;
     }
     if (report && lord && lord.stronghold === id && !lord.broken) {
       lord.broken = true;
@@ -661,7 +666,7 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
     return res;
   }
   if (node.checkpoint && won && !run.checkpointSave && !run.checkpointUsed) {
-    run.checkpointSave = JSON.stringify({ ...run, checkpointSave: undefined, log: [], offer: undefined });
+    run.checkpointSave = JSON.stringify({ ...run, checkpointSave: undefined, log: [], offer: undefined, recruit: undefined });
     res.checkpoint = 'reached';
   }
   // After the checkpoint snapshot, so a restore doesn't hand the same pick out twice.
@@ -677,7 +682,7 @@ export function resolveTurn(run: RunState, id: number, report: BattleReport | nu
 function restoreCheckpoint(run: RunState, now: number): void {
   const saved = JSON.parse(run.checkpointSave!) as RunState;
   const log = run.log;
-  Object.assign(run, saved, { log, checkpointSave: undefined, checkpointUsed: true, updated: now, status: 'active', lostTo: undefined, offer: undefined });
+  Object.assign(run, saved, { log, checkpointSave: undefined, checkpointUsed: true, updated: now, status: 'active', lostTo: undefined, offer: undefined, recruit: undefined });
 }
 
 // ---- camp -----------------------------------------------------------------
@@ -731,6 +736,21 @@ export function rerollOffer(run: RunState): boolean {
 
 export function skipReward(run: RunState): void {
   run.offer = undefined;
+}
+
+/** The waiting rescued brood takes `replaceId`'s place in the roster (#134). Returns false if there's no such brood. */
+export function takeRecruit(run: RunState, replaceId: number): boolean {
+  const k = run.broods.findIndex((b) => b.id === replaceId);
+  if (!run.recruit || k < 0) return false;
+  run.broods[k] = run.recruit;
+  run.fielded = run.fielded.filter((id) => id !== replaceId);
+  run.recruit = undefined;
+  return true;
+}
+
+/** Let the waiting rescued brood go. */
+export function skipRecruit(run: RunState): void {
+  run.recruit = undefined;
 }
 
 /**

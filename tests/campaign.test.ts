@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
-import { COST, MILITIA, MIN_SIZE, SURVIVOR_CAP, UNLOCKS, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipReward, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
+import { COST, MAX_ROSTER, MILITIA, MIN_SIZE, SURVIVOR_CAP, UNLOCKS, WIN_GROWTH, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
+import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipRecruit, skipReward, takeRecruit, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 import { DIFFICULTY } from '../src/sim/ai/bot';
@@ -305,15 +305,28 @@ describe('broods', () => {
     expect(new Set(wall.broods.map((b) => b.name)).size).toBe(2);
   });
 
-  it('a win sizes broods from their share of survivors, clamped to the cap, and counts toward veteran', () => {
+  it('a win sizes broods from their share of survivors plus WIN_GROWTH, clamped to the cap, and counts toward veteran', () => {
     const a = brood({ id: 0, kind: Kind.Dot, wins: 1 });
     const b = brood({ id: 1, kind: Kind.Dot, cap: 30 });
     const c = brood({ id: 2, kind: Kind.Tank });
-    const ev = settleBroods([a, b, c], [0, 1, 2], { ...WIN, survivors: [50, 2, 0, 0] });
-    expect(a.size).toBe(16); // 25 each, a's cap is 16
-    expect(b.size).toBe(25);
-    expect(c.size).toBe(MIN_SIZE); // 2 survivors, floored to the minimum
+    // No per-brood counts: a kind's survivors are shared.
+    const ev = settleBroods([a, b, c], [0, 1, 2], { ...WIN, survivors: [50, 0, 0, 0] });
+    expect(a.size).toBe(16); // 25 + 2 each, a's cap is 16
+    expect(b.size).toBe(25 + WIN_GROWTH);
+    expect(c.size).toBe(MIN_SIZE + WIN_GROWTH); // no survivors: the minimum, plus the growth
     expect(ev.some((e) => e.what === 'veteran' && e.name === a.name)).toBe(true);
+  });
+
+  it('a win credits each brood with its own survivors and an even share of new units of its kind (#134)', () => {
+    const a = brood({ id: 0, kind: Kind.Dot, cap: 40 });
+    const b = brood({ id: 1, kind: Kind.Dot, cap: 40 });
+    const c = brood({ id: 2, kind: Kind.Tank, size: 4 });
+    // a kept 10 of its own, b only 1; 8 Swarmers came from nests. c's own 3 lived.
+    settleBroods([a, b, c], [0, 1, 2], { ...WIN, survivors: [19, 3, 0, 0], own: { 0: 10, 1: 1, 2: 3 } });
+    expect(a.size).toBe(10 + 4 + WIN_GROWTH);
+    expect(b.size).toBe(1 + 4 + WIN_GROWTH);
+    // Three of its own lived: floored to the minimum, then it grows.
+    expect(c.size).toBe(MIN_SIZE + WIN_GROWTH);
   });
 
   it("a loss costs less on Gentle: a brood keeps RUN_DIFFICULTY's lossKeep of its size", () => {
@@ -339,7 +352,7 @@ describe('broods', () => {
 
   it('fields up to three fit broods, or the militia when none are fit', () => {
     const run = newRun('army', 0, 'wall', 0);
-    expect(armyFor(run, run.fielded)).toEqual(run.broods.map((b) => ({ kind: b.kind, count: b.size, vet: false })));
+    expect(armyFor(run, run.fielded)).toEqual(run.broods.map((b) => ({ kind: b.kind, count: b.size, vet: false, brood: b.id })));
     for (const b of run.broods) b.wounded = 1;
     expect(armyFor(run, run.fielded)).toEqual([MILITIA]);
     const s = nodeSetup(run, run.nodes[run.start].links[0], run.fielded);
@@ -368,6 +381,30 @@ describe('broods', () => {
     unlock(run, nests[0]);
     expect(unlockCost(run, nests[1])).toBe(Math.round(first * COST.nestRise));
     expect(unlockCost(run, 'nova')).toBe(COST.nova);
+  });
+
+  it('with the roster full, a rescued brood waits for a swap or to be let go (#134)', () => {
+    const run = newRun('recruit', 0, 'swarm', 0);
+    while (run.broods.length < MAX_ROSTER) run.broods.push(brood({ id: run.nextBrood++, name: `B${run.broods.length}` }));
+    const target = moves(run)[0];
+    run.nodes[target].rescue = Kind.Lancer;
+    const res = resolveTurn(run, target, WIN, run.fielded, 0);
+    expect(run.broods.length).toBe(MAX_ROSTER);
+    expect(res.events.some((e) => e.what === 'rescued')).toBe(false);
+    expect(run.recruit?.kind).toBe(Kind.Lancer);
+    const out = run.broods[1];
+    expect(takeRecruit(run, out.id)).toBe(true);
+    expect(run.broods.length).toBe(MAX_ROSTER);
+    expect(run.broods[1].kind).toBe(Kind.Lancer);
+    expect(run.broods.some((b) => b.id === out.id)).toBe(false);
+    expect(run.fielded).not.toContain(out.id);
+    expect(run.recruit).toBeUndefined();
+    // Letting one go leaves the roster as it was.
+    run.recruit = { ...run.broods[0], id: run.nextBrood++ };
+    const before = run.broods.map((b) => b.id);
+    skipRecruit(run);
+    expect(run.recruit).toBeUndefined();
+    expect(run.broods.map((b) => b.id)).toEqual(before);
   });
 
   it('winning a rescue node adds a brood, and biomass rewards nests, survivors and speed', () => {
@@ -534,7 +571,7 @@ describe('rewards', () => {
     takeReward(run, 'lone-wolf');
     expect(maxFielded(run)).toBe(1);
     expect(run.fielded).toHaveLength(1);
-    expect(armyFor(run, run.broods.map((b) => b.id))).toEqual([{ kind: run.broods[0].kind, count: Math.round(run.broods[0].size * LONE_WOLF), vet: true }]);
+    expect(armyFor(run, run.broods.map((b) => b.id))).toEqual([{ kind: run.broods[0].kind, count: Math.round(run.broods[0].size * LONE_WOLF), vet: true, brood: run.broods[0].id }]);
 
     const h = afterWin('pacts');
     const step = h.bloom.step;

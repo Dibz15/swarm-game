@@ -34,11 +34,11 @@ export const keyNests = (rivals: number) => (rivals >= 3 ? 3 : 2);
 export const LONE_WOLF = 3;
 
 /** The fielded broods (fit ones only, at most three) as a starting army; the militia if none. Lone wolf scales it by LONE_WOLF and makes it veterans. */
-export function armyFor(run: RunState, fielded: number[]): { kind: number; count: number; vet?: boolean }[] {
+export function armyFor(run: RunState, fielded: number[]): { kind: number; count: number; vet?: boolean; brood?: number }[] {
   const out = fighters(run.broods, fielded, maxFielded(run));
   const lone = run.perks.includes('lone-wolf');
   const scale = lone ? LONE_WOLF : 1;
-  return out.length ? out.map((b) => ({ kind: b.kind, count: Math.round(b.size * scale), vet: lone || veteran(b) })) : [MILITIA];
+  return out.length ? out.map((b) => ({ kind: b.kind, count: Math.round(b.size * scale), vet: lone || veteran(b), brood: b.id })) : [MILITIA];
 }
 
 /** The match for a run node. Same node, same battle (its seed is fixed). */
@@ -199,12 +199,17 @@ export function bloomLabel(run: RunState, id: number): string {
   return `${word}: ${swarms}${s > 0 && p > 0.2 ? `, ×${swarmScale(s).toFixed(1)} size` : ''}`;
 }
 
-/** How a battle ended for the run: the human's survivors by kind, nests fully held, time. */
+/** How a battle ended for the run: the human's survivors by kind (and each brood's own, #134), nests fully held, time. */
 export function battleReport(w: World, human: number, won: boolean): BattleReport {
   const survivors = [0, 0, 0, 0];
-  for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === human && w.kind[i] < survivors.length) survivors[w.kind[i]]++;
+  const own: Record<number, number> = {};
+  for (let i = 0; i < w.n; i++) {
+    if (!w.alive[i] || w.owner[i] !== human || w.kind[i] >= survivors.length) continue;
+    survivors[w.kind[i]]++;
+    if (w.brood[i] > 0) own[w.brood[i] - 1] = (own[w.brood[i] - 1] ?? 0) + 1;
+  }
   const nests = w.nests.filter((n) => n.owner === human && n.control >= 1).length;
-  const report: BattleReport = { won, survivors, nests, seconds: w.tick / TICK_HZ };
+  const report: BattleReport = { won, survivors, own, nests, seconds: w.tick / TICK_HZ };
   // The finale: how wounded the heart is, for the next attempt (heartCarry).
   if (w.heart) {
     const s = heartSlot(w);
