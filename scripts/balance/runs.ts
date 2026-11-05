@@ -65,6 +65,8 @@ export interface RunOutcome {
   camps: Camp[];
   /** warlords (#66): how each ended up, and domain battles fought and won */
   lords: { broken: number; eaten: number; fought: number; avoided: number; battles: number; wins: number };
+  /** battles won by the camp where every nest type was first owned (#133), or undefined if never */
+  allNests?: number;
 }
 
 export interface Camp {
@@ -165,6 +167,7 @@ export async function playRun(fight: Fight | Pool, seed: number, o: RunOptions):
     run.offer = undefined;
     if (run.turn > 0) out.camps.push({ t: Math.min(1, run.nodes[run.at].depth / out.far), banked: run.biomass, all: run.biomass >= wishCost(run) });
     spend(run, out.bought);
+    if (out.allNests === undefined && UNLOCKS.every((u) => unlocked(run, u))) out.allNests = out.battles.filter((b) => b.won).length;
     const id = pickMove(run);
     const node = run.nodes[id];
     if (!needsBattle(run, id)) {

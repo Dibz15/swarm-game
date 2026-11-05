@@ -721,7 +721,7 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
         ${own ? '<span class="state">Unlocked</span>' : price(unlockCost(run, u), 'Unlock', `unlock:${u}`)}
       </article>`;
     };
-    body.innerHTML = `<p class="hint">Until a nest type is unlocked, it spawns Swarmers for you and gives no power.</p>
+    body.innerHTML = `<p class="hint">Until a nest type is unlocked, it spawns Swarmers for you and gives no power. Each nest type you unlock makes the next one cost more.</p>
       <div class="unlock-cards">${UNLOCKS.map(card).join('')}</div>`;
   };
 

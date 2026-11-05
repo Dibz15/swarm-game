@@ -99,4 +99,7 @@ console.log(`camp: ${Object.entries(bought).sort((a, b) => b[1] - a[1]).map(([k,
 const camps = outcomes.flatMap((o) => o.camps);
 const thirds = [0, 1, 2].map((k) => camps.filter((c) => Math.min(2, Math.floor(c.t * 3)) === k));
 console.log(`camp economy by third of the run: ${thirds.map((cs) => `banked ${avg(cs.map((c) => c.banked)).toFixed(0)}, could buy everything ${pct(cs.filter((c) => c.all).length, cs.length)}`).join(' | ')}`);
+// Nest unlocks (#133): how many wins it takes to own every nest type.
+const all = outcomes.filter((o) => o.allNests !== undefined).map((o) => o.allNests!).sort((a, b) => a - b);
+console.log(`every nest type owned: in ${pct(all.length, runs)} of runs${all.length ? `, after ${all[0]}–${all[all.length - 1]} wins (median ${all[all.length >> 1]})` : ''}`);
 console.log(`\n${pool.summary()}`);
