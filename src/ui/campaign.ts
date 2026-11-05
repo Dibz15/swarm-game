@@ -1067,7 +1067,7 @@ export function runMap(
         <button class="icon close" data-a="close" aria-label="Close">✕</button>
         <h3>Field your broods</h3>
         <div class="facing"><span class="hint">Facing</span>${rivalStrip(foes, true)}</div>
-        <p class="hint">${max === 1 ? `One only (Lone wolf), at ${LONE_WOLF}× size, as veterans` : `Up to ${max}`}. They are your starting army: win and each keeps its own survivors, a share of the new units of its kind, and 2 more; lose and they're wounded and ${lossText(RUN_DIFFICULTY[difficultyOf(run)].lossKeep)}.</p>
+        <p class="hint">${max === 1 ? `One only (Lone wolf), at ${LONE_WOLF}× size, as veterans` : `Up to ${max}`}. They are your starting army: win and each keeps its own survivors, a share of the new units of its kind, and 2 more, but one with none of its kind left is wiped out; lose and they're wounded and ${lossText(RUN_DIFFICULTY[difficultyOf(run)].lossKeep)}.</p>
         <div class="brood-list">${rows}</div>
         ${fitOnes.length ? '' : '<p class="hint">Every brood is wounded. A militia of 10 Swarmers fights this one, and no brood is at risk.</p>'}
         <div class="row">

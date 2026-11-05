@@ -137,7 +137,7 @@ export interface BattleReport {
  * Apply a battle to the roster. Win: each fielded brood keeps its own
  * surviving units, an equal share of the new units of its kind (those no brood
  * started with), at least MIN_SIZE, then WIN_GROWTH more (at most its cap),
- * and a win. Loss: fielded broods are wounded and halved; below MIN_SIZE they die.
+ * and a win; one with none of these left is wiped out. Loss: fielded broods are wounded and halved; below MIN_SIZE they die.
  * Broods that sat out heal a battle's worth.
  */
 /** After a loss, each fielded brood keeps `keep` of its size (half; Gentle more, RUN_DIFFICULTY). */
@@ -155,9 +155,16 @@ export function settleBroods(broods: Brood[], fielded: number[], r: BattleReport
       const sameKind = out.filter((o) => o.kind === b.kind);
       const fresh = Math.max(0, (r.survivors[b.kind] ?? 0) - sameKind.reduce((s, o) => s + own(o), 0));
       const share = own(b) + Math.floor(fresh / sameKind.length);
+      // A brood with none of its units left, its own or its share of the new ones, is gone, win or
+      // not (#134): a platoon wiped out. Its own starting units alone nearly always fall in a long battle.
+      if (share === 0) {
+        broods.splice(broods.indexOf(b), 1);
+        events.push({ name: b.name, kind: b.kind, what: 'died', size: 0 });
+        continue;
+      }
       const before = b.size;
       const wasVet = veteran(b);
-      // The growth comes after the floor, so a brood that lost every unit still climbs from MIN_SIZE.
+      // Any survivor keeps it at MIN_SIZE or more, and a win grows it on top.
       b.size = Math.min(b.cap, Math.max(MIN_SIZE, share) + WIN_GROWTH);
       b.wins++;
       events.push({ name: b.name, kind: b.kind, what: b.size > before ? 'grew' : b.size < before ? 'shrank' : 'held', size: b.size });

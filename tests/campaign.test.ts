@@ -310,10 +310,12 @@ describe('broods', () => {
     const b = brood({ id: 1, kind: Kind.Dot, cap: 30 });
     const c = brood({ id: 2, kind: Kind.Tank });
     // No per-brood counts: a kind's survivors are shared.
-    const ev = settleBroods([a, b, c], [0, 1, 2], { ...WIN, survivors: [50, 0, 0, 0] });
+    const roster = [a, b, c];
+    const ev = settleBroods(roster, [0, 1, 2], { ...WIN, survivors: [50, 1, 0, 0] });
     expect(a.size).toBe(16); // 25 + 2 each, a's cap is 16
     expect(b.size).toBe(25 + WIN_GROWTH);
-    expect(c.size).toBe(MIN_SIZE + WIN_GROWTH); // no survivors: the minimum, plus the growth
+    expect(c.size).toBe(MIN_SIZE + WIN_GROWTH); // one survivor: the minimum, plus the growth
+    expect(roster).toHaveLength(3);
     expect(ev.some((e) => e.what === 'veteran' && e.name === a.name)).toBe(true);
   });
 
@@ -327,6 +329,23 @@ describe('broods', () => {
     expect(b.size).toBe(1 + 4 + WIN_GROWTH);
     // Three of its own lived: floored to the minimum, then it grows.
     expect(c.size).toBe(MIN_SIZE + WIN_GROWTH);
+  });
+
+  it('a win still wipes out a brood with none of its units left, its own or new ones of its kind (#134)', () => {
+    const a = brood({ id: 0, kind: Kind.Dot });
+    const b = brood({ id: 1, kind: Kind.Tank });
+    const s = brood({ id: 3, kind: Kind.Tank });
+    const roster = [a, b, s];
+    // a's own starting units all fell, but nests made 12 Swarmers: they're its now. b's Shields are all gone.
+    const ev = settleBroods(roster, [0, 1], { ...WIN, survivors: [12, 0, 0, 0], own: {} });
+    expect(roster).toEqual([a, s]);
+    expect(a.size).toBe(12 + WIN_GROWTH);
+    expect(ev).toContainEqual({ name: b.name, kind: Kind.Tank, what: 'died', size: 0 });
+    // Without per-brood counts, it goes by the kind's survivors.
+    const c = brood({ id: 2, kind: Kind.Swift });
+    const rest = [c];
+    settleBroods(rest, [2], { ...WIN, survivors: [12, 0, 0, 0] });
+    expect(rest).toHaveLength(0);
   });
 
   it("a loss costs less on Gentle: a brood keeps RUN_DIFFICULTY's lossKeep of its size", () => {
