@@ -931,7 +931,28 @@ button:disabled .cost { color: inherit; }
 .brood-pick.on { border-color: var(--accent); background: rgba(45, 226, 230, 0.14); }
 .brood-pick .glyph, .brood-events .glyph { color: var(--accent); width: 16px; text-align: center; }
 .brood-pick .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 14px; }
-.brood-pick small { color: var(--muted); font-size: 12px; }
+.brood-pick small { color: var(--muted); font-size: 12px; margin-left: 0; }
+/* #109: choosing a strain's brood, with the brood you know from camp */
+.brood-pick.rich { align-items: center; padding: 8px 10px; }
+.brood-pick.rich .portrait { flex: none; width: 48px; height: 48px; border-radius: 50%; background: radial-gradient(circle, rgba(45, 226, 230, 0.12), transparent 70%); }
+.brood-pick.rich .who { gap: 4px; }
+.brood-pick.rich .size-bar { height: 12px; max-width: 160px; }
+.brood-pick.rich .size-bar span { font-size: 10px; line-height: 12px; }
+.brood-pick .pips { display: inline-flex; gap: 3px; margin-right: 6px; vertical-align: middle; }
+.brood-pick .pips i { width: 8px; height: 8px; border-radius: 50%; border: 1px solid rgba(180, 255, 57, 0.6); }
+.brood-pick .pips i.on { background: #b4ff39; box-shadow: 0 0 6px rgba(180, 255, 57, 0.6); }
+.brood-pick .flags { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex: none; }
+.brood-pick .flag { font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
+.brood-pick .flag.hurt { color: var(--hot); border-color: currentColor; }
+.brood-pick .flag.full { color: var(--warn); border-color: currentColor; }
+.strain-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin: 10px 0; align-items: start; }
+.strain-compare .reward { cursor: default; border-style: solid; border-width: 1px 1px 1px 4px; border-radius: 10px; }
+.strain-compare .olds { display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 480px) {
+  .strain-compare { grid-template-columns: minmax(0, 1fr); }
+  .brood-pick .flags { max-width: 90px; }
+  .brood-pick .flag { white-space: normal; text-align: right; }
+}
 .node-card .row { margin-top: 10px; }
 .node-card .row button.grow1 { flex: 1; margin-top: 0; }
 .node-card h3.sub { margin-top: 14px; }
@@ -953,8 +974,22 @@ button:disabled .cost { color: inherit; }
 .reward.uncommon { border-left-color: #2de2e6; }
 .reward.rare { border-left-color: #ffd166; background: rgba(255, 209, 102, 0.06); }
 .reward.rare .tag { color: #ffd166; }
-.reward.pact { border-left-color: #c04a9a; background: rgba(192, 74, 154, 0.08); }
-.reward.pact .tag { color: #e07ac0; }
+/* #109: the family frames the card (and marks its corner); the tier keeps the edge and the tag. */
+.reward .head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.reward .emblem {
+  flex: none; min-width: 30px; display: flex; flex-direction: column; align-items: center;
+  font-size: 26px; line-height: 1; color: var(--fam, var(--muted)); text-shadow: 0 0 10px var(--fam, transparent);
+}
+.reward .emblem i { font-style: normal; font-size: 10px; letter-spacing: 0.04em; margin-top: 3px; text-shadow: none; }
+.reward small { margin-left: 0; }
+.reward.fam-strain { --fam: #b4ff39; border-color: rgba(180, 255, 57, 0.45); background: rgba(180, 255, 57, 0.05); }
+.reward.fam-power { --fam: #c9b4ff; border-color: rgba(201, 180, 255, 0.45); background: rgba(160, 123, 255, 0.07); }
+.reward.fam-pact { --fam: #e07ac0; border-color: rgba(192, 74, 154, 0.55); background: rgba(192, 74, 154, 0.09); }
+.reward.fam-pact .tag { color: #e07ac0; }
+.reward .for { font-size: 13px; color: #b4ff39; }
+.reward .for b { font-size: 13px; }
+.reward .pact-cost { font-size: 13px; color: #f29ad4; }
+.reward .pact-cost b { font-size: 13px; }
 @media (min-width: 640px) {
   .rewards { flex-direction: row; }
   .reward { flex: 1; min-width: 0; }

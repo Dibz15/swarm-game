@@ -25,6 +25,7 @@ import {
   rerollCost,
   rerollOffer,
   revealed,
+  strainHomes,
   warlordAt,
   warlordFighting,
   DIFFICULTIES,
@@ -42,7 +43,7 @@ import {
   type RunState,
   type TurnResult,
 } from '../campaign/run';
-import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, type Reward } from '../campaign/rewards';
+import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, rewardText, type Family, type Reward } from '../campaign/rewards';
 import { COST, KIND_NAME, KIND_NEST, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
 import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
@@ -761,7 +762,7 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
       ? `<div class="unlock-cards">${run.perks
           .map((p) => {
             const r = REWARD[p] ?? trophyOf(p);
-            return `<article class="unlock-card on"><span class="icon-art reward">✦</span><div class="who"><b>${esc(r?.name ?? p)}</b><small>${esc(r?.text ?? '')}</small></div></article>`;
+            return `<article class="unlock-card on"><span class="icon-art reward">✦</span><div class="who"><b>${esc(r?.name ?? p)}</b><small>${esc(r ? rewardText(r) : '')}</small></div></article>`;
           })
           .join('')}</div>`
       : '<p class="hint">No run-wide rewards yet. Win battles to pick them; strains show on their brood\'s card.</p>';
@@ -1395,14 +1396,34 @@ export function starterPick(seed: string, h: { pick: (p: PackId, d: RunDifficult
 
 const TIER_LABEL = { common: 'Common', uncommon: 'Uncommon', rare: 'Rare' } as const;
 
-/** What a reward card says beyond its text: whose it is, and what it replaces. */
+/** What a reward card says beyond its text: where it goes, and what it replaces. */
 function rewardNote(run: RunState, r: Reward): string {
-  if (r.kind !== undefined) return `${KIND_GLYPH[r.kind]} ${KIND_NAME[r.kind]} strain: goes to one brood`;
+  if (r.family === 'strain') {
+    // Which broods could take it (#109): you choose among them next.
+    const homes = strainHomes(run, r.id).map((h) => `${esc(h.brood.name)} (${h.full ? 'full' : `${h.brood.strains.length}/${STRAIN_SLOTS} strains`})`);
+    return homes.length === 1 ? `Goes to ${homes[0]}` : `Goes to one of: ${homes.join(', ')}. You choose next.`;
+  }
   if (r.power) {
     const held = run.perks.find((p) => REWARD[p]?.power === r.power);
-    return held ? `Replaces ${REWARD[held].name}` : POWER_LABEL[r.power];
+    return `Changes ${POWER_LABEL[r.power]}${held ? ` · replaces ${REWARD[held].name}` : ''}`;
   }
-  return r.family === 'pact' ? 'A pact: it has a cost' : 'For the rest of the run';
+  return 'For the rest of the run';
+}
+
+/** Each family's mark in a reward card's corner (#109); a strain shows its unit kind. */
+const FAMILY_MARK: Record<Family, string> = { strain: '✦', power: '⚡', perk: '◎', pact: '⛓' };
+
+/** A reward card: framed by family, its tier on the edge and tag (#109). */
+function rewardCard(run: RunState, r: Reward): string {
+  const mark = r.kind !== undefined ? `${KIND_GLYPH[r.kind]}<i>✦</i>` : r.power ? `${FAMILY_MARK.power}<i>${POWER_LABEL[r.power]}</i>` : FAMILY_MARK[r.family];
+  return `<button class="reward ${r.tier} fam-${r.family}" data-r="${r.id}">
+    <span class="head"><span class="emblem" aria-hidden="true">${mark}</span><span class="tag">${FAMILY_LABEL[r.family]} · ${TIER_LABEL[r.tier]}</span></span>
+    <b>${r.name}</b>
+    ${r.kind !== undefined ? `<span class="for">For your <b>${KIND_NAME[r.kind]}</b></span>` : ''}
+    <span>${r.text}</span>
+    ${r.cost ? `<span class="pact-cost"><b>Cost:</b> ${r.cost}</span>` : ''}
+    <small>${rewardNote(run, r)}</small>
+  </button>`;
 }
 
 /** After a won rescue with the roster full (#134): swap the rescued brood for one of yours, or let it go. */
@@ -1459,17 +1480,7 @@ export function rewardPick(run: RunState, sfx: AudioEngine, h: { done: () => voi
       <div class="eyebrow">${esc(run.seedText)} · turn ${run.turn}</div>
       <h2>Choose a reward</h2>
       <p class="hint">${run.biomass} biomass</p>
-      <div class="rewards">${ids
-        .map((id) => {
-          const r = REWARD[id];
-          return `<button class="reward ${r.tier}${r.family === 'pact' ? ' pact' : ''}" data-r="${id}">
-            <span class="tag">${FAMILY_LABEL[r.family]} · ${TIER_LABEL[r.tier]}</span>
-            <b>${r.name}</b>
-            <span>${r.text}</span>
-            <small>${rewardNote(run, r)}</small>
-          </button>`;
-        })
-        .join('')}</div>
+      <div class="rewards">${ids.map((id) => rewardCard(run, REWARD[id])).join('')}</div>
       <div class="row">
         <button data-a="skip">Skip</button>
         <button class="grow1" data-a="reroll" ${run.biomass >= cost ? '' : 'disabled'}>Reroll · ${cost} biomass</button>
@@ -1495,33 +1506,60 @@ export function rewardPick(run: RunState, sfx: AudioEngine, h: { done: () => voi
     });
   };
 
-  /** A strain: which brood of its kind gets it (and, if that brood is full, what it replaces). */
+  /** A strain: which brood of its kind gets it (#109: portraits, pips, tags), and, if that brood is full, what it gives up. */
   const pickBrood = (r: Reward, full: Brood | null = null) => {
     sfx.mapHover();
-    const mine = run.broods.filter((b) => b.kind === r.kind);
-    const rows = full
-      ? full.strains
-          .map(
-            (s) => `<button class="brood-pick" data-replace="${s}">
-              <span class="glyph">✦</span>
-              <span class="who"><b>Replace ${REWARD[s]?.name ?? s}</b><small>${REWARD[s]?.text ?? ''}</small></span>
-            </button>`,
-          )
-          .join('')
-      : mine
-          .map(
-            (b) => `<button class="brood-pick" data-b="${b.id}" ${b.strains.includes(r.id) ? 'disabled' : ''}>
-              <span class="glyph">${KIND_GLYPH[b.kind]}</span>
-              <span class="who"><b>${esc(b.name)}</b><small>${b.size}/${b.cap}${strainText(b, ' · ✦ ') || ' · no strains yet'}${b.strains.length >= STRAIN_SLOTS ? ' · full' : ''}</small></span>
-            </button>`,
-          )
-          .join('');
-    card.innerHTML = `
-      <div class="eyebrow">${r.name} · ${KIND_NAME[r.kind!]} strain</div>
-      <h2>${full ? `${esc(full.name)} has no room` : 'Which brood?'}</h2>
-      <p class="hint">${full ? `A brood carries ${STRAIN_SLOTS} strains. Pick one to give up for ${r.name}.` : `${r.text}. It changes all the ${KIND_NAME[r.kind!]} you spawn in battles this brood fights.`}</p>
-      <div class="brood-list">${rows}</div>
-      <div class="row end"><button data-a="back">Back</button></div>`;
+    const kind = KIND_NAME[r.kind!];
+    const one = kind.replace(/s$/, '');
+    const back = `<div class="row end"><button data-a="back">Back</button></div>`;
+    if (full) {
+      // Old and new side by side: the new strain, and the ones it could replace.
+      const olds = full.strains
+        .map(
+          (s) => `<button class="brood-pick" data-replace="${s}">
+            <span class="glyph">✦</span>
+            <span class="who"><b>Give up ${esc(REWARD[s]?.name ?? s)}</b><small>${esc(REWARD[s]?.text ?? '')}</small></span>
+          </button>`,
+        )
+        .join('');
+      card.innerHTML = `
+        <div class="eyebrow">${r.name} · ${one} strain</div>
+        <h2>${esc(full.name)} has no room for ${r.name}</h2>
+        <p class="hint">A brood carries ${STRAIN_SLOTS} strains. Give one up for ${r.name}.</p>
+        <div class="strain-compare">
+          <div class="reward ${r.tier} fam-strain new">
+            <span class="head"><span class="emblem" aria-hidden="true">${KIND_GLYPH[r.kind!]}<i>✦</i></span><span class="tag">New strain</span></span>
+            <b>${r.name}</b>
+            <span>${r.text}</span>
+          </div>
+          <div class="olds">${olds}</div>
+        </div>
+        ${back}`;
+    } else {
+      const homes = strainHomes(run, r.id);
+      const pips = (b: Brood) =>
+        Array.from({ length: STRAIN_SLOTS }, (_, k) => `<i class="${b.strains[k] ? 'on' : ''}" title="${b.strains[k] ? esc(REWARD[b.strains[k]]?.name ?? '') : 'empty strain slot'}"></i>`).join('');
+      const rows = homes
+        .map(
+          ({ brood: b, full: f, fielded }, i) => `<button class="brood-pick rich${f ? ' full' : ''}" data-b="${b.id}">
+            <span class="portrait" data-creature="${i}"></span>
+            <span class="who">
+              <b>${esc(b.name)}</b>
+              <span class="size-bar" title="${b.size} of ${b.cap} dots"><i style="width:${Math.min(100, (100 * b.size) / b.cap)}%"></i><span>${b.size}/${b.cap}</span></span>
+              <small><span class="pips">${pips(b)}</span>${strainText(b, '') || 'No strains yet'}</small>
+            </span>
+            <span class="flags">${fielded ? '<span class="flag">fielded</span>' : ''}${b.wounded ? '<span class="flag hurt">wounded</span>' : ''}${f ? '<span class="flag full">full: you\'ll replace one</span>' : ''}</span>
+          </button>`,
+        )
+        .join('');
+      card.innerHTML = `
+        <div class="eyebrow">${r.name} · ${one} strain</div>
+        <h2>Give ${r.name} to which ${one} brood?</h2>
+        <p class="hint">${r.text}. It changes all the ${kind} you spawn in battles that brood fights.</p>
+        <div class="brood-list">${rows}</div>
+        ${back}`;
+      mountCreatures(card, homes.map((h) => broodCreature(run, h.brood)), 48);
+    }
     card.querySelector('[data-a=back]')!.addEventListener('click', () => (full ? pickBrood(r) : offer()));
     card.querySelectorAll<HTMLButtonElement>('[data-b]').forEach((btn) =>
       btn.addEventListener('click', () => {
