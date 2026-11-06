@@ -120,7 +120,8 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
 
     // An ally's nest (#74): a chevron above it, so it reads as friendly by shape, not just colour.
     if (o.allies && n.owner >= 0 && o.allies[n.owner]) {
-      const h = R * 1.6, s = R * 0.48;
+      // Above the outermost ring (key nests reach R×2 with their seal arc, domination R×1.85).
+      const h = R * 2.35, s = R * 0.48;
       const tx = n.x, ty = n.y - h;
       r.beam(tx - s, ty + s * 0.6, tx, ty, 255, 255, 255, 230, 3.4);
       r.beam(tx, ty, tx + s, ty + s * 0.6, 255, 255, 255, 230, 3.4);

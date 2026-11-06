@@ -50,14 +50,27 @@ export function teamLayout(w: World, human: number): TeamLayout {
 export const isAlly = (w: World, human: number, f: number): boolean =>
   f !== human && f >= 0 && f !== NEUTRAL && human >= 0 && w.teamOf[f] === w.teamOf[human];
 
-/** A team's name for text: "Your team", "Magenta + Lime", or "Magenta" when it stands alone. */
-export function teamName(w: World, human: number, f: number): string {
-  if (human >= 0 && w.teamOf[f] === w.teamOf[human]) {
-    return teamLayout(w, human).team ? 'Your team' : FACTION_NAMES[f];
-  }
-  const members = w.factions.filter((x) => x.active && x.id !== NEUTRAL && w.teamOf[x.id] === w.teamOf[f]).map((x) => FACTION_NAMES[x.id]);
-  return members.length > 1 ? members.join(' + ') : FACTION_NAMES[f];
+/** Which side a faction is on, from your seat: null for nobody's (unclaimed, neutral). */
+export type Side = 'you' | 'ally' | 'enemy';
+export function sideOf(w: World, human: number, f: number): Side | null {
+  if (f < 0 || f === NEUTRAL) return null;
+  return f === human ? 'you' : isAlly(w, human, f) ? 'ally' : 'enemy';
 }
+
+/**
+ * A side's name for text, and whether it takes a plural verb: "You" (in
+ * free-for-all) or "Your team" for yours; "Magenta + Lime" for a team of
+ * several; "Magenta" when it stands alone.
+ */
+export function teamName(w: World, human: number, f: number, layout: TeamLayout = teamLayout(w, human)): { name: string; plural: boolean } {
+  if (human >= 0 && w.teamOf[f] === w.teamOf[human]) return layout.team ? { name: 'Your team', plural: false } : { name: 'You', plural: true };
+  const members = layout.groups.find((g) => g.team === w.teamOf[f])?.members ?? [f];
+  return { name: members.map((m) => FACTION_NAMES[m]).join(' + '), plural: members.length > 1 };
+}
+
+/** "is"/"are", "leads"/"lead" and "Magenta's"/"Your" for a team name. */
+export const verb = (t: { plural: boolean }, one: string, many: string): string => (t.plural ? many : one);
+export const possessive = (t: { name: string }): string => (t.name === 'You' ? 'Your' : `${t.name}'s`);
 
 /** One faction in team text: a swatch and its name, ◆ for an ally, struck through once out. */
 function member(w: World, human: number, f: number): string {

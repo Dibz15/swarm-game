@@ -7,7 +7,7 @@ import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import { BLOOM_GLOW, BLOOM_RGB, bloomNestMask, growthTarget, type BloomView } from '../render/bloom';
-import { isAlly, teamLayout, teamName } from '../ui/teams';
+import { isAlly, possessive, teamName, verb } from '../ui/teams';
 import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, KEYS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
 import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, surgeCost } from '../sim/commands';
@@ -682,9 +682,9 @@ export class GameView {
           const keys = w.keys.length;
           // In a team match, name the team (#74).
           const who = teamName(w, this.human, e.f);
-          const are = who.includes(' + ') ? 'are' : 'is';
-          if (mine) toast(keys ? `Halfway to a key-nest win! Keep scoring on the ${keys} key nests` : `${teamLayout(w, this.human).team ? 'Your team is' : 'You are'} dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
-          else toast(keys ? `${who} ${are} halfway to a key-nest win! Take or contest their key nests` : `${who} ${are} dominating! Take back a nest to stop them`, '#ff5d73');
+          const are = verb(who, 'is', 'are');
+          if (mine) toast(keys ? `Halfway to a key-nest win! Keep scoring on the ${keys} key nests` : `${who.name} ${are} dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
+          else toast(keys ? `${who.name} ${are} halfway to a key-nest win! Take or contest their key nests` : `${who.name} ${are} dominating! Take back a nest to stop them`, '#ff5d73');
           for (const n of w.nests) {
             if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === w.teamOf[e.f]) {
               rings.add({ x: n.x, y: n.y, r0: n.r, r1: n.r * 3, dur: 0.8, c: FACTION_RGB[n.owner], thick: 3 });
@@ -695,7 +695,7 @@ export class GameView {
         case 'domBreak': {
           const mine = w.teamOf[e.f] === w.teamOf[this.human];
           sfx.domBreak(mine);
-          toast(mine ? `${teamLayout(w, this.human).team ? "Your team's" : 'Your'} domination was broken` : `${teamName(w, this.human, e.f)}'s domination is broken`, mine ? '#ff5d73' : '#9aa4c7');
+          toast(`${possessive(teamName(w, this.human, e.f))} domination ${mine ? 'was' : 'is'} broken`, mine ? '#ff5d73' : '#9aa4c7');
           break;
         }
         case 'crystal':
