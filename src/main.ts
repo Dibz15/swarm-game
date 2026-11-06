@@ -455,11 +455,14 @@ class App {
     const d = this.demoOverlay;
     const m = g.mission;
     if (!d || !m) return;
-    const key = `${m.step}`;
+    // Once you've done your part and the step waits on the world, the demo stops (#115):
+    // replaying the action then reads as the next thing to do.
+    const waiting = m.waiting({ w: g.world, human: g.human, log: g.session.log });
+    const key = `${m.step}:${waiting}`;
     if (key !== this.demoKey) {
       this.demoKey = key;
       const step = m.current;
-      d.play(step?.demo ? () => step.demo!({ w: g.world, human: g.human, log: g.session.log }) : null);
+      d.play(step?.demo && !waiting ? () => step.demo!(m.ctx({ w: g.world, human: g.human, log: g.session.log })) : null);
     }
     // The demo is decoration: if it ever breaks, drop it rather than the game loop.
     try {
