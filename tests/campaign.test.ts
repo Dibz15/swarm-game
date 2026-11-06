@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
 import { COST, MAX_ROSTER, MILITIA, MIN_SIZE, SURVIVOR_CAP, UNLOCKS, WIN_GROWTH, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, hops, maxFielded, moves, newRun, rerollCost, rerollOffer, resolveTurn, skipRecruit, skipReward, takeRecruit, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
+import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, canStep, hops, maxFielded, moves, newRun, reachable, rerollCost, rerollOffer, resolveTurn, skipRecruit, skipReward, takeRecruit, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 import { DIFFICULTY } from '../src/sim/ai/bot';
@@ -628,5 +628,36 @@ describe('saves', () => {
     resolveTurn(back, moves(back)[0], WIN, back.fielded, 0);
     expect(back.bloom.seeds.length).toBe(1);
     delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
+describe('reachable nodes (#95)', () => {
+  it('holds where you stand, your moves and every node you took; never the Bloom; closed under a step', () => {
+    let missed = 0;
+    for (const seed of SEEDS.slice(0, 20)) {
+      const run = newRun(seed, 0, 'swarm', 0);
+      for (let k = 0; k < 3 && run.status === 'active'; k++) {
+        const reach = reachable(run)!;
+        expect(reach.has(run.at)).toBe(true);
+        for (const m of moves(run)) expect(reach.has(m)).toBe(true);
+        for (const id of run.visited) if (!run.swallowed.includes(id)) expect(reach.has(id)).toBe(true);
+        for (const id of run.swallowed) expect(reach.has(id)).toBe(false);
+        // Nothing outside the set is one step from inside it.
+        for (const a of reach) for (const b of run.nodes[a].links) if (!reach.has(b)) expect(canStep(run, a, b)).toBe(false);
+        missed += run.nodes.filter((n) => !reach.has(n.id) && !run.visited.includes(n.id) && !run.swallowed.includes(n.id)).length;
+        // March to the move nearest the heart, winning.
+        const back = hops(run.nodes, run.heart, (id) => run.swallowed.includes(id));
+        const next = moves(run).reduce((a, b) => (back[b] >= 0 && (back[a] < 0 || back[b] < back[a]) ? b : a));
+        resolveTurn(run, next, run.visited.includes(next) ? null : WIN, run.fielded, 0);
+      }
+    }
+    // Moving on leaves branches behind.
+    expect(missed).toBeGreaterThan(0);
+  });
+
+  it('is null once the run is over: nothing is missed then', () => {
+    const run = rush(newRun('over', 0, 'swarm', 0));
+    expect(run.status).not.toBe('active');
+    expect(reachable(run)).toBeNull();
   });
 });

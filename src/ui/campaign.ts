@@ -19,6 +19,8 @@ import {
   heal,
   maxFielded,
   moves,
+  canStep,
+  reachable,
   needsBattle,
   rerollCost,
   rerollOffer,
@@ -356,6 +358,9 @@ function drawMap(
   const me = FACTION_HEX[run.color];
   const open = new Set(moves(run));
   const isSwallowed = (id: number) => run.swallowed.includes(id) && (!opts.fresh.has(id) || opts.freshT >= 1);
+  // Paths and nodes you passed by (#95) go dim: only what you can still reach stays bright.
+  const reach = opts.thumb ? null : reachable(run);
+  const missed = (id: number) => !!reach && !reach.has(id) && !run.visited.includes(id) && !run.swallowed.includes(id) && id !== run.heart;
 
   // Warlord domains (#66): a soft wash in the warlord's colour over its nodes
   // and the links between them; grey once broken, the Bloom's once eaten.
@@ -390,8 +395,10 @@ function drawMap(
       if (l < n.id || !known.has(l)) continue;
       const fromHere = (n.id === run.at && open.has(l)) || (l === run.at && open.has(n.id));
       const dead = isSwallowed(n.id) || isSwallowed(l);
-      g.strokeStyle = fromHere ? me : dead ? 'rgba(160, 70, 140, 0.25)' : 'rgba(150, 170, 255, 0.28)';
-      g.lineWidth = (fromHere ? 2.5 : 1.5) * u;
+      const live = !reach || (reach.has(n.id) && canStep(run, n.id, l)) || (reach.has(l) && canStep(run, l, n.id));
+      const gone = !fromHere && !dead && !live;
+      g.strokeStyle = fromHere ? me : dead ? 'rgba(160, 70, 140, 0.25)' : gone ? 'rgba(110, 118, 150, 0.12)' : 'rgba(150, 170, 255, 0.28)';
+      g.lineWidth = (fromHere ? 2.5 : gone ? 1 : 1.5) * u;
       g.setLineDash(fromHere && !opts.thumb ? [6 * u, 5 * u] : []);
       g.lineDashOffset = -opts.time * 18 * u;
       g.beginPath();
@@ -411,6 +418,7 @@ function drawMap(
     const dead = isSwallowed(n.id);
     const here = n.id === run.at;
     const canGo = open.has(n.id);
+    const lost = missed(n.id);
     const pulse = 0.5 + 0.5 * Math.sin(opts.time * 4);
 
     if (opts.fresh.has(n.id) && opts.freshT < 1 && opts.freshT > 0) {
@@ -446,7 +454,7 @@ function drawMap(
     g.fill();
     g.globalAlpha = 1;
     g.lineWidth = (here || canGo || n.id === opts.selected || n.id === opts.hover ? 2.5 : 1.5) * u;
-    g.strokeStyle = here ? '#ffffff' : canGo ? me : n.kind === 'finale' ? BLOOM : dead ? 'rgba(192, 74, 154, 0.5)' : 'rgba(150, 170, 255, 0.5)';
+    g.strokeStyle = here ? '#ffffff' : canGo ? me : n.kind === 'finale' ? BLOOM : dead ? 'rgba(192, 74, 154, 0.5)' : lost ? 'rgba(110, 118, 150, 0.35)' : 'rgba(150, 170, 255, 0.5)';
     g.stroke();
 
     // The icon: the camp's roof, or the battle in the chosen style (?runicons=).
@@ -454,6 +462,19 @@ function drawMap(
     const ink = taken || here ? '#06070f' : dead ? 'rgba(220, 140, 200, 0.4)' : 'rgba(230, 234, 255, 0.85)';
     if (n.kind === 'start') glyph(g, n.kind, x, y, r, u, ink);
     else drawIcon(g, run, n, fx?.style ?? 'glyph', x, y, r, u, { taken, dead, here, me });
+    if (lost) {
+      // Faded under a veil of the night: still there to read, no longer a place to go.
+      // It covers the difficulty ring, rival dots and pips too, then feathers out.
+      const R = r + 10 * u;
+      const veil = g.createRadialGradient(x, y, 0, x, y, R);
+      veil.addColorStop(0, 'rgba(6, 7, 15, 0.62)');
+      veil.addColorStop((r + 7 * u) / R, 'rgba(6, 7, 15, 0.62)');
+      veil.addColorStop(1, 'rgba(6, 7, 15, 0)');
+      g.fillStyle = veil;
+      g.beginPath();
+      g.arc(x, y, R, 0, Math.PI * 2);
+      g.fill();
+    }
     // A flag on the checkpoint, while it can still save you.
     if (n.checkpoint && !dead && !run.checkpointUsed) {
       const fx = x + r * 0.7, fy = y - r * 0.7;
@@ -504,7 +525,7 @@ function drawMap(
     // A small brood badge where one waits to be rescued.
     // The camp beside your swarm: tap it (or your node) to open the camp.
     if (here && !opts.thumb) campSymbol(g, x + r * CAMP_AT, y - r * CAMP_AT, u, me, pulse);
-    if (n.rescue !== undefined && !taken && !dead) {
+    if (n.rescue !== undefined && !taken && !dead && !lost) {
       const bx = x - r * 0.85, by = y - r * 0.85;
       g.fillStyle = '#06070f';
       g.beginPath();
@@ -1023,7 +1044,7 @@ export function runMap(
       }
       if (n.checkpoint) rows.push(`<dt>Checkpoint</dt><dd>${run.checkpointUsed ? 'Already used' : 'Reach it to save the run here, once'}</dd>`);
     }
-    const status = n.id === run.at ? 'Your swarm is here, at its camp.' : dead ? 'Lost to the Bloom.' : taken ? 'Taken: march through without a battle.' : canGo ? '' : 'Not next to your swarm.';
+    const status = n.id === run.at ? 'Your swarm is here, at its camp.' : dead ? 'Lost to the Bloom.' : taken ? 'Taken: march through without a battle.' : canGo ? '' : reachable(run)?.has(n.id) === false ? 'Out of reach: your swarm has moved past it.' : 'Not next to your swarm.';
     const verb = !canGo ? null : needsBattle(run, n.id) ? 'Fight' : 'March';
     panel.innerHTML = `
       <button class="icon close" data-a="close" aria-label="Close">✕</button>
