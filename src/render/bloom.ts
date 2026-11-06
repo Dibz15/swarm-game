@@ -131,11 +131,13 @@ export function drawHeartBody(r: Renderer, w: World, x: number, y: number, size:
   const T = 12;
   for (let k = 0; k < T; k++) {
     const a = (k / T) * TAU + time * 0.05;
-    const len = size * (0.9 + 0.3 * Math.sin(k * 2.3) + 0.2 * beat);
-    let px = x + Math.cos(a) * size, py = y + Math.sin(a) * size;
+    // Rooted inside the flesh (the lobes' edge is ~0.8 size out; they draw over the roots).
+    const root = size * 0.6;
+    const len = size * (1.2 + 0.3 * Math.sin(k * 2.3) + 0.2 * beat);
+    let px = x + Math.cos(a) * root, py = y + Math.sin(a) * root;
     const nx = -Math.sin(a), ny = Math.cos(a);
     for (let s = 1; s <= 3; s++) {
-      const d = size + (len * s) / 3;
+      const d = root + (len * s) / 3;
       const sway = Math.sin(time * 1.1 + k * 1.9 + s) * 4 * s;
       const qx = x + Math.cos(a) * d + nx * sway, qy = y + Math.sin(a) * d + ny * sway;
       r.beam(px, py, qx, qy, flesh[0], flesh[1], flesh[2], 240 - 40 * s, 5.5 - 1.3 * s);
