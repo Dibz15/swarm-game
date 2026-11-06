@@ -50,6 +50,8 @@ export interface Step {
   wait?: { text: { desktop: string; mobile: string }; when: (c: StepCtx) => boolean };
   /** a tour step (#115): the game holds and the coach shows Next; `MissionRun.ack` moves on */
   next?: true;
+  /** a HUD element brought to the middle of the screen, enlarged, while the step lasts (it goes home after) */
+  spotlight?: string;
 }
 
 export interface Mission {
@@ -283,10 +285,20 @@ export const MISSIONS: Mission[] = [
         wait: { text: onTheWay('hold the Forge and the Hive'), when: (c) => [1, 2].every((id) => c.w.nests[id].owner === c.human || sentTo(() => [id])(c)) },
         demo: sendTo(() => [1, 2]),
       },
+      // Rock, paper, scissors (#115): the wheel comes to the middle, then goes home to its corner.
       {
         text: {
-          desktop: `Spires ${nestIcon(NestType.Spire)} make <b>Spears</b>. The glowing wheel shows who beats whom. Walls block the way: go through the gap and take the Spire.`,
-          mobile: `Spires ${nestIcon(NestType.Spire)} make <b>Spears</b>. The glowing wheel shows who beats whom. Walls block the way: go through the gap and take the Spire.`,
+          desktop: 'Every type beats one and loses to another: <b>Swarmers overrun Spears, Spears pierce Shields, Shields stop Swarmers</b>. This wheel shows it. It lives in the corner, and lights up for the dots you select or the enemy you point at.',
+          mobile: 'Every type beats one and loses to another: <b>Swarmers overrun Spears, Spears pierce Shields, Shields stop Swarmers</b>. This wheel shows it. It lives in the corner, and lights up for the dots you select.',
+        },
+        next: true,
+        spotlight: '.counters',
+        done: () => false,
+      },
+      {
+        text: {
+          desktop: `Spires ${nestIcon(NestType.Spire)} make <b>Spears</b>. Walls block the way: go through the gap and take the Spire.`,
+          mobile: `Spires ${nestIcon(NestType.Spire)} make <b>Spears</b>. Walls block the way: go through the gap and take the Spire.`,
         },
         pulse: '.counters',
         done: (c) => c.w.nests[3].owner === c.human,

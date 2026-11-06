@@ -531,10 +531,22 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   border: 1px solid var(--line);
   border-radius: 10px;
   opacity: 0.55;
-  transition: opacity 0.2s, border-color 0.2s;
+  transition: opacity 0.2s, border-color 0.2s, transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: auto;
 }
 .counters.active { opacity: 1; border-color: var(--line-strong); }
+/* The tutorial's spotlight (#115): in the middle, enlarged, fully lit, over everything. */
+.counters.coach-spot { opacity: 1; z-index: 20; border-color: var(--accent); box-shadow: 0 0 30px rgba(45, 226, 230, 0.35); }
+.counters.coach-spot .node polygon, .counters.coach-spot .node rect { fill: #fff; }
+.counters.coach-spot .node rect.hollow { fill: none; stroke: #fff; }
+.counters.coach-spot .arrow { stroke: var(--accent); }
+.counters.coach-spot .counter-cap { display: none; }
+/* Names on the wheel's glyphs while it's spotlit; the hotkey numbers step aside. */
+.counters .kname { display: none; }
+.counters.coach-spot .node text { display: none; }
+.counters.coach-spot .node text.kname { display: inline; font-size: 6.5px; fill: #fff; text-anchor: middle; }
+.counters.coach-spot .node[data-k="2"] text.kname { text-anchor: start; }
+.counters.coach-spot .node.raider text.kname { fill: #9aa4c7; }
 .counters.enemy { border-color: rgba(255, 93, 115, 0.55); }
 .counters svg { display: block; width: 100%; height: auto; }
 .counters .node polygon, .counters .node rect { fill: #59607f; stroke: none; transition: fill 0.2s; }

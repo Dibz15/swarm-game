@@ -163,10 +163,10 @@ export class Hud {
           <path class="arrow" data-from="2" data-to="1" d="M68,20 Q98,30 96,56" marker-end="url(#ah)"></path>
           <path class="arrow" data-from="1" data-to="0" d="M84,76 Q60,90 36,76" marker-end="url(#ah)"></path>
           <path class="arrow" data-from="0" data-to="2" d="M22,58 Q20,30 50,20" marker-end="url(#ah)"></path>
-          <g class="node" data-k="2" transform="translate(60,14)"><polygon points="0,-11 4,0 0,11 -4,0"></polygon><text x="9" y="4">3</text></g>
-          <g class="node" data-k="1" transform="translate(98,70)"><rect x="-8" y="-8" width="16" height="16" class="hollow"></rect><text x="-3" y="20">2</text></g>
-          <g class="node" data-k="0" transform="translate(22,70)"><rect x="-9" y="-7" width="7" height="7"></rect><rect x="1" y="-8" width="7" height="7"></rect><rect x="-4" y="1" width="7" height="7"></rect><text x="-3" y="20">1</text></g>
-          <g class="node raider" data-k="3" transform="translate(60,52)"><polygon points="7,0 -6,-6 -3,0 -6,6"></polygon><text x="10" y="4">4</text></g>
+          <g class="node" data-k="2" transform="translate(60,14)"><polygon points="0,-11 4,0 0,11 -4,0"></polygon><text x="9" y="4">3</text><text class="kname" x="9" y="3">Spears</text></g>
+          <g class="node" data-k="1" transform="translate(98,70)"><rect x="-8" y="-8" width="16" height="16" class="hollow"></rect><text x="-3" y="20">2</text><text class="kname" x="0" y="19">Shields</text></g>
+          <g class="node" data-k="0" transform="translate(22,70)"><rect x="-9" y="-7" width="7" height="7"></rect><rect x="1" y="-8" width="7" height="7"></rect><rect x="-4" y="1" width="7" height="7"></rect><text x="-3" y="20">1</text><text class="kname" x="0" y="19">Swarmers</text></g>
+          <g class="node raider" data-k="3" transform="translate(60,52)"><polygon points="7,0 -6,-6 -3,0 -6,6"></polygon><text x="10" y="4">4</text><text class="kname" x="0" y="15">Raiders</text></g>
         </svg>
         <div class="counter-cap"></div>
       </div>
@@ -347,6 +347,19 @@ export class Hud {
     (this.coach.querySelector('.pips') as HTMLElement).innerHTML = m.mission.steps.map((_, i) => `<i class="${i < m.step ? 'done' : i === m.step ? 'now' : ''}"></i>`).join('');
     this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
     if (step?.pulse) this.el.querySelector(step.pulse)?.classList.add('coach-pulse');
+    // A spotlit element (#115) glides to the middle, enlarged; clearing it glides it home.
+    this.el.querySelectorAll<HTMLElement>('.coach-spot').forEach((e) => {
+      e.classList.remove('coach-spot');
+      e.style.transform = '';
+    });
+    const spot = step?.spotlight ? this.el.querySelector<HTMLElement>(step.spotlight) : null;
+    if (spot) {
+      const r = spot.getBoundingClientRect();
+      const k = Math.min(2.4, (0.5 * Math.min(innerWidth, innerHeight)) / Math.max(1, r.width));
+      const dx = innerWidth / 2 - (r.left + r.width / 2), dy = innerHeight * 0.6 - (r.top + r.height / 2);
+      spot.classList.add('coach-spot');
+      spot.style.transform = `translate(${dx}px, ${dy}px) scale(${k})`;
+    }
     this.coach.classList.remove('pop');
     void this.coach.offsetWidth;
     this.coach.classList.add('pop');
