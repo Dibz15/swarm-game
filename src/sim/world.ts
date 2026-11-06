@@ -389,7 +389,7 @@ export class World {
   /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
   readonly beams = new Int32Array(MAX_UNITS * 2 + 512);
   beamCount = 0;
-  /** x, y, owner triples; drained by the client */
+  /** x, y, owner, wild (1 for the Bloom's units: they burst into spores, #94); drained by the client */
   deaths: number[] = [];
   fx: FxEvent[] = [];
   /** pending Barrage strikes */

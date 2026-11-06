@@ -4,6 +4,7 @@ import { HEART, heartSlot, standingNests } from '../sim/heart';
 import { WILD_HEART, type World } from '../sim/world';
 import type { Renderer } from './renderer';
 import type { TraitId } from '../campaign/warlords';
+import { BLOOM_GLOW, BLOOM_RGB, bloomBreath, drawBloomNests, drawHeartBody, type BloomView } from './bloom';
 
 export interface SceneOpts {
   alpha: number;
@@ -16,14 +17,16 @@ export interface SceneOpts {
   human: number;
   /** a campaign warlord in this battle (#66, #100): its units wear its trait's look */
   warlord?: { faction: number; trait: TraitId } | null;
+  /** the Bloom's nests, client-side (#94): how overgrown each is, and when a wave last swelled out */
+  bloom?: BloomView | null;
 }
 
 /** Nest outline echoes its unit: Hive hex, Forge block, Spire needle, Den arrowhead, Bastion octagon. */
 const NEST_SHAPE = [1, 2, 4, 3, 5];
 const NEST_SPIN = [0.22, 0.1, -0.28, 0.7, 0.12];
 const UNOWNED: RGB = [70, 76, 96];
-/** wild event units: ash red, so they don't read as gray garrisons */
-export const FERAL: RGB = [214, 92, 78];
+/** wild event units: the Bloom's colour (#94), wherever they come from */
+export const FERAL: RGB = BLOOM_RGB;
 /** Key nests (#87): gold, until someone holds one */
 export const KEY_RGB: RGB = [242, 196, 92];
 export const DROP_RGB: RGB = [255, 226, 140];
@@ -33,7 +36,9 @@ export function drawWorld(r: Renderer, w: World, o: SceneOpts): void {
   r.useTerrain(w.terrain);
   drawCrystals(r, w, o);
   drawNests(r, w, o);
+  if (o.bloom) drawBloomNests(r, w, o.bloom, o.time);
   drawBeams(r, w, o);
+  r.setGooColors(BLOOM_RGB, BLOOM_GLOW);
   drawUnits(r, w, o);
   drawBurns(r, w, o);
   drawBarrages(r, w, o);
@@ -240,20 +245,24 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
   const trait = o.warlord?.trait;
   const halo = lord >= 0 ? mixRgb(FACTION_RGB[lord], WHITE, 0.55) : WHITE;
   const swarmBeat = 1 + 0.18 * Math.sin(o.time * 6);
+  // The Bloom's wild units breathe together, with the heart while it lives (#94).
+  const breath = bloomBreath(w, o.time);
+  const wildC = mixRgb(BLOOM_RGB, BLOOM_GLOW, 0.3 * breath);
   for (let i = 0; i < w.n; i++) {
     if (!w.alive[i]) continue;
     const x = w.px[i] + (w.x[i] - w.px[i]) * a;
     const y = w.py[i] + (w.y[i] - w.py[i]) * a;
     const owner = w.owner[i];
     const kind = w.kind[i];
-    let c = sel && sel[i] ? lit[owner] : w.wild[i] ? FERAL : FACTION_RGB[owner];
-    let size = UNIT_STATS[kind].size;
-    // The Bloom's heart: bigger, and it throbs (faster as it weakens).
-    if (w.wild[i] === WILD_HEART) {
-      const beat = Math.pow(0.5 + 0.5 * Math.sin(o.time * (2.4 + 1.2 * (w.heart?.phase ?? 0))), 3);
-      size = HEART.size * (1 + 0.09 * beat);
-      c = mixRgb(HEART_RGB, WHITE, 0.15 * beat);
+    const wild = w.wild[i];
+    // The Bloom's heart: its own body (#94), not a recoloured Colossus.
+    if (wild === WILD_HEART) {
+      drawHeartBody(r, w, x, y, HEART.size, o.time);
+      continue;
     }
+    let c = sel && sel[i] ? lit[owner] : wild ? wildC : FACTION_RGB[owner];
+    let size = UNIT_STATS[kind].size;
+    if (wild && kind !== Kind.Colossus) size *= 1 + 0.06 * breath;
     let alpha = owner === NEUTRAL ? 200 : 255;
     if (w.surge[i] > w.tick) {
       // Mend's Surge glows green.
@@ -292,7 +301,17 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
       const king = lords && trait === 'raider-king';
       if (sp2 > 400) r.beam(x - w.vx[i] * (king ? 0.4 : 0.16), y - w.vy[i] * (king ? 0.4 : 0.16), x, y, c[0], c[1], c[2], king ? 150 : 70, king ? 2.2 : 1.4);
     }
-    const shape = kind + (w.fortify[i] > w.tick ? 10 : 0);
+    // Bloom dots are lumpy blobs that churn, and leave a faint smear of spores as they move.
+    const blob = wild !== 0 && kind === Kind.Dot;
+    if (blob) {
+      angle = o.time * 0.9 + i * 1.7;
+      const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
+      if (sp2 > 100) r.beam(x - w.vx[i] * 0.14, y - w.vy[i] * 0.14, x, y, BLOOM_GLOW[0], BLOOM_GLOW[1], BLOOM_GLOW[2], 45, 1.3);
+    }
+    // Every Bloom unit but the Colossus adds its share of the swarm's liquid body (#94),
+    // sized by how far apart its kind keeps, so Shields, Spears and Raiders merge too.
+    if (wild !== 0 && kind !== Kind.Colossus) r.gooBlob(x, y, UNIT_STATS[kind].sep * 2.05);
+    const shape = (blob ? 5 : kind) + (w.fortify[i] > w.tick ? 10 : 0);
     if (lords) {
       if (trait === 'swarmlord' && kind === Kind.Dot) size *= swarmBeat;
       r.unit(x, y, size * 1.7, halo[0], halo[1], halo[2], 70, shape, angle);
@@ -340,8 +359,9 @@ function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
     if (d.progress > 0) r.shape(true, d.x, d.y, R + 6, 0, d.progress, 0, 0.07, hc, 235);
   }
   drawHeart(r, w, o);
-  // Holding the line (#67): the Bloom's nests in the field, each feeding the waves.
-  if (w.siege) {
+  // Holding the line (#67): the Bloom's nests in the field, each feeding the waves
+  // (overgrown instead, when the view tracks their growth: #94).
+  if (w.siege && !o.bloom) {
     const beat = 0.5 + 0.5 * Math.sin(o.time * 2.4);
     for (const id of w.siege.bloomNests) {
       const n = w.nests[id];
@@ -358,8 +378,8 @@ function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
   }
 }
 
-/** The Bloom's heart, a deeper red than the other wild units. */
-const HEART_RGB: RGB = [196, 54, 74];
+/** The Bloom's heart rings and lobs: its body colour (#94). */
+const HEART_RGB: RGB = BLOOM_RGB;
 
 /**
  * The heart's rings: health, a ward band (one notch per standing Bloom nest,
@@ -378,7 +398,7 @@ function drawHeart(r: Renderer, w: World, o: SceneOpts): void {
   for (let k = 0; k < ward; k++) {
     r.shape(true, h.x, h.y, R + 9 + k * 6, 0, 1, o.time * 0.3 + k, 0.02, FERAL, 120);
   }
-  for (const id of h.nests) {
+  if (!o.bloom) for (const id of h.nests) {
     const n = w.nests[id];
     if (n.owner !== NEUTRAL) continue;
     const pulse = 0.5 + 0.5 * Math.sin(o.time * 2 + id);

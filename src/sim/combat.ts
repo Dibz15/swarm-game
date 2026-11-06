@@ -217,7 +217,7 @@ export function resolveDamage(w: World): void {
     if (w.hp[i] > 0) continue;
     if (w.ghost[i]) {
       // A ghost just vanishes: nobody lost a unit, nobody earned a kill.
-      w.deaths.push(w.x[i], w.y[i], w.owner[i]);
+      w.deaths.push(w.x[i], w.y[i], w.owner[i], w.wild[i] ? 1 : 0);
       removeUnit(w, i);
       continue;
     }
@@ -228,7 +228,7 @@ export function resolveDamage(w: World): void {
       kf.energy = Math.min(ENERGY.max, kf.energy + ENERGY.kill);
     }
     w.factions[w.owner[i]].stats.lost++;
-    w.deaths.push(w.x[i], w.y[i], w.owner[i]);
+    w.deaths.push(w.x[i], w.y[i], w.owner[i], w.wild[i] ? 1 : 0);
     if (w.wild[i] === WILD_HEART) heartSlain(w, killer);
     else if (w.kind[i] === Kind.Colossus) colossusSlain(w, w.x[i], w.y[i], killer);
     if (w.factions[w.owner[i]].mods.kind[w.kind[i]].call > 0) swarmCall(w, i);
