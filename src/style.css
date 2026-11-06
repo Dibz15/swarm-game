@@ -686,8 +686,26 @@ body.mobile .aimhint button { min-height: 40px; }
   pointer-events: auto;
 }
 .coach.on { display: block; }
-.coach.pop { animation: coach-pop 0.35s ease-out; }
-@keyframes coach-pop { from { box-shadow: 0 0 0 3px rgba(45, 226, 230, 0.55); } to { box-shadow: 0 0 0 0 rgba(45, 226, 230, 0); } }
+/* The coach glows (#115): an accent edge and a slow breathing glow, so the eye
+   finds it among the other panels; a flash on each new instruction, and calm
+   while it only waits on the world. */
+.coach.on {
+  border-color: rgba(45, 226, 230, 0.6);
+  background: linear-gradient(rgba(45, 226, 230, 0.07), rgba(45, 226, 230, 0.02)), var(--panel);
+  box-shadow: inset 3px 0 0 var(--accent), 0 0 16px rgba(45, 226, 230, 0.22);
+  animation: coach-breathe 2.8s ease-in-out infinite;
+}
+.coach.on.pop { animation: coach-pop 0.7s ease-out, coach-breathe 2.8s ease-in-out 0.7s infinite; }
+.coach.on.waiting { animation: none; border-color: rgba(150, 170, 255, 0.4); box-shadow: inset 3px 0 0 rgba(150, 170, 255, 0.6), 0 0 10px rgba(150, 170, 255, 0.12); }
+@keyframes coach-breathe {
+  0%, 100% { box-shadow: inset 3px 0 0 var(--accent), 0 0 12px rgba(45, 226, 230, 0.18); }
+  50% { box-shadow: inset 3px 0 0 var(--accent), 0 0 26px rgba(45, 226, 230, 0.42); }
+}
+@keyframes coach-pop {
+  from { box-shadow: inset 3px 0 0 var(--accent), 0 0 0 4px rgba(45, 226, 230, 0.7), 0 0 36px rgba(45, 226, 230, 0.6); }
+  to { box-shadow: inset 3px 0 0 var(--accent), 0 0 12px rgba(45, 226, 230, 0.18); }
+}
+@media (prefers-reduced-motion: reduce) { .coach.on, .coach.on.pop { animation: none; } }
 .coach small { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
 .coach p { margin: 4px 0 6px; line-height: 1.35; }
 .coach-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
