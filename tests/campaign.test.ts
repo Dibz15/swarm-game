@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
 import { COST, MAX_ROSTER, MILITIA, MIN_SIZE, SURVIVOR_CAP, UNLOCKS, WIN_GROWTH, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
 import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, canStep, hops, maxFielded, moves, newRun, reachable, rerollCost, rerollOffer, resolveTurn, skipRecruit, skipReward, strainHomes, takeRecruit, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
-import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
+import { REWARD, modsFor, offerable, rewardText, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 import { DIFFICULTY } from '../src/sim/ai/bot';
 import { heartSlot } from '../src/sim/heart';
@@ -679,5 +679,16 @@ describe('strain homes (#109)', () => {
     expect(homes.map((h) => h.full)).toEqual([false, true]);
     expect(homes.map((h) => h.fielded)).toEqual([false, true]);
     expect(strainHomes(run, 'glass')).toEqual([]);
+  });
+});
+
+describe('pact costs (#109)', () => {
+  it('every pact names its cost apart from its gain; nothing else has one', () => {
+    for (const r of Object.values(REWARD)) {
+      if (r.family === 'pact') expect(r.cost?.length).toBeGreaterThan(0);
+      else expect(r.cost).toBeUndefined();
+    }
+    expect(rewardText(REWARD.hunger)).toBe(`${REWARD.hunger.text}. Cost: ${REWARD.hunger.cost}`);
+    expect(rewardText(REWARD.capital)).toBe(REWARD.capital.text);
   });
 });

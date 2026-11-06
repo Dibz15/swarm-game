@@ -982,9 +982,12 @@ button:disabled .cost { color: inherit; }
 }
 .reward .emblem i { font-style: normal; font-size: 10px; letter-spacing: 0.04em; margin-top: 3px; text-shadow: none; }
 .reward small { margin-left: 0; }
-.reward.fam-strain { --fam: #b4ff39; border-color: rgba(180, 255, 57, 0.45); background: rgba(180, 255, 57, 0.05); }
-.reward.fam-power { --fam: #c9b4ff; border-color: rgba(201, 180, 255, 0.45); background: rgba(160, 123, 255, 0.07); }
-.reward.fam-pact { --fam: #e07ac0; border-color: rgba(192, 74, 154, 0.55); background: rgba(192, 74, 154, 0.09); }
+.reward.fam-strain { --fam: #b4ff39; --fam-line: rgba(180, 255, 57, 0.45); background: rgba(180, 255, 57, 0.05); }
+.reward.fam-power { --fam: #c9b4ff; --fam-line: rgba(201, 180, 255, 0.45); background: rgba(160, 123, 255, 0.07); }
+.reward.fam-pact { --fam: #e07ac0; --fam-line: rgba(192, 74, 154, 0.55); background: rgba(192, 74, 154, 0.09); }
+/* The family tints three sides; the left edge stays the tier's. */
+.reward[class*='fam-'] { border-top-color: var(--fam-line, var(--line-strong)); border-right-color: var(--fam-line, var(--line-strong)); border-bottom-color: var(--fam-line, var(--line-strong)); }
+.reward:disabled { opacity: 0.55; }
 .reward.fam-pact .tag { color: #e07ac0; }
 .reward .for { font-size: 13px; color: #b4ff39; }
 .reward .for b { font-size: 13px; }

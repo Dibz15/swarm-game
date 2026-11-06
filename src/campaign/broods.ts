@@ -44,6 +44,13 @@ export const KIND_NAME: Record<number, string> = {
   [Kind.Lancer]: 'Spears',
   [Kind.Swift]: 'Raiders',
 };
+/** one unit of each kind, for "which Shield brood?" */
+export const KIND_ONE: Record<number, string> = {
+  [Kind.Dot]: 'Swarmer',
+  [Kind.Tank]: 'Shield',
+  [Kind.Lancer]: 'Spear',
+  [Kind.Swift]: 'Raider',
+};
 /** the nest type that produces each kind */
 export const KIND_NEST: Record<number, number> = {
   [Kind.Dot]: NestType.Hive,
