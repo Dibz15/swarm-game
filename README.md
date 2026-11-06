@@ -154,7 +154,7 @@ Replays only reproduce on the commit that recorded them (stored as `build`); the
   - **Spire → Spears:** long range, shots splash onto nearby enemies.
   - **Den → Raiders:** fast, fragile, capture nests 3× faster.
   - **Bastion:** spawns slowly, beam turret, shields allies in range.
-- **Nest powers:** holding a nest type unlocks its power. **Fortify** (Forge, R): selected dots take half damage but move slower. **Barrage** (Spire, F): telegraphed strike at the cursor. **Blink** (Den, G): teleport the selection toward the cursor. **Lockdown** (Bastion, T): an enemy nest can't spawn or recover for 8s.
+- **Nest powers:** holding a nest type unlocks its power. **Fortify** (Forge, R): selected dots take half damage but move slower. **Barrage** (Spire, F): telegraphed strike at the cursor. **Blink** (Den, G): teleport the selection toward a point; G aims first and shows its reach, then click (or G again for the cursor). **Lockdown** (Bastion, T): an enemy nest can't spawn or recover for 8s.
 - **Terrain** (skirmish setup: None / Light / Standard / Heavy):
   - **Rock** blocks movement and line of fire. Units path around it, and gaps between rocks become chokepoints. Blink jumps over it.
   - **Nebula** slows everything inside: ambush ground.
