@@ -307,9 +307,10 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
       angle = o.time * 0.9 + i * 1.7;
       const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
       if (sp2 > 100) r.beam(x - w.vx[i] * 0.14, y - w.vy[i] * 0.14, x, y, BLOOM_GLOW[0], BLOOM_GLOW[1], BLOOM_GLOW[2], 45, 1.3);
-      // Its share of the swarm's liquid body (#94): neighbours' blobs merge.
-      r.gooBlob(x, y, size * 3);
     }
+    // Every Bloom unit but the Colossus adds its share of the swarm's liquid body (#94),
+    // sized by how far apart its kind keeps, so Shields, Spears and Raiders merge too.
+    if (wild !== 0 && kind !== Kind.Colossus) r.gooBlob(x, y, UNIT_STATS[kind].sep * 2.05);
     const shape = (blob ? 5 : kind) + (w.fortify[i] > w.tick ? 10 : 0);
     if (lords) {
       if (trait === 'swarmlord' && kind === Kind.Dot) size *= swarmBeat;
