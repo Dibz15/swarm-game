@@ -561,7 +561,31 @@ const MAX_STEP = MAP_W / 3;
 /** Nodes you can move to from where you stand: new battles only ahead of you (#128), but any node you've taken. */
 export function moves(run: RunState): number[] {
   if (run.status !== 'active') return [];
-  return run.nodes[run.at].links.filter((n) => !run.swallowed.includes(n) && (!needsBattle(run, n) || ahead(run.nodes, run.heart, run.at, n)));
+  return run.nodes[run.at].links.filter((n) => canStep(run, run.at, n));
+}
+
+/** One step along a link: never into the Bloom; a new battle only ahead, a node you took any way. */
+export function canStep(run: RunState, from: number, to: number): boolean {
+  return !run.swallowed.includes(to) && (!needsBattle(run, to) || ahead(run.nodes, run.heart, from, to));
+}
+
+/**
+ * Every node you could still reach from where you stand (#95), by the step rule
+ * and the Bloom as it is now. Null when the run is over: nothing is missed then.
+ */
+export function reachable(run: RunState): Set<number> | null {
+  if (run.status !== 'active') return null;
+  const seen = new Set([run.at]);
+  const queue = [run.at];
+  while (queue.length) {
+    const a = queue.pop()!;
+    for (const b of run.nodes[a].links)
+      if (!seen.has(b) && canStep(run, a, b)) {
+        seen.add(b);
+        queue.push(b);
+      }
+  }
+  return seen;
 }
 
 /** Moving onto a node you already took is a free march: no battle, but the Bloom still advances. */
