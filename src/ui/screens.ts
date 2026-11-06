@@ -834,7 +834,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
   return m;
 }
 
-export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine; quitLabel?: string }): HTMLDivElement {
+export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine; quitLabel?: string; teams?: string }): HTMLDivElement {
   const m = el(`
     <div class="screen modal dim">
       <div class="card">
@@ -844,6 +844,7 @@ export function pauseMenu(h: { resume: () => void; restart: () => void; quit: ()
           <button data-a="restart">Restart match</button>
           <button data-a="quit">${h.quitLabel ?? 'Quit to menu'}</button>
         </div>
+        ${h.teams ? `<h3>Teams</h3>${h.teams}` : ''}
         <div class="fields"></div>
         <h3>Controls</h3>
         <div class="ctl"></div>

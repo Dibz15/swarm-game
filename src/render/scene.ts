@@ -19,6 +19,8 @@ export interface SceneOpts {
   warlord?: { faction: number; trait: TraitId } | null;
   /** the Bloom's nests, client-side (#94): how overgrown each is, and when a wave last swelled out */
   bloom?: BloomView | null;
+  /** factions on your team (1), in a team match; null otherwise (#74) */
+  allies?: Uint8Array | null;
 }
 
 /** Nest outline echoes its unit: Hive hex, Forge block, Spire needle, Den arrowhead, Bastion octagon. */
@@ -114,6 +116,16 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
       const beat = 0.5 + 0.5 * Math.sin(o.time * (4 + 10 * k));
       r.shape(true, n.x, n.y, R * (1.6 + 0.25 * beat), 0, 1, 0, 0.05, c, Math.round(90 + 140 * beat));
       r.shape(false, n.x, n.y, R * 1.9, 7, 1, 0, 0, c, Math.round(18 + 30 * beat));
+    }
+
+    // An ally's nest (#74): a chevron above it, so it reads as friendly by shape, not just colour.
+    if (o.allies && n.owner >= 0 && o.allies[n.owner]) {
+      const h = R * 1.6, s = R * 0.48;
+      const tx = n.x, ty = n.y - h;
+      r.beam(tx - s, ty + s * 0.6, tx, ty, 255, 255, 255, 230, 3.4);
+      r.beam(tx, ty, tx + s, ty + s * 0.6, 255, 255, 255, 230, 3.4);
+      r.beam(tx - s, ty + s * 0.6, tx, ty, c[0], c[1], c[2], 255, 1.6);
+      r.beam(tx, ty, tx + s, ty + s * 0.6, c[0], c[1], c[2], 255, 1.6);
     }
 
     // Capitals wear a second, slowly counter-rotating ring.

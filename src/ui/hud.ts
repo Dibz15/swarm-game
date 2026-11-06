@@ -1,6 +1,7 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
 import { isMobile } from './mobile';
+import { ALLY_MARK, isAlly, teamLayout, teamName, teamsLine, teamsList } from './teams';
 import { heartSlot, standingNests } from '../sim/heart';
 import { BOONS, SIEGE, WAVE_KINDS, waveSize } from '../sim/siege';
 import type { WaveKind } from '../sim/world';
@@ -72,6 +73,13 @@ export class Hud {
   readonly el: HTMLDivElement;
   private bar: HTMLDivElement;
   private chips: HTMLDivElement;
+  /** chips in the order shown (by team in a team match, #74), and what that order was built from */
+  private chipEls: HTMLElement[] = [];
+  private chipKey = '';
+  /** the start banner and the strip's popover (#74), and the match they were made for */
+  private teamBanner: HTMLDivElement;
+  private teamPop: HTMLDivElement;
+  private teamsGame: GameView | null = null;
   private clock: HTMLSpanElement;
   private sel: HTMLDivElement;
   private energyFill: HTMLDivElement;
@@ -122,7 +130,9 @@ export class Hud {
         <div class="strength" title="Army size"></div>
         <div class="nestshare" title="Nests held. Hold past the marker for 30s to win by domination"><div class="segs"></div><span class="mark"></span></div>
         <div class="chips"></div>
+        <div class="team-pop"></div>
       </div>
+      <div class="team-banner" title="Tap to hide"></div>
       <div class="hud-tr">
         <span class="clock">0:00</span>
         <button class="icon" data-a="mute" title="Mute (M)">♪</button>
@@ -199,6 +209,24 @@ export class Hud {
     this.counterCap = q('.counter-cap');
     this.bar = q('.strength');
     this.chips = q('.chips');
+    this.teamBanner = q('.team-banner');
+    this.teamPop = q('.team-pop');
+    // Who's on your team, at any time: tap the strip (#74).
+    this.chips.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const g = this.game;
+      if (!g || !teamLayout(g.world, g.human).team) return;
+      this.teamPop.classList.toggle('on');
+      if (this.teamPop.classList.contains('on')) this.teamPop.innerHTML = teamsList(g.world, g.human);
+    });
+    this.teamPop.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.teamPop.classList.remove('on');
+    });
+    this.teamBanner.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.teamBanner.classList.remove('on');
+    });
     this.clock = q('.clock');
     this.sel = q('.selinfo');
     this.energyFill = q('.energy .fill');
@@ -415,20 +443,39 @@ export class Hud {
       (this.aimHint.firstElementChild as HTMLElement).textContent = mobile ? `Tap where to cast ${name}` : `Click where to cast ${name}${g.aim === 'blink' ? ' · G again: at the cursor' : ''}`;
     }
 
+    // Teams (#74): a banner at the start of a team match, and the strip grouped by team.
+    const layout = teamLayout(w, g.human);
+    if (this.teamsGame !== g) {
+      this.teamsGame = g;
+      this.chipKey = '';
+      this.teamPop.classList.remove('on');
+      this.teamBanner.innerHTML = layout.team ? `<div>${teamsLine(w, g.human)}</div>` : '';
+      this.teamBanner.classList.toggle('on', layout.team);
+    }
+    if (w.tick > 6 * TICK_HZ) this.teamBanner.classList.remove('on');
+    if (this.teamPop.classList.contains('on') && w.tick % 15 === 0) this.teamPop.innerHTML = teamsList(w, g.human);
+
     // Strength bar + chips.
     const active = w.factions.filter((f) => f.active && f.id !== NEUTRAL);
     const total = active.reduce((s, f) => s + w.unitCount[f.id], 0) || 1;
     const nestsOf = (f: number) => w.nests.filter((n) => n.owner === f).length;
-    if (this.bar.children.length !== active.length) {
-      this.bar.innerHTML = active.map((f) => `<i style="background:${hex(f.id)}"></i>`).join('');
-      this.chips.innerHTML = active
-        .map((f) => `<span class="chip${f.id === g.human ? ' me' : ''}" style="--c:${hex(f.id)}"><b></b><em></em></span>`)
-        .join('');
+    const order = layout.team ? layout.groups.flatMap((t) => t.members) : active.map((f) => f.id);
+    const key = `${layout.team ? 't' : ''}${order.join(',')}`;
+    if (key !== this.chipKey) {
+      this.chipKey = key;
+      this.bar.innerHTML = order.map((f) => `<i style="background:${hex(f)}"></i>`).join('');
+      const chip = (f: number) =>
+        `<span class="chip${f === g.human ? ' me' : ''}${isAlly(w, g.human, f) ? ' ally' : ''}" style="--c:${hex(f)}"><b></b><em></em></span>`;
+      this.chips.innerHTML = layout.team
+        ? layout.groups.map((t) => `<span class="team${t.mine ? ' mine' : ''}"><small>${t.mine ? `${t.letter} · you` : t.letter}</small>${t.members.map(chip).join('')}</span>`).join('')
+        : order.map(chip).join('');
+      this.chipEls = [...this.chips.querySelectorAll<HTMLElement>('.chip')];
     }
-    active.forEach((f, k) => {
+    order.forEach((id, k) => {
+      const f = w.factions[id];
       const seg = this.bar.children[k] as HTMLElement;
       seg.style.flexGrow = String(w.unitCount[f.id] / total + 0.0001);
-      const chip = this.chips.children[k] as HTMLElement;
+      const chip = this.chipEls[k];
       chip.classList.toggle('dead', f.eliminated);
       if (f.id === g.human) {
         // Your own chip shows supply: army / cap, red while production is blocked.
@@ -437,10 +484,13 @@ export class Hud {
         chip.classList.toggle('blocked', sp.blocked);
       } else (chip.children[0] as HTMLElement).textContent = String(w.unitCount[f.id]);
       (chip.children[1] as HTMLElement).textContent = `⬡${nestsOf(f.id)}`;
+      const side = layout.team ? layout.groups.find((t) => t.members.includes(f.id)) : null;
       chip.title =
         f.id === g.human
           ? `${FACTION_NAMES[f.id]} (you). Army / supply cap: nests stop producing at the cap. Take or upgrade nests to raise it.`
-          : FACTION_NAMES[f.id];
+          : side
+            ? `${FACTION_NAMES[f.id]}: ${side.mine ? 'your ally' : 'enemy'} (team ${side.letter}). Tap the strip for every team.`
+            : FACTION_NAMES[f.id];
     });
 
     // Nest share: one segment per faction, unheld nests left empty.
@@ -490,13 +540,16 @@ export class Hud {
       this.dom.classList.toggle('mine', mine);
       (this.dom.children[0] as HTMLElement).textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
       const scoring = ds.paused ? '<b>not scoring</b>: no key nest held uncontested' : `scoring on ${ds.held} of ${ds.need} key nests`;
+      // In a team match, name the team (#74): "Your team", "Magenta + Lime".
+      const who = mine ? (layout.team ? 'Your team' : 'You') : teamName(w, g.human, ds.face);
+      const many = who === 'You' || who.includes(' + ');
       (this.dom.children[1] as HTMLElement).innerHTML = ds.keys
         ? mine
-          ? `<b>You lead on key nests</b> · ${scoring}`
-          : `<b>${FACTION_NAMES[ds.face]} leads on key nests</b> · ${scoring}: take or contest theirs`
+          ? `<b>${who} ${many ? 'lead' : 'leads'} on key nests</b> · ${scoring}`
+          : `<b>${who} ${many ? 'lead' : 'leads'} on key nests</b> · ${scoring}: take or contest theirs`
         : mine
-          ? `<b>You are dominating</b> · hold ${ds.need} of ${w.nests.length} nests`
-          : `<b>${FACTION_NAMES[ds.face]} is dominating</b> · take back ${ds.toBreak} nest${ds.toBreak > 1 ? 's' : ''} to stop it`;
+          ? `<b>${who} ${who === 'You' ? 'are' : 'is'} dominating</b> · hold ${ds.need} of ${w.nests.length} nests`
+          : `<b>${who} ${many ? 'are' : 'is'} dominating</b> · take back ${ds.toBreak} nest${ds.toBreak > 1 ? 's' : ''} to stop it`;
       ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${100 * ds.frac}%`;
     }
 
@@ -584,10 +637,22 @@ export class Hud {
     if (!hn && mobile && nUnits === 0) for (const id of g.selection.nests) hn = hn ?? w.nests[id];
     if (hn && mobile) {
       const next = hn.owner === g.human && hn.level < MAX_LEVEL ? `<br><small>Upgrade: ${UPGRADE_COST[hn.level]} dots → ${LEVEL_PERKS[hn.level + 1]}</small>` : '';
-      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL}${next}`;
+      const side = layout.team && hn.owner >= 0 && hn.owner !== NEUTRAL && hn.owner !== g.human ? (isAlly(w, g.human, hn.owner) ? ` · ${ALLY_MARK} Ally` : ' · Enemy') : '';
+      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL}${side}${next}`;
       this.nestCard.style.display = 'block';
     } else if (hn) {
-      const owner = hn.owner < 0 ? 'Unclaimed' : hn.owner === NEUTRAL ? 'Neutral' : hn.owner === g.human ? 'Yours' : FACTION_NAMES[hn.owner];
+      const owner =
+        hn.owner < 0
+          ? 'Unclaimed'
+          : hn.owner === NEUTRAL
+            ? 'Neutral'
+            : hn.owner === g.human
+              ? 'Yours'
+              : layout.team
+                ? isAlly(w, g.human, hn.owner)
+                  ? `${ALLY_MARK} Ally: ${FACTION_NAMES[hn.owner]}`
+                  : `Enemy: ${FACTION_NAMES[hn.owner]}`
+                : FACTION_NAMES[hn.owner];
       const next = hn.level < MAX_LEVEL ? `<br>Next: <b>Lv${hn.level + 1}</b> for ${UPGRADE_COST[hn.level]} dots (U): ${LEVEL_PERKS[hn.level + 1]}` : '';
       const has = hn.level > 1 ? `<br>Lv${hn.level}: ${LEVEL_PERKS.slice(2, hn.level + 1).join('; ')}` : '';
       this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${has}${hn.owner === g.human ? next : ''}</small>`;
