@@ -410,7 +410,10 @@ export class Hud {
     this.updateCoach(g, mobile);
     this.measure();
     this.aimHint.classList.toggle('on', !!g.aim);
-    if (g.aim) (this.aimHint.firstElementChild as HTMLElement).textContent = `Tap where to cast ${g.aim[0].toUpperCase()}${g.aim.slice(1)}`;
+    if (g.aim) {
+      const name = `${g.aim[0].toUpperCase()}${g.aim.slice(1)}`;
+      (this.aimHint.firstElementChild as HTMLElement).textContent = mobile ? `Tap where to cast ${name}` : `Click where to cast ${name}${g.aim === 'blink' ? ' · G again: at the cursor' : ''}`;
+    }
 
     // Strength bar + chips.
     const active = w.factions.filter((f) => f.active && f.id !== NEUTRAL);

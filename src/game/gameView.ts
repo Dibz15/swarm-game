@@ -39,6 +39,10 @@ export class GameView {
   hoverNest = -1;
   /** a targeted power waiting for a click (touch / HUD buttons) */
   aim: NestPower | null = null;
+  /** a clamped Blink's reach, flashed after the cast so the limit is learned (#97) */
+  private blinkFlash: { x: number; y: number; r: number; tx: number; ty: number; at: number } | null = null;
+  /** the last render time (s), for the flash */
+  private now = 0;
   /** world position under the cursor, for previews and key casts */
   cursor: [number, number] | null = null;
   /** world units per ~1 css px, for HUD pick radii */
@@ -202,6 +206,7 @@ export class GameView {
 
   render(time: number): void {
     this.frame++;
+    this.now = time;
     this.hitSparks();
     drawWorld(this.s.renderer, this.world, {
       alpha: this.session.alpha,
@@ -213,7 +218,8 @@ export class GameView {
       human: this.human,
       warlord: this.warlord,
     });
-    this.drawAim();
+    this.drawAim(time);
+    this.drawBlinkFlash(time);
     this.drawEdgeMarkers(time);
     if (this.brush) {
       const b = this.brush;
@@ -283,12 +289,49 @@ export class GameView {
     }
   }
 
-  private drawAim(): void {
+  /** How far Blink carries your dots: the same reach the sim clamps to (commands.ts). */
+  blinkRange(): number {
+    return POWER.blinkRange * powerBoost(this.world, this.human, 'blink') * this.world.factions[this.human].mods.blinkRange;
+  }
+
+  /** A ring of short dashes, turning slowly: the edge of a power's reach. */
+  private dashedRing(x: number, y: number, R: number, c: readonly number[], a: number, time: number): void {
+    const r = this.s.renderer;
+    const n = 40, spin = time * 0.25;
+    for (let k = 0; k < n; k++) {
+      const a0 = spin + (k / n) * Math.PI * 2, a1 = a0 + (Math.PI * 2) / n / 2;
+      r.beam(x + Math.cos(a0) * R, y + Math.sin(a0) * R, x + Math.cos(a1) * R, y + Math.sin(a1) * R, c[0], c[1], c[2], a, 1.6);
+    }
+  }
+
+  private drawAim(time: number): void {
     const power = this.aim;
     const cur = this.cursor;
-    if (!power || !cur) return;
     const r = this.s.renderer;
     const c = FACTION_RGB[this.human];
+    if (power === 'blink') {
+      // Blink's reach shows as soon as it's armed, cursor or not (#97): touch has no hover.
+      const from = this.selectionCenter();
+      if (!from) return;
+      const range = this.blinkRange();
+      r.shape(true, from[0], from[1], range, 7, 1, 0, 0, c, 28);
+      r.shape(true, from[0], from[1], range, 0, 1, 0, 0.012, c, 170);
+      this.dashedRing(from[0], from[1], range * 1.03, c, 120, time);
+      if (!cur) return;
+      let dx = cur[0] - from[0], dy = cur[1] - from[1];
+      const d = Math.hypot(dx, dy);
+      if (d > range) {
+        dx *= range / d;
+        dy *= range / d;
+        // The part you won't reach, dimmed.
+        r.beam(from[0] + dx, from[1] + dy, cur[0], cur[1], c[0], c[1], c[2], 45, 1.2);
+        r.shape(true, cur[0], cur[1], 10, 0, 1, 0, 0.12, OUT_OF_RANGE, 120);
+      }
+      r.beam(from[0], from[1], from[0] + dx, from[1] + dy, c[0], c[1], c[2], 200, 1.8);
+      r.shape(true, from[0] + dx, from[1] + dy, 16, 0, 1, 0, 0.14, WHITE, 240);
+      return;
+    }
+    if (!power || !cur) return;
     const boost = powerBoost(this.world, this.human, power);
     if (power === 'barrage') {
       const R = POWER.barrageRadius * boost;
@@ -304,19 +347,6 @@ export class GameView {
       r.beam(from.x, from.y, cur[0], cur[1], c[0], c[1], c[2], 60, 1.2);
       r.shape(true, cur[0], cur[1], R, 0, 1, 0, 0.03, c, 200);
       r.shape(true, cur[0], cur[1], R, 7, 1, 0, 0, c, 40);
-    } else if (power === 'blink') {
-      const from = this.selectionCenter();
-      if (!from) return;
-      let dx = cur[0] - from[0], dy = cur[1] - from[1];
-      const d = Math.hypot(dx, dy);
-      const range = POWER.blinkRange * boost * this.world.factions[this.human].mods.blinkRange;
-      if (d > range) {
-        dx *= range / d;
-        dy *= range / d;
-      }
-      r.shape(true, from[0], from[1], range, 0, 1, 0, 0.01, c, 90);
-      r.beam(from[0], from[1], from[0] + dx, from[1] + dy, c[0], c[1], c[2], 160, 1.5);
-      r.shape(true, from[0] + dx, from[1] + dy, 16, 0, 1, 0, 0.12, WHITE, 220);
     } else if (power === 'lockdown') {
       const n = this.nestAt(cur[0], cur[1], 1.6);
       const ok = n && n.owner >= 0 && n.owner !== NEUTRAL && this.world.hostile(n.owner, this.human);
@@ -940,6 +970,13 @@ export class GameView {
     } else if (power === 'blink') {
       if (!this.selection.units.size) return this.s.toast('Select dots first, then Blink', '#9aa4c7');
       if (!this.power('blink', POWER.blinkCost)) return;
+      // A cast past the reach lands short: flash the ring so the limit is learned (#97).
+      const from = this.selectionCenter();
+      const range = this.blinkRange();
+      if (from && Math.hypot(wx - from[0], wy - from[1]) > range) {
+        const k = range / Math.hypot(wx - from[0], wy - from[1]);
+        this.blinkFlash = { x: from[0], y: from[1], r: range, tx: from[0] + (wx - from[0]) * k, ty: from[1] + (wy - from[1]) * k, at: this.now };
+      }
       this.session.issue({ t: 'blink', p: this.human, units: [...this.selection.units], x: wx, y: wy });
     } else {
       const n = this.nestAt(wx, wy, 1.6);
@@ -951,6 +988,21 @@ export class GameView {
       if (rest > 0) return this.s.toast(`Siphon: Lockdown is ready again in ${Math.ceil(rest / TICK_HZ)} s`, '#9aa4c7');
       this.session.issue({ t: 'lockdown', p: this.human, nest: n.id });
     }
+  }
+
+  /** After a clamped Blink: its reach and where the dots landed, fading over 0.7 s. */
+  private drawBlinkFlash(time: number): void {
+    const f = this.blinkFlash;
+    if (!f) return;
+    const t = (time - f.at) / 0.7;
+    if (t >= 1 || t < 0) {
+      this.blinkFlash = null;
+      return;
+    }
+    const a = 1 - t;
+    const r = this.s.renderer;
+    r.shape(true, f.x, f.y, f.r, 0, 1, 0, 0.018, WHITE, Math.round(220 * a));
+    r.shape(true, f.tx, f.ty, 16 + 10 * t, 0, 1, 0, 0.14, WHITE, Math.round(240 * a));
   }
 
   /** HUD button: Fortify fires at once; the others wait for a click. */

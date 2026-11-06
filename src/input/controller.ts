@@ -340,6 +340,7 @@ export class InputController {
         g.upgrade();
         break;
       // Nest-granted powers. Keys fire at the cursor; no cursor means aim mode.
+      // Blink aims first (#97), so its reach shows before you commit; G again casts at the cursor.
       case 'r':
         g.fortify();
         break;
@@ -347,7 +348,8 @@ export class InputController {
       case 'g':
       case 't': {
         const power = k === 'f' ? 'barrage' : k === 'g' ? 'blink' : 'lockdown';
-        if (g.cursor) g.castAt(power, g.cursor[0], g.cursor[1]);
+        if (power === 'blink' && g.aim !== 'blink') g.startAim(power);
+        else if (g.cursor) g.castAt(power, g.cursor[0], g.cursor[1]);
         else g.startAim(power);
         break;
       }

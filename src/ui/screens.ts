@@ -36,7 +36,7 @@ export const CONTROLS_HTML = `
     <dt>1 / 2 / 3 / 4</dt><dd>Keep only Swarmers / Shields / Spears / Raiders from your group (or grab that type on screen). Shift+number drops the type. The type chips do the same; Tab cycles</dd>
     <dt>Right-click</dt><dd>Send dots / set the rally point of selected nests</dd>
     <dt>Q / E</dt><dd>Surge / Nova on the selected dots</dd>
-    <dt>R / F / G / T</dt><dd>Nest powers: Fortify, Barrage, Blink, Lockdown (at the cursor). They appear when you hold a Forge, Spire, Den or Bastion</dd>
+    <dt>R / F / G / T</dt><dd>Nest powers: Fortify, Barrage, Blink, Lockdown, at the cursor; G aims Blink first, showing its reach (click, or G again). They appear when you hold a Forge, Spire, Den or Bastion</dd>
     <dt>U</dt><dd>Upgrade the selected nest (feeds it nearby dots)</dd>
     <dt>N</dt><dd>Send the selected dots to your nearest nest (double-tap to look there)</dd>
     <dt>Ctrl+5–9, 5–9</dt><dd>Save / recall control groups</dd>
