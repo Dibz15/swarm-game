@@ -6,6 +6,7 @@ import type { Camera } from '../render/camera';
 import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
+import { BLOOM_GLOW, BLOOM_RGB, bloomNestMask, growthTarget, type BloomView } from '../render/bloom';
 import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, KEYS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
 import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, surgeCost } from '../sim/commands';
@@ -78,6 +79,10 @@ export class GameView {
   private supplyNests = 0;
   private supplyToastTick = -1e9;
   private bloomToasted = false;
+  /** the Bloom's nests (#94): which they are, and their client-side growth and swell */
+  private bloomMask: Uint8Array | null = null;
+  private bloom: BloomView | null = null;
+  private shedAt = 0;
   /** the tick of the last Bloom surge wave toasted (-1: none yet) */
   private surgeWave = -1;
   /** a campaign warlord in this battle (#66, #100): its units' look, its citadel's marker */
@@ -113,6 +118,7 @@ export class GameView {
   update(dt: number, time: number): void {
     this.session.update(dt);
     this.drainEvents();
+    this.updateBloom(dt, time);
     this.selection.prune(this.world, this.human);
     const w = this.world;
     this.rec?.frame(w, this.s.camera);
@@ -217,6 +223,7 @@ export class GameView {
       hoverNest: this.hoverNest,
       human: this.human,
       warlord: this.warlord,
+      bloom: this.bloom,
     });
     this.drawAim(time);
     this.drawBlinkFlash(time);
@@ -244,6 +251,46 @@ export class GameView {
       } else if (eff <= 0.75 && Math.random() < 0.2) {
         particles.burst(w.x[t], w.y[t], [170, 176, 196], 1, 50, 1.2, 0.15);
       }
+    }
+  }
+
+  /** The Bloom's nests (#94): growth eases toward who holds them; the heart sheds spores in its last phase. */
+  private updateBloom(dt: number, time: number): void {
+    const w = this.world;
+    if (!this.bloomMask) {
+      const m = (this.bloomMask = bloomNestMask(w));
+      if (m.some((v) => v)) {
+        this.bloom = { growth: new Float32Array(m.length), swell: new Float32Array(m.length).fill(-1) };
+        for (let id = 0; id < m.length; id++) this.bloom.growth[id] = growthTarget(w, id, m);
+      }
+    }
+    const v = this.bloom;
+    if (v) {
+      for (let id = 0; id < v.growth.length; id++) {
+        const t = growthTarget(w, id, this.bloomMask);
+        const g = v.growth[id];
+        // It withers fast when taken, and creeps back slowly.
+        v.growth[id] = g + (t - g) * Math.min(1, dt * (t > g ? 0.5 : 1.6));
+      }
+    }
+    const h = w.heart;
+    if (h && !h.slain && h.phase >= 2 && time - this.shedAt > 0.12) {
+      this.shedAt = time;
+      const a = Math.random() * Math.PI * 2;
+      this.s.particles.burst(h.x + Math.cos(a) * 30, h.y + Math.sin(a) * 30, BLOOM_GLOW, 1, 30, 2.6, 2.4, 0.5);
+    }
+  }
+
+  /** A wave born at a Bloom nest: it swells and puffs spores. */
+  private bloomSwell(x: number, y: number): void {
+    const v = this.bloom;
+    if (!v) return;
+    const w = this.world;
+    for (let id = 0; id < v.growth.length; id++) {
+      const n = w.nests[id];
+      if (!this.bloomMask![id] || (n.x - x) ** 2 + (n.y - y) ** 2 > (n.r * 3) ** 2) continue;
+      v.swell[id] = this.now;
+      this.s.particles.burst(n.x, n.y, BLOOM_GLOW, 14, 70, 2.6, 1.4, 1.2);
     }
   }
 
@@ -387,8 +434,10 @@ export class GameView {
     const w = this.world;
     const { particles, rings, sfx, camera, toast } = this.s;
     const d = w.deaths;
-    for (let k = 0; k < d.length; k += 3) {
-      particles.burst(d[k], d[k + 1], FACTION_RGB[d[k + 2]], 4, 55, 2, 0.5);
+    for (let k = 0; k < d.length; k += 4) {
+      // The Bloom's units burst into slow, drifting spores (#94).
+      if (d[k + 3]) particles.burst(d[k], d[k + 1], BLOOM_GLOW, 4, 35, 2.2, 1.4, 1.2);
+      else particles.burst(d[k], d[k + 1], FACTION_RGB[d[k + 2]], 4, 55, 2, 0.5);
       sfx.death(d[k], d[k + 1], d[k + 2]);
     }
     w.deaths = [];
@@ -497,6 +546,7 @@ export class GameView {
           break;
         case 'bloomSwarm':
           rings.add({ x: e.x, y: e.y, r0: e.r * 2.5, r1: e.r * 0.5, dur: 0.9, c: FERAL, thick: 3 });
+          this.bloomSwell(e.x, e.y);
           sfx.bloomSwarm();
           if (!this.bloomToasted) toast('The Bloom sends its swarms. They hunt every army alike', '#d65c4e');
           this.bloomToasted = true;
@@ -555,6 +605,7 @@ export class GameView {
         case 'heartPhase':
           rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r * 2.2, dur: 1, c: WHITE, thick: 4 });
           particles.burst(e.x, e.y, FERAL, 60, 160, 3, 1);
+          particles.burst(e.x, e.y, BLOOM_GLOW, 50, 90, 3, 2.4, 0.8);
           camera.shake = Math.min(1, camera.shake + 0.5);
           sfx.heartPhase();
           toast('The heart rages! Its swarms rally to defend it', '#d65c4e');
@@ -563,7 +614,9 @@ export class GameView {
           const kc = e.f >= 0 && e.f < NEUTRAL ? c : FERAL;
           rings.add({ x: e.x, y: e.y, r0: 10, r1: e.r * 3, dur: 1.4, c: WHITE, thick: 6 });
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 2, dur: 0.8, c: kc, thick: 0, disc: true });
-          particles.burst(e.x, e.y, FERAL, 140, 240, 3.4, 1.6);
+          // It collapses into a cloud of spores that drifts and fades (#94).
+          particles.burst(e.x, e.y, BLOOM_RGB, 70, 240, 3.4, 1.6);
+          particles.burst(e.x, e.y, BLOOM_GLOW, 140, 130, 3.4, 3.4, 0.6);
           camera.shake = 1;
           sfx.heartDown(e.x, e.y, e.f === this.human);
           if (e.f === this.human) toast('You destroyed the heart of the Bloom!', hex(e.f));

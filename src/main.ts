@@ -775,7 +775,7 @@ class App {
       const d = this.demo;
       d.update(dt);
       const w = d.world;
-      for (let k = 0; k < w.deaths.length; k += 3) {
+      for (let k = 0; k < w.deaths.length; k += 4) {
         this.particles.burst(w.deaths[k], w.deaths[k + 1], FACTION_RGB[w.deaths[k + 2]], 3, 45, 2, 0.45);
         this.sfx.death(w.deaths[k], w.deaths[k + 1], w.deaths[k + 2]);
       }

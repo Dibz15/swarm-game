@@ -1,8 +1,8 @@
 import type { Camera } from './camera';
 import type { Terrain } from '../sim/terrain';
 import { bakeTerrain, TEX_SCALE } from './terrainTex';
-import { renderScale } from './resolution';
-import { BEAM_FS, BEAM_VS, BG_FS, BG_VS, SHAPE_FS, SHAPE_VS, UNIT_FS, UNIT_VS } from './shaders';
+import { renderScale, resolution } from './resolution';
+import { BEAM_FS, BEAM_VS, BG_FS, BG_VS, GOO_COMP_FS, GOO_COMP_VS, GOO_FS, SHAPE_FS, SHAPE_VS, UNIT_FS, UNIT_VS } from './shaders';
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
   const sh = gl.createShader(type)!;
@@ -109,6 +109,12 @@ export class Renderer {
   private beamPass: Pass;
   private shapePass: Pass;
   private overlayPass: Pass;
+  /** the Bloom's goo (#94): soft blobs into a half-res field, then one pass that makes it liquid */
+  readonly gooBuf: InstanceBuffer;
+  private gooPass: Pass;
+  private goo: { prog: WebGLProgram; vao: WebGLVertexArrayObject; tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number; uTex: WebGLUniformLocation | null; uBody: WebGLUniformLocation | null; uRim: WebGLUniformLocation | null };
+  private gooBody = new Float32Array([0.84, 0.26, 0.45]);
+  private gooRim = new Float32Array([0.96, 0.54, 0.77]);
   private camU = new Float32Array(4);
   private rotU = new Float32Array(2);
 
@@ -150,7 +156,83 @@ export class Renderer {
     this.beamPass = this.makePass(BEAM_VS, BEAM_FS, this.beams, [4, 1]);
     this.shapePass = this.makePass(SHAPE_VS, SHAPE_FS, this.shapes, [3, 4]);
     this.overlayPass = this.makePass(SHAPE_VS, SHAPE_FS, this.overlay, [3, 4]);
+    this.gooBuf = new InstanceBuffer(5, 1, 1024);
+    this.gooPass = this.makePass(UNIT_VS, GOO_FS, this.gooBuf, [3, 2]);
+    const gooProg = program(gl, GOO_COMP_VS, GOO_COMP_FS);
+    const gooVao = gl.createVertexArray()!;
+    gl.bindVertexArray(gooVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    this.goo = {
+      prog: gooProg,
+      vao: gooVao,
+      tex: gl.createTexture()!,
+      fbo: gl.createFramebuffer()!,
+      w: 0,
+      h: 0,
+      uTex: gl.getUniformLocation(gooProg, 'u_tex'),
+      uBody: gl.getUniformLocation(gooProg, 'u_body'),
+      uRim: gl.getUniformLocation(gooProg, 'u_rim'),
+    };
     gl.bindVertexArray(null);
+  }
+
+  /** The goo's colours (0..255): its body and its rim. */
+  setGooColors(body: readonly number[], rim: readonly number[]): void {
+    for (let k = 0; k < 3; k++) {
+      this.gooBody[k] = body[k] / 255;
+      this.gooRim[k] = rim[k] / 255;
+    }
+  }
+
+  /** One wild dot's share of the goo field: a soft blob `size` across. */
+  gooBlob(x: number, y: number, size: number): void {
+    const u = this.gooBuf;
+    const i = u.alloc();
+    u.f32[i] = x;
+    u.f32[i + 1] = y;
+    u.f32[i + 2] = size;
+    u.f32[i + 3] = 0;
+    u.f32[i + 4] = 0;
+    u.color(i, 0, 255, 255, 255, 255);
+  }
+
+  /** The goo pass: the field at half resolution, thresholded onto the frame. Skipped on Fast. */
+  private drawGoo(camU: Float32Array, rot: Float32Array, px: number): void {
+    if (this.gooBuf.count === 0 || resolution() === 'fast') return;
+    const gl = this.gl;
+    const g = this.goo;
+    const w = Math.max(1, this.width >> 1), h = Math.max(1, this.height >> 1);
+    if (w !== g.w || h !== g.h) {
+      g.w = w;
+      g.h = h;
+      gl.bindTexture(gl.TEXTURE_2D, g.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, g.fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, g.tex, 0);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, g.fbo);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    this.drawPass(this.gooPass, camU, rot, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(g.prog);
+    gl.bindVertexArray(g.vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, g.tex);
+    gl.uniform1i(g.uTex, 0);
+    gl.uniform3fv(g.uBody, this.gooBody);
+    gl.uniform3fv(g.uRim, this.gooRim);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
   /** floatGroups: sizes of the float attributes (locations 1..), then one location per color. */
@@ -223,6 +305,7 @@ export class Renderer {
     this.beams.count = 0;
     this.shapes.count = 0;
     this.overlay.count = 0;
+    this.gooBuf.count = 0;
   }
 
   draw(cam: Camera, time: number): void {
@@ -253,6 +336,7 @@ export class Renderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     this.drawPass(this.shapePass, camU, rot, px);
+    this.drawGoo(camU, rot, px);
     this.drawPass(this.beamPass, camU, rot, px);
     this.drawPass(this.unitPass, camU, rot, px);
     this.drawPass(this.overlayPass, camU, rot, px);

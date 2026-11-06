@@ -12,6 +12,8 @@ import { SIEGE, WAVE_KINDS, rollWaves, waveSize, type SiegeSetup } from '../src/
 import { step } from '../src/sim/step';
 import { Terrain } from '../src/sim/terrain';
 import { Proxy } from '../src/proxy/proxy';
+import { spawnUnit, WILD_SWARM } from '../src/sim/world';
+import { bloomNestMask, growthTarget } from '../src/render/bloom';
 
 const SIEGE_SETUP: SiegeSetup = { seconds: 200, first: 20, every: 30, size: 20, grow: 1.12, depth: 1 };
 
@@ -234,4 +236,32 @@ describe('Hold the line in runs', () => {
     expect(outcomes).toContain('held');
     expect(outcomes).toContain('fallen');
   }, 240_000);
+});
+
+describe('the Bloom look (#94)', () => {
+  it('tags a wild death so it can burst into spores, and nobody else\'s', () => {
+    const w = createWorld(siege());
+    w.deaths = [];
+    const mine = spawnUnit(w, 0, Kind.Dot, 300, 300, 300, 300, 10);
+    const wild = spawnUnit(w, NEUTRAL, Kind.Dot, 400, 400, 400, 400, 10);
+    w.wild[wild] = WILD_SWARM;
+    w.dmg[mine] = w.dmg[wild] = 1e6;
+    resolveDamage(w);
+    expect(w.deaths.length).toBe(8);
+    const flag = (x: number) => w.deaths[w.deaths.findIndex((v, k) => k % 4 === 0 && v === x) + 3];
+    expect(flag(300)).toBe(0);
+    expect(flag(400)).toBe(1);
+  });
+
+  it('grows the siege\'s field nests while the Bloom holds them, and withers them when taken', () => {
+    const w = createWorld(siege());
+    const mask = bloomNestMask(w);
+    const id = w.siege!.bloomNests[0];
+    expect(mask[id]).toBe(1);
+    expect(growthTarget(w, id, mask)).toBe(1);
+    w.nests[id].owner = 0;
+    expect(growthTarget(w, id, mask)).toBe(0);
+    const other = w.nests.findIndex((n) => !mask[n.id]);
+    expect(growthTarget(w, other, mask)).toBe(0);
+  });
 });

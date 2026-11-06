@@ -169,7 +169,7 @@ function sacrifice(w: World, p: number, slots: number[], n: number, x: number, y
   const order = [...slots].sort((a, b) => d2(a) - d2(b) || a - b);
   for (let k = 0; k < n; k++) {
     const s = order[k];
-    w.deaths.push(w.x[s], w.y[s], p);
+    w.deaths.push(w.x[s], w.y[s], p, 0);
     w.factions[p].stats.lost++;
     removeUnit(w, s);
   }

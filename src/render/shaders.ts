@@ -148,7 +148,13 @@ void main(){
   float sq = max(abs(p.x), abs(p.y));
   float d = sq;
   float inner = 1.0;
-  if (shape > 3.5) {
+  if (shape > 4.5) {
+    // The Bloom's blob (#94): a lumpy, slowly churning dot; angle seeds and turns the lumps.
+    float L = length(p);
+    float th = atan(p.y, p.x);
+    d = L * (1.0 + 0.09 * sin(th * 2.0 + v_s.y * 0.7) + 0.07 * sin(th * 3.0 - v_s.y * 1.3) + 0.05 * sin(th * 5.0 + v_s.y));
+    inner = L < 0.35 ? 0.75 : 1.0;
+  } else if (shape > 3.5) {
     // Colossus: a spiked, slowly turning star with a dark heart.
     float L = length(p);
     d = L * (1.0 + 0.2 * cos(atan(p.y, p.x) * 7.0 + v_s.y));
@@ -200,6 +206,42 @@ out vec4 o;
 void main(){
   float a = 1.0 - v_v * v_v;
   o = vec4(v_c.rgb * a * v_c.a, 0.0);
+}`;
+
+// The Bloom's goo (#94): each wild dot adds a soft falloff to a half-res field...
+export const GOO_FS = `#version 300 es
+precision mediump float;
+in vec2 v_p;
+in vec2 v_s;
+in vec4 v_c;
+out vec4 o;
+void main(){
+  float L2 = dot(v_p, v_p);
+  o = vec4(exp(-L2 * 0.9) * v_c.a, 0.0, 0.0, 0.0);
+}`;
+
+// ...and one full-screen pass thresholds it into a liquid body with a glowing rim.
+export const GOO_COMP_VS = `#version 300 es
+layout(location=0) in vec2 a_q;
+out vec2 v_uv;
+void main(){
+  v_uv = a_q * 0.5 + 0.5;
+  gl_Position = vec4(a_q, 0., 1.);
+}`;
+
+export const GOO_COMP_FS = `#version 300 es
+precision mediump float;
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform vec3 u_body;
+uniform vec3 u_rim;
+out vec4 o;
+void main(){
+  float f = texture(u_tex, v_uv).r;
+  float body = smoothstep(0.42, 0.55, f);
+  float rim = smoothstep(0.22, 0.42, f) * (1.0 - body);
+  float a = body * 0.42;
+  o = vec4(u_body * a + u_rim * rim * 0.35, a);
 }`;
 
 export const SHAPE_VS = `#version 300 es
