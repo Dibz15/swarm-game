@@ -31,6 +31,8 @@ export interface Reward {
   kind?: number;
   /** power variants: the power they change (one variant per power) */
   power?: Power;
+  /** pacts: the drawback, apart from `text` (the gain) so the card can show it on its own (#109) */
+  cost?: string;
   apply: (m: FactionMods) => void;
 }
 
@@ -117,17 +119,19 @@ export const REWARDS: Reward[] = [
   {
     id: 'glass',
     name: 'Glass swarm',
-    text: '+35% damage, −15% HP, for every unit',
+    text: '+35% damage for every unit',
+    cost: '−15% HP for every unit',
     family: 'pact',
     tier: 'rare',
     apply: (m) => m.kind.forEach((k) => ((k.dps *= 1.35), (k.hp *= 0.85))),
   },
-  { id: 'hunger', name: 'Hunger', text: 'Double biomass from battles, but the Bloom advances 25% faster', family: 'pact', tier: 'rare', apply: () => {} },
-  { id: 'lone-wolf', name: 'Lone wolf', text: 'Field only one brood, but it fights three times as large, as veterans', family: 'pact', tier: 'rare', apply: () => {} },
+  { id: 'hunger', name: 'Hunger', text: 'Double biomass from battles', cost: 'The Bloom advances 25% faster', family: 'pact', tier: 'rare', apply: () => {} },
+  { id: 'lone-wolf', name: 'Lone wolf', text: 'Your brood fights three times as large, as veterans', cost: 'Field only one brood', family: 'pact', tier: 'rare', apply: () => {} },
   {
     id: 'blood-price',
     name: 'Blood price',
-    text: 'Powers cost no energy, but one of your units for every 6 energy they would have cost',
+    text: 'Powers cost no energy',
+    cost: 'One of your units for every 6 energy they would have cost',
     family: 'pact',
     tier: 'rare',
     apply: (m) => (m.bloodPrice = true),
@@ -135,15 +139,19 @@ export const REWARDS: Reward[] = [
   {
     id: 'scorched-earth',
     name: 'Scorched earth',
-    text: 'Nests you capture start half-held and must recover before they spawn, but every nest spawns 20% faster',
+    text: 'Every nest spawns 20% faster',
+    cost: 'Nests you capture start half-held and must recover before they spawn',
     family: 'pact',
     tier: 'rare',
     apply: (m) => ((m.captureControl = 0.5), (m.spawnRate *= 1.2)),
   },
-  { id: 'feral', name: 'Feral', text: 'No powers at all, but every nest spawns 40% faster', family: 'pact', tier: 'rare', apply: (m) => ((m.noPowers = true), (m.spawnRate *= 1.4)) },
+  { id: 'feral', name: 'Feral', text: 'Every nest spawns 40% faster', cost: 'No powers at all', family: 'pact', tier: 'rare', apply: (m) => ((m.noPowers = true), (m.spawnRate *= 1.4)) },
 ];
 
 export const REWARD: Record<string, Reward> = Object.fromEntries(REWARDS.map((r) => [r.id, r]));
+
+/** A reward's whole effect in one line: a pact's gain, then its cost. */
+export const rewardText = (r: Reward): string => (r.cost ? `${r.text}. Cost: ${r.cost}` : r.text);
 
 /** What an offer needs to know about the run (kept narrow so run.ts can import this). */
 export interface OfferRun {

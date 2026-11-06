@@ -777,6 +777,15 @@ export function skipRecruit(run: RunState): void {
   run.recruit = undefined;
 }
 
+/** Where a strain could go (#109): broods of its kind that don't hold it yet, full (a pick replaces one) or not, and fielded. */
+export function strainHomes(run: RunState, id: string): { brood: Brood; full: boolean; fielded: boolean }[] {
+  const r = REWARD[id];
+  if (r?.family !== 'strain') return [];
+  return run.broods
+    .filter((b) => b.kind === r.kind && !b.strains.includes(id))
+    .map((brood) => ({ brood, full: brood.strains.length >= STRAIN_SLOTS, fielded: run.fielded.includes(brood.id) }));
+}
+
 /**
  * Take a reward from the offer. Strains go to `broodId` (one of its kind),
  * replacing `replace` when its slots are full; a power variant replaces the

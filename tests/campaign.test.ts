@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
 import { COST, MAX_ROSTER, MILITIA, MIN_SIZE, SURVIVOR_CAP, UNLOCKS, WIN_GROWTH, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
-import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, canStep, hops, maxFielded, moves, newRun, reachable, rerollCost, rerollOffer, resolveTurn, skipRecruit, skipReward, takeRecruit, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
+import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, canStep, hops, maxFielded, moves, newRun, reachable, rerollCost, rerollOffer, resolveTurn, skipRecruit, skipReward, strainHomes, takeRecruit, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
 import { REWARD, modsFor, offerable, rollOffer } from '../src/campaign/rewards';
 import { Kind, NestType } from '../src/sim/constants';
 import { DIFFICULTY } from '../src/sim/ai/bot';
@@ -659,5 +659,25 @@ describe('reachable nodes (#95)', () => {
     const run = rush(newRun('over', 0, 'swarm', 0));
     expect(run.status).not.toBe('active');
     expect(reachable(run)).toBeNull();
+  });
+});
+
+describe('strain homes (#109)', () => {
+  it('lists broods of the strain\'s kind that lack it, flagged full and fielded', () => {
+    const run = newRun('homes', 0, 'wall', 0);
+    const strain = Object.values(REWARD).filter((r) => r.family === 'strain' && r.kind === Kind.Tank);
+    const [a, b, c] = strain.map((r) => r.id);
+    run.broods = [
+      brood({ id: 0, kind: Kind.Tank, strains: [] }),
+      brood({ id: 1, kind: Kind.Tank, strains: [b, c] }),
+      brood({ id: 2, kind: Kind.Tank, strains: [a] }),
+      brood({ id: 3, kind: Kind.Dot }),
+    ];
+    run.fielded = [1, 3];
+    const homes = strainHomes(run, a);
+    expect(homes.map((h) => h.brood.id)).toEqual([0, 1]);
+    expect(homes.map((h) => h.full)).toEqual([false, true]);
+    expect(homes.map((h) => h.fielded)).toEqual([false, true]);
+    expect(strainHomes(run, 'glass')).toEqual([]);
   });
 });
