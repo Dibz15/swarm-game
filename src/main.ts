@@ -572,6 +572,7 @@ class App {
       lockdown: () => this.game?.startAim('lockdown'),
       skip: () => this.skipMission(),
       go: () => this.game?.skipRead(),
+      next: () => this.game?.nextStep(),
     });
     this.hud.setMuted(this.sfx.muted);
     this.applyInsets();

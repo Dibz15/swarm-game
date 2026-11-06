@@ -701,9 +701,20 @@ body.mobile .coach p { margin: 2px 0 4px; }
 body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .card.tutorial h2 small { font-size: 13px; color: var(--muted); font-weight: normal; margin-left: 6px; }
 .missions { list-style: none; padding: 0; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
-.missions button { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; }
-.missions button span { font-size: 13px; color: var(--muted); }
-.missions li.done b::after { content: ' ✓'; color: var(--accent); }
+/* #115: missions read as cards you can tap; locked ones are greyed and say why. */
+.missions button {
+  width: 100%; text-align: left; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; padding: 12px 14px;
+  border-radius: 12px; transition: transform 0.12s, border-color 0.12s, background 0.12s;
+}
+.missions button:hover:not(:disabled) { border-color: var(--accent); background: rgba(45, 226, 230, 0.1); transform: translateY(-1px); }
+.missions button:active:not(:disabled) { transform: translateY(1px); }
+.missions .num { grid-row: span 2; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; border: 1px solid var(--line-strong); }
+.missions li.done .num { background: var(--accent); color: #06070f; border-color: var(--accent); }
+.missions button span.what { grid-column: 2; font-size: 13px; color: var(--muted); }
+.missions .play { grid-row: 1 / span 2; grid-column: 3; font-size: 12px; padding: 4px 10px; border-radius: 999px; background: rgba(45, 226, 230, 0.16); color: var(--accent); white-space: nowrap; }
+.missions li.done .play { background: rgba(150, 170, 255, 0.12); color: var(--text); }
+.missions li.locked button { opacity: 0.45; cursor: not-allowed; }
+.missions li.locked .play { background: none; color: var(--muted); }
 .card.brief { max-width: 460px; }
 .card.brief .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
 .card.brief h2 { margin-top: 4px; }
@@ -749,6 +760,10 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .coach-hold { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
 .coach-hold i { flex: 1; height: 4px; border-radius: 2px; background: var(--line-strong); overflow: hidden; }
 .coach-hold i b { display: block; height: 100%; background: var(--accent); }
+/* #115: once your part is done, the coach waits with you; tour steps move on with Next. */
+.coach.waiting p { color: #c6cceb; }
+.coach-next { display: flex; justify-content: flex-end; margin: 0 0 6px; }
+.nest-ico { display: inline-block; width: 1.05em; height: 1.05em; vertical-align: -0.15em; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
 .coach-hold button { padding: 2px 12px; }
 .card.campaign .menu-buttons { width: 100%; margin: 12px 0 4px; }
 .card.campaign .menu-buttons button { display: flex; flex-direction: column; gap: 2px; text-align: left; }

@@ -68,6 +68,9 @@ export class GameView {
   private readStep = -1;
   readUntil = 0;
   readFrom = 0;
+  /** the order log's length when the reading pause began: an order ends it (#115) */
+  private readLog = 0;
+  private readQueue = 0;
   /** 0..1 of the reading pause left, for the coach's bar */
   readLeft = 0;
   private mask = new Uint8Array(MAX_UNITS);
@@ -159,7 +162,7 @@ export class GameView {
   /** Advance the tutorial steps, pulse the nests the current step is about, end on success. */
   private updateMission(time: number): void {
     const m = this.mission!;
-    const ctx = { w: this.world, human: this.human, log: this.session.log };
+    const ctx = m.ctx({ w: this.world, human: this.human, log: this.session.log });
     for (const c of m.take(ctx)) this.session.issue(c);
     if (m.update(ctx)) {
       const c = this.s.camera;
@@ -174,8 +177,14 @@ export class GameView {
       this.readStep = m.step;
       this.readFrom = time;
       this.readUntil = time + READ_PAUSE;
+      this.readLog = this.session.log.length;
+      // The step's own entry commands (a summoned swarm) are already queued: they don't count.
+      this.readQueue = this.session.queued;
     }
-    this.session.held = time < this.readUntil;
+    // Your first order ends the pause and goes through (#115): no hint asks for what you can't do yet.
+    if (this.readUntil > time && this.pendingOrders()) this.skipRead();
+    // A tour step holds the game until Next.
+    this.session.held = time < this.readUntil || !!m.current?.next;
     this.readLeft = this.session.held ? (this.readUntil - time) / READ_PAUSE : 0;
     if (time - this.highlightAt < 1.1) return;
     this.highlightAt = time;
@@ -183,6 +192,16 @@ export class GameView {
       const n = this.world.nests[id];
       if (n) this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.3, r1: n.r * 2.6, dur: 0.9, c: WHITE, thick: 3 });
     }
+  }
+
+  /** Has the player given an order during the reading pause (still queued, or logged)? */
+  private pendingOrders(): boolean {
+    return this.session.log.length > this.readLog || this.session.queued > this.readQueue;
+  }
+
+  /** Next, on a tour step (#115). */
+  nextStep(): void {
+    this.mission?.ack();
   }
 
   /** End the reading pause now (the coach's Go button). */
@@ -725,6 +744,11 @@ export class GameView {
       }
     }
     return best;
+  }
+
+  /** Any of your dots within `r` of a point (#115: a tap on them isn't snapped to a nest). */
+  hasOwnUnitsNear(wx: number, wy: number, r: number): boolean {
+    return this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= r * r).length > 0;
   }
 
   private ownUnitsIn(test: (x: number, y: number) => boolean): number[] {

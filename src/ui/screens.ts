@@ -9,7 +9,7 @@ import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
-import { MISSIONS, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
+import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
 
@@ -213,7 +213,13 @@ export function tutorialMenu(p: TutorialProgress, h: { play: (i: number) => void
       <div class="card tutorial">
         <h2>Tutorial <small>about 10 minutes</small></h2>
         <ol class="missions">${MISSIONS.map(
-          (ms, i) => `<li class="${p.done.includes(ms.id) ? 'done' : ''}"><button data-i="${i}"><b>${i + 1}. ${ms.title}</b><span>${ms.teaches}</span></button></li>`,
+          (ms, i) => {
+            // Cards you can tap (#115): done ones replay, the next one plays, later ones wait.
+            const done = p.done.includes(ms.id);
+            const open = missionUnlocked(p, i);
+            const tag = !open ? `🔒 Finish mission ${i} first` : done ? 'Replay ↻' : 'Play ▶';
+            return `<li class="${done ? 'done' : ''}${open ? '' : ' locked'}"><button data-i="${i}" ${open ? '' : 'disabled'}><span class="num">${done ? '✓' : i + 1}</span><b>${ms.title}</b><span class="what">${ms.teaches}</span><span class="play">${tag}</span></button></li>`;
+          },
         ).join('')}</ol>
         <p class="hint">After the last mission you can play a real 1v1 against a Normal bot.</p>
         <div class="row end"><button data-a="back">Back</button></div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MISSIONS, MissionRun, type Lock } from '../src/game/tutorial';
+import { MISSIONS, MissionRun, missionUnlocked, type Lock } from '../src/game/tutorial';
 import type { TimedCommand } from '../src/game/session';
 import { hasPower, type Command } from '../src/sim/commands';
 import { NEUTRAL, POWER, TICK_HZ, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../src/sim/constants';
@@ -101,6 +101,8 @@ describe('tutorial (#17)', () => {
           step(w, cmds);
           w.fx = [];
           w.deaths = [];
+          // A player reads each tour step and presses Next.
+          if (run.current?.next) run.ack();
           run.update({ w, human: me, log });
           // Every step's demo must build from live state without throwing.
           if (w.tick % 90 === 0) {
@@ -155,7 +157,7 @@ describe('tutorial pacing', () => {
       w.deaths = [];
     }
     expect(w.events!.swarms.length).toBe(0);
-    run.step = m.steps.findIndex((s) => s.status);
+    run.step = m.steps.findIndex((s) => s.enter);
     const start = w.tick;
     let seen = -1;
     while (w.tick < start + 15 * TICK_HZ && seen < 0) {
@@ -167,5 +169,81 @@ describe('tutorial pacing', () => {
     }
     expect(seen).toBeGreaterThan(start);
     expect((seen - start) / TICK_HZ).toBeLessThan(8);
+  });
+});
+
+describe('tutorial hints (#115)', () => {
+  const play = (id: string) => {
+    const i = MISSIONS.findIndex((m) => m.id === id);
+    const m = MISSIONS[i];
+    const w = createWorld(m.setup());
+    return { m, w, run: new MissionRun(m, i), log: [] as TimedCommand[] };
+  };
+  const army = (w: World) => {
+    const out: number[] = [];
+    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === 0) out.push(w.uid[i]);
+    return out;
+  };
+
+  it('waits on the world once the order is given, not before', () => {
+    const { w, run, log } = play('move');
+    const ctx = { w, human: 0, log };
+    expect(run.waiting(ctx)).toBe(false);
+    const n = w.nests[1];
+    log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(w), x: n.x, y: n.y, nest: n.id } });
+    expect(run.waiting(ctx)).toBe(true);
+    // An order somewhere else doesn't count.
+    const other = play('move');
+    other.log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(other.w), x: 20, y: 20, nest: -1 } });
+    expect(other.run.waiting({ w: other.w, human: 0, log: other.log })).toBe(false);
+  });
+
+  it("a step's orders are its own: the next step starts waiting afresh", () => {
+    const { w, run, log } = play('move');
+    const n = w.nests[1];
+    log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(w), x: n.x, y: n.y, nest: n.id } });
+    n.owner = 0;
+    run.update({ w, human: 0, log });
+    expect(run.step).toBe(1);
+    expect(run.waiting({ w, human: 0, log })).toBe(false);
+  });
+
+  it('the mission 3 tour moves on only with Next', () => {
+    const { m, w, run, log } = play('fight');
+    w.nests[2].owner = w.nests[3].owner = 0;
+    run.update({ w, human: 0, log });
+    const tour = m.steps.filter((s) => s.next).length;
+    expect(tour).toBe(3);
+    for (let k = 0; k < tour; k++) {
+      const at = run.step;
+      expect(run.current?.next).toBe(true);
+      run.update({ w, human: 0, log });
+      expect(run.step).toBe(at);
+      run.ack();
+      run.update({ w, human: 0, log });
+      expect(run.step).toBe(at + 1);
+    }
+    expect(run.current?.next).toBeUndefined();
+  });
+
+  it('Barrage waits for its shell to land before moving on', () => {
+    const { m, w, run, log } = play('powers');
+    run.step = m.steps.findIndex((s) => s.text.desktop.includes('Barrage'));
+    log.push({ tick: 1, cmd: { t: 'barrage', p: 0, x: 0, y: 0 } });
+    w.barrages.push({ x: 1, y: 1, owner: 0, impact: 99, r: 40, x0: 0, y0: 0, t0: 0 });
+    expect(run.waiting({ w, human: 0, log })).toBe(true);
+    run.update({ w, human: 0, log });
+    expect(m.steps[run.step].text.desktop).toContain('Barrage');
+    w.barrages.length = 0;
+    run.update({ w, human: 0, log });
+    expect(m.steps[run.step].text.desktop).not.toContain('Barrage');
+  });
+
+  it('missions unlock one after another', () => {
+    const p = { done: ['move'], graduated: false, offered: true };
+    expect([0, 1, 2].map((i) => missionUnlocked(p, i))).toEqual([true, true, false]);
+    // Older saves that skipped ahead, or graduated, keep everything open.
+    expect(missionUnlocked({ done: ['domination'], graduated: false, offered: true }, 2)).toBe(true);
+    expect(missionUnlocked({ done: [], graduated: true, offered: true }, 4)).toBe(true);
   });
 });

@@ -41,6 +41,11 @@ export class LocalSession {
     this.onIssue?.(cmd);
   }
 
+  /** Orders issued but not yet stepped (held or paused). */
+  get queued(): number {
+    return this.queue.length;
+  }
+
   update(dt: number): number {
     if (this.paused || this.held || this.world.over) {
       this.alpha = 1;
