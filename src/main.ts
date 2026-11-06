@@ -1,4 +1,5 @@
 import './style.css';
+import { teamLayout, teamsList } from './ui/teams';
 import { AudioEngine } from './audio/engine';
 import { FACTION_HEX, FACTION_RGB } from './content/factions';
 import { GameView, type Services } from './game/gameView';
@@ -628,6 +629,8 @@ class App {
           },
           quitLabel: this.run ? 'Retreat (counts as a loss)' : undefined,
           audio: this.sfx,
+          // Who's on your team (#74), in a team match.
+          teams: teamLayout(g.world, g.human).team ? teamsList(g.world, g.human) : undefined,
         }),
       );
     }
