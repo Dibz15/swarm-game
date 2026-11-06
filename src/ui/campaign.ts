@@ -44,7 +44,7 @@ import {
   type TurnResult,
 } from '../campaign/run';
 import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, rewardText, type Family, type Reward } from '../campaign/rewards';
-import { COST, KIND_NAME, KIND_NEST, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
+import { COST, KIND_NAME, KIND_NEST, KIND_ONE, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
 import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
@@ -1400,8 +1400,15 @@ const TIER_LABEL = { common: 'Common', uncommon: 'Uncommon', rare: 'Rare' } as c
 function rewardNote(run: RunState, r: Reward): string {
   if (r.family === 'strain') {
     // Which broods could take it (#109): you choose among them next.
-    const homes = strainHomes(run, r.id).map((h) => `${esc(h.brood.name)} (${h.full ? 'full' : `${h.brood.strains.length}/${STRAIN_SLOTS} strains`})`);
-    return homes.length === 1 ? `Goes to ${homes[0]}` : `Goes to one of: ${homes.join(', ')}. You choose next.`;
+    const homes = strainHomes(run, r.id);
+    // A rescue swap after the offer was rolled can leave no brood of its kind.
+    if (!homes.length) return `No ${KIND_ONE[r.kind!]} brood can take it now`;
+    if (homes.length === 1) {
+      const h = homes[0];
+      return `Goes to ${esc(h.brood.name)}${h.full ? ' (full: replaces one of its strains)' : ''}`;
+    }
+    const list = homes.map((h) => `${esc(h.brood.name)} (${h.full ? 'full' : `${h.brood.strains.length}/${STRAIN_SLOTS} strains`})`);
+    return `Goes to one of: ${list.join(', ')}. You choose next.`;
   }
   if (r.power) {
     const held = run.perks.find((p) => REWARD[p]?.power === r.power);
@@ -1413,11 +1420,17 @@ function rewardNote(run: RunState, r: Reward): string {
 /** Each family's mark in a reward card's corner (#109); a strain shows its unit kind. */
 const FAMILY_MARK: Record<Family, string> = { strain: '✦', power: '⚡', perk: '◎', pact: '⛓' };
 
-/** A reward card: framed by family, its tier on the edge and tag (#109). */
-function rewardCard(run: RunState, r: Reward): string {
+/** A reward card's head: its family mark (a strain's unit kind, a variant's power) beside a tag. */
+function rewardHead(r: Reward, tag: string): string {
   const mark = r.kind !== undefined ? `${KIND_GLYPH[r.kind]}<i>✦</i>` : r.power ? `${FAMILY_MARK.power}<i>${POWER_LABEL[r.power]}</i>` : FAMILY_MARK[r.family];
-  return `<button class="reward ${r.tier} fam-${r.family}" data-r="${r.id}">
-    <span class="head"><span class="emblem" aria-hidden="true">${mark}</span><span class="tag">${FAMILY_LABEL[r.family]} · ${TIER_LABEL[r.tier]}</span></span>
+  return `<span class="head"><span class="emblem" aria-hidden="true">${mark}</span><span class="tag">${tag}</span></span>`;
+}
+
+/** A reward card: framed by family, its tier on the edge and tag (#109). A strain no brood can take is disabled. */
+function rewardCard(run: RunState, r: Reward): string {
+  const homeless = r.family === 'strain' && !strainHomes(run, r.id).length;
+  return `<button class="reward ${r.tier} fam-${r.family}" data-r="${r.id}"${homeless ? ' disabled' : ''}>
+    ${rewardHead(r, `${FAMILY_LABEL[r.family]} · ${TIER_LABEL[r.tier]}`)}
     <b>${r.name}</b>
     ${r.kind !== undefined ? `<span class="for">For your <b>${KIND_NAME[r.kind]}</b></span>` : ''}
     <span>${r.text}</span>
@@ -1510,7 +1523,7 @@ export function rewardPick(run: RunState, sfx: AudioEngine, h: { done: () => voi
   const pickBrood = (r: Reward, full: Brood | null = null) => {
     sfx.mapHover();
     const kind = KIND_NAME[r.kind!];
-    const one = kind.replace(/s$/, '');
+    const one = KIND_ONE[r.kind!];
     const back = `<div class="row end"><button data-a="back">Back</button></div>`;
     if (full) {
       // Old and new side by side: the new strain, and the ones it could replace.
@@ -1528,7 +1541,7 @@ export function rewardPick(run: RunState, sfx: AudioEngine, h: { done: () => voi
         <p class="hint">A brood carries ${STRAIN_SLOTS} strains. Give one up for ${r.name}.</p>
         <div class="strain-compare">
           <div class="reward ${r.tier} fam-strain new">
-            <span class="head"><span class="emblem" aria-hidden="true">${KIND_GLYPH[r.kind!]}<i>✦</i></span><span class="tag">New strain</span></span>
+            ${rewardHead(r, 'New strain')}
             <b>${r.name}</b>
             <span>${r.text}</span>
           </div>
