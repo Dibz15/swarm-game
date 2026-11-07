@@ -483,8 +483,9 @@ export const MISSIONS: Mission[] = [
             nest(300, 180, NestType.Forge, -1, 4),
             // Level 2: it shoots back, which is what Fortify is for.
             nest(300, 500, NestType.Spire, -1, 6, { level: 2 }),
-            // Within Barrage reach of the Spire.
-            nest(560, 340, NestType.Swift, -1, 10),
+            // Within Barrage reach of the Spire, and close enough to the wall that a Blink
+            // from around it lands well inside the Bastion's pocket.
+            nest(620, 360, NestType.Swift, -1, 10),
             // In a walled pocket, open to the north: Blink hops the west wall.
             nest(800, 360, NestType.Bastion, -1, 8),
             // Far from the pocket's mouth, so nobody knocks it out on the way.
