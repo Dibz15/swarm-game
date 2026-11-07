@@ -67,6 +67,8 @@ export interface Mission {
   learned: string[];
   setup: () => MatchSetup;
   locked: Lock[];
+  /** a real match (#147): played on a fresh random map against a real bot, and it can't be skipped */
+  real?: true;
   /** hold the game for a few seconds whenever the instruction changes, so it can be read first */
   readPause?: boolean;
   steps: Step[];
@@ -743,6 +745,41 @@ export const MISSIONS: Mission[] = [
       },
     ],
   },
+  // The graduation match (#147): a real 1v1, tracked like the rest.
+  {
+    id: 'final',
+    title: 'First real match',
+    teaches: 'A full 1v1 against a Normal bot: everything you’ve learned, nothing held back.',
+    learned: ['You beat a Normal bot.', 'From here: harder bots, bigger maps, free-for-alls and the campaign.'],
+    locked: [],
+    real: true,
+    // The game plays this on a fresh random map (quickSetup); this fixed one is for tests.
+    setup: () => ({
+      seed: 1707,
+      size: 'small',
+      map: map([nest(150, 340, NestType.Hive, 0, 14), nest(950, 340, NestType.Hive, 1, 14), nest(420, 170, NestType.Forge, -1, 5), nest(420, 510, NestType.Spire, -1, 5), nest(550, 340, NestType.Hive, -1, 8), nest(680, 170, NestType.Spire, -1, 5), nest(680, 510, NestType.Forge, -1, 5)]),
+      players: [
+        { faction: 0, team: 0, human: true, energy: 0 },
+        { faction: 1, team: 1, human: false, bot: { difficulty: 1, personality: 'expander' } },
+      ],
+    }),
+    steps: [
+      {
+        text: {
+          desktop: 'This one’s real: a <b>Normal bot</b> that grows, attacks and uses powers, and every power is yours too. Grow first: take the nests near you.',
+          mobile: 'This one’s real: a <b>Normal bot</b> that grows, attacks and uses powers, and every power is yours too. Grow first: take the nests near you.',
+        },
+        done: (c) => owned(c) >= 3 || c.w.tick >= 60 * TICK_HZ,
+      },
+      {
+        text: {
+          desktop: 'Win: knock the bot out, or hold the marked share of nests for 30 seconds. Good luck!',
+          mobile: 'Win: knock the bot out, or hold the marked share of nests for 30 seconds. Good luck!',
+        },
+        done: won,
+      },
+    ],
+  },
 ];
 
 /** Advances through one mission's steps as the match plays. */
@@ -836,7 +873,12 @@ const KEY = 'swarm.tutorial';
 export function loadProgress(): TutorialProgress {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { done: [], graduated: false, offered: false, ...JSON.parse(raw) };
+    if (raw) {
+      const p: TutorialProgress = { done: [], graduated: false, offered: false, ...JSON.parse(raw) };
+      // Saved before the 1v1 was a mission (#147): having won it shows as 'ffa'.
+      if (p.graduated && p.next === 'ffa' && !p.done.includes('final')) p.done.push('final');
+      return p;
+    }
   } catch {
     /* ignore */
   }

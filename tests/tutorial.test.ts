@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MISSIONS, MissionRun, missionUnlocked, type Lock } from '../src/game/tutorial';
+import { loadProgress, MISSIONS, MissionRun, missionUnlocked, type Lock } from '../src/game/tutorial';
 import type { TimedCommand } from '../src/game/session';
 import { applyCommand, hasPower, type Command } from '../src/sim/commands';
 import { NEUTRAL, POWER, TICK_HZ, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../src/sim/constants';
@@ -100,6 +100,8 @@ function autopilot(w: World, me: number, run: MissionRun, locked: Set<Lock>): Co
 describe('tutorial (#17)', () => {
   const times: string[] = [];
   for (const [i, m] of MISSIONS.entries()) {
+    // A real match (#147) is a Normal bot: not something a scripted autopilot is sure to beat.
+    if (m.real) continue;
     {
       it(`mission ${i + 1} "${m.title}" can be finished by plain play`, () => {
         const w = createWorld(m.setup());
@@ -336,5 +338,50 @@ describe('tutorial hints (#115)', () => {
     const old = { done: ['move', 'rally', 'fight', 'powers'], graduated: false, offered: true };
     expect(missionUnlocked(old, at('nestpowers'))).toBe(true);
     expect(missionUnlocked(old, at('domination'))).toBe(true);
+  });
+});
+
+describe('the graduation match (#147)', () => {
+  const i = MISSIONS.length - 1;
+  const m = MISSIONS[i];
+
+  it('is the last mission: a real 1v1 against a Normal bot, nothing locked', () => {
+    expect(m.id).toBe('final');
+    expect(m.real).toBe(true);
+    expect(m.locked).toEqual([]);
+    const bots = m.setup().players.filter((p) => p.bot);
+    expect(bots.length).toBe(1);
+    expect(bots[0].bot!.difficulty).toBe(1);
+  });
+
+  it('is done when you win, and opens once Domination is done', () => {
+    const w = createWorld(m.setup());
+    const run = new MissionRun(m, i);
+    const log: TimedCommand[] = [];
+    w.nests.filter((n) => n.owner === NEUTRAL).slice(0, 2).forEach((n) => (n.owner = 0));
+    run.update({ w, human: 0, log });
+    expect(run.step).toBe(1);
+    w.over = true;
+    w.winnerTeam = w.teamOf[0];
+    run.update({ w, human: 0, log });
+    expect(run.complete).toBe(true);
+    expect(missionUnlocked({ done: ['move', 'rally', 'fight', 'nestpowers', 'powers'], graduated: false, offered: true }, i)).toBe(false);
+    expect(missionUnlocked({ done: ['move', 'rally', 'fight', 'nestpowers', 'powers', 'domination'], graduated: false, offered: true }, i)).toBe(true);
+  });
+
+  it('old saves that already won the 1v1 load with it done', () => {
+    const store = new Map<string, string>();
+    const g = globalThis as { localStorage?: unknown };
+    const before = g.localStorage;
+    g.localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    try {
+      store.set('swarm.tutorial', JSON.stringify({ done: ['domination'], graduated: true, offered: true, next: 'ffa' }));
+      expect(loadProgress().done).toContain('final');
+      // Graduated but lost (or never played) the old 1v1: still to do.
+      store.set('swarm.tutorial', JSON.stringify({ done: ['domination'], graduated: true, offered: true, next: 'graduate' }));
+      expect(loadProgress().done).not.toContain('final');
+    } finally {
+      g.localStorage = before;
+    }
   });
 });

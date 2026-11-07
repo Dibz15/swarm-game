@@ -221,7 +221,7 @@ export function tutorialMenu(p: TutorialProgress, h: { play: (i: number) => void
             return `<li class="${done ? 'done' : ''}${open ? '' : ' locked'}"><button data-i="${i}" ${open ? '' : 'disabled'}><span class="num">${done ? '✓' : i + 1}</span><b>${ms.title}</b><span class="what">${ms.teaches}</span><span class="play">${tag}</span></button></li>`;
           },
         ).join('')}</ol>
-        <p class="hint">After the last mission you can play a real 1v1 against a Normal bot.</p>
+        <p class="hint">The last mission is a real 1v1 against a Normal bot.</p>
         <div class="row end"><button data-a="back">Back</button></div>
       </div>
     </div>`);
@@ -251,12 +251,17 @@ export function missionDebrief(
   ms: Mission,
   i: number,
   won: boolean,
-  h: { next: () => void; retry: () => void; menu: () => void },
+  h: { next: () => void; retry: () => void; menu: () => void; easy?: () => void },
 ): HTMLDivElement {
   const last = i === MISSIONS.length - 1;
+  // The graduation 1v1 (#147): no skipping it, but a warm-up against Easy when it's lost.
+  const real = !!ms.real;
   const body = won
-    ? `<ul class="steps">${ms.learned.map((l) => `<li>${l}</li>`).join('')}</ul>${last ? '<p><b>Tutorial complete!</b> Ready for a real match? A 1v1 against a Normal bot on a small map.</p>' : ''}`
-    : '<p>Your nests and dots are gone. Try again: grow first, and bring more dots than the enemy.</p>';
+    ? `<ul class="steps">${ms.learned.map((l) => `<li>${l}</li>`).join('')}</ul>${last ? '<p><b>Tutorial complete!</b> You’re ready for anything: try a free-for-all next.</p>' : ''}`
+    : real
+      ? '<p>The Normal bot won this time. Try again on a new map, or warm up against an Easy bot first.</p>'
+      : '<p>Your nests and dots are gone. Try again: grow first, and bring more dots than the enemy.</p>';
+  const nextLabel = won ? (last ? 'Main menu' : 'Next mission') : real ? 'Warm up vs Easy' : 'Skip mission';
   const m = el(`
     <div class="screen modal dim">
       <div class="card brief ${won ? 'win' : 'lose'}">
@@ -265,14 +270,14 @@ export function missionDebrief(
         ${body}
         ${!last ? `<p class="hint">Next: ${MISSIONS[i + 1].title}. ${MISSIONS[i + 1].teaches}</p>` : ''}
         <div class="row end">
-          <button data-a="menu">Main menu</button>
-          ${won ? '' : '<button data-a="retry">Retry</button>'}
-          <button class="primary" data-a="next">${won ? (last ? 'Play the 1v1' : 'Next mission') : 'Skip mission'}</button>
+          ${won && last ? '' : '<button data-a="menu">Main menu</button>'}
+          ${won ? '' : `<button data-a="retry"${real ? ' class="primary"' : ''}>Retry</button>`}
+          <button${real && !won ? '' : ' class="primary"'} data-a="next">${nextLabel}</button>
         </div>
       </div>
     </div>`);
-  m.querySelector('[data-a=next]')!.addEventListener('click', h.next);
-  m.querySelector('[data-a=menu]')!.addEventListener('click', h.menu);
+  m.querySelector('[data-a=next]')!.addEventListener('click', real && !won && h.easy ? h.easy : h.next);
+  m.querySelector('[data-a=menu]')?.addEventListener('click', h.menu);
   m.querySelector('[data-a=retry]')?.addEventListener('click', h.retry);
   return m;
 }
