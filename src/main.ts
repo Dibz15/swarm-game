@@ -6,7 +6,7 @@ import { GameView, type Services } from './game/gameView';
 import type { EndReason } from './game/recording';
 import { recordingEnabled, saveRecording } from './game/recordStore';
 import { LocalSession } from './game/session';
-import { loadProgress, MISSIONS, MissionRun, nextMission, saveProgress, type NextStep } from './game/tutorial';
+import { loadProgress, MISSIONS, MissionRun, nextMission, saveProgress } from './game/tutorial';
 import { InputController } from './input/controller';
 import { Camera } from './render/camera';
 import { Particles, Rings } from './render/particles';
@@ -55,8 +55,6 @@ class App {
   private endShown = false;
   /** the current match's recording was saved at its end */
   private recSaved = false;
-  /** the current match is the tutorial's graduation 1v1 */
-  private graduation = false;
   /** difficulty of the current quick match, so "New map" rolls another one */
   private quick: number | null = null;
   /** the campaign run and node the current battle belongs to */
@@ -212,20 +210,20 @@ class App {
           ? [{ label: 'Play a 4-player FFA', primary: true, on: () => this.playSuggested('ffa') }]
           : p.next === 'rematch'
             ? [
-                { label: 'Rematch Normal', primary: true, on: () => this.playSuggested('normal1v1') },
+                // The Normal 1v1 is the tutorial's last mission (#147): replay it there, tracked.
+                { label: 'Rematch Normal', primary: true, on: () => this.briefMission(MISSIONS.length - 1) },
                 { label: '1v1 vs Easy', on: () => this.playSuggested('easy1v1') },
               ]
-            : [{ label: 'Play the 1v1', primary: true, on: () => this.playSuggested('normal1v1', true) }];
+            : [{ label: 'Play the 1v1', primary: true, on: () => this.briefMission(MISSIONS.length - 1) }];
       buttons.push({ label: 'Dismiss', on: dismiss({ next: undefined }) });
       return menuCard(NEXT_STEP_TEXT[p.next], buttons);
     }
     return null;
   }
 
-  private playSuggested(kind: 'normal1v1' | 'easy1v1' | 'ffa', graduation = false): void {
-    if (!graduation) saveProgress({ ...loadProgress(), next: undefined });
+  private playSuggested(kind: 'normal1v1' | 'easy1v1' | 'ffa'): void {
+    saveProgress({ ...loadProgress(), next: undefined });
     this.startGame(quickSetup(kind));
-    this.graduation = graduation;
   }
 
   private showCampaign(): void {
@@ -477,10 +475,13 @@ class App {
   /** Record a finished (or skipped) mission and move on. */
   private completeMission(i: number): void {
     const p = loadProgress();
-    if (!p.done.includes(MISSIONS[i].id)) p.done.push(MISSIONS[i].id);
-    if (i === MISSIONS.length - 1) {
+    const first = !p.done.includes(MISSIONS[i].id);
+    if (first) p.done.push(MISSIONS[i].id);
+    // Winning the graduation 1v1 (#147) the first time: graduated, and the menu suggests a
+    // free-for-all. A replay later doesn't bring that suggestion back.
+    if (MISSIONS[i].real && first) {
       p.graduated = true;
-      p.next = 'graduate';
+      p.next = 'ffa';
     }
     saveProgress(p);
   }
@@ -488,12 +489,12 @@ class App {
   /** Straight into the next mission: the debrief already said what's next, and the coach names it. */
   private afterMission(i: number): void {
     if (i < MISSIONS.length - 1) this.playMission(i + 1);
-    else this.playSuggested('normal1v1', true);
   }
 
   private skipMission(): void {
     const m = this.game?.mission;
-    if (!m) return;
+    // The graduation match can't be skipped (#147).
+    if (!m || m.mission.real) return;
     this.completeMission(m.index);
     this.afterMission(m.index);
   }
@@ -551,7 +552,6 @@ class App {
     this.setScreen(null);
     this.endShown = false;
     this.recSaved = false;
-    this.graduation = false;
     this.quick = null;
     this.run = null;
     const record = opts.record !== false && recordingEnabled();
@@ -659,19 +659,19 @@ class App {
     }
     if (g.mission) {
       const i = g.mission.index;
+      const real = !!g.mission.mission.real;
       if (won) this.completeMission(i);
+      // Lost the graduation 1v1 before ever winning it: the menu suggests a rematch, or a warm-up.
+      else if (real && !loadProgress().done.includes(g.mission.mission.id)) saveProgress({ ...loadProgress(), next: 'rematch' });
       this.setModal(
         missionDebrief(g.mission.mission, i, won, {
           next: () => (won ? this.afterMission(i) : this.skipMission()),
           retry: () => this.playMission(i, 'restart'),
           menu: () => this.showMenu(),
+          easy: () => this.playSuggested('easy1v1'),
         }),
       );
       return;
-    }
-    if (this.graduation) {
-      const next: NextStep = won ? 'ffa' : 'rematch';
-      saveProgress({ ...loadProgress(), next });
     }
     this.setModal(
       endScreen(g.world, g.human, g.result === 'victory', {

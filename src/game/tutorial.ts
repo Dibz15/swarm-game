@@ -6,6 +6,7 @@ import type { World } from '../sim/world';
 import type { DemoAction } from '../ui/demo';
 import { feedNeed, novaRadius, type Command } from '../sim/commands';
 import { nestIcon } from '../ui/nesticon';
+import { quickSetup } from './matchSetup';
 import { inArmy, UNIT_FEEDING, WILD_SWARM } from '../sim/world';
 import { queryRadius } from '../sim/spatial';
 import type { TimedCommand } from './session';
@@ -67,6 +68,8 @@ export interface Mission {
   learned: string[];
   setup: () => MatchSetup;
   locked: Lock[];
+  /** a real match (#147): the graduation 1v1. It can't be skipped, and finishing it graduates you */
+  real?: true;
   /** hold the game for a few seconds whenever the instruction changes, so it can be read first */
   readPause?: boolean;
   steps: Step[];
@@ -743,6 +746,33 @@ export const MISSIONS: Mission[] = [
       },
     ],
   },
+  // The graduation match (#147): a real 1v1, tracked like the rest.
+  {
+    id: 'final',
+    title: 'First real match',
+    teaches: 'A full 1v1 against a Normal bot: everything you’ve learned, nothing held back.',
+    learned: ['You beat a Normal bot.', 'From here: harder bots, bigger maps, free-for-alls and the campaign.'],
+    locked: [],
+    real: true,
+    // A fresh random small map in your colour each time, like any quick 1v1.
+    setup: () => quickSetup('normal1v1'),
+    steps: [
+      {
+        text: {
+          desktop: 'This one’s real: a <b>Normal bot</b> that grows, attacks and uses powers, and every power is yours too. Grow first: take the nests near you.',
+          mobile: 'This one’s real: a <b>Normal bot</b> that grows, attacks and uses powers, and every power is yours too. Grow first: take the nests near you.',
+        },
+        done: (c) => owned(c) >= 3 || c.w.tick >= 60 * TICK_HZ,
+      },
+      {
+        text: {
+          desktop: 'Win: knock the bot out, or hold the marked share of nests for 30 seconds. Good luck!',
+          mobile: 'Win: knock the bot out, or hold the marked share of nests for 30 seconds. Good luck!',
+        },
+        done: won,
+      },
+    ],
+  },
 ];
 
 /** Advances through one mission's steps as the match plays. */
@@ -828,7 +858,10 @@ export interface TutorialProgress {
   next?: NextStep;
 }
 
-/** graduate: the 1v1 wasn't played yet; ffa: they won it; rematch: they lost it */
+/**
+ * ffa: they won the graduation 1v1; rematch: they lost it. graduate is only in
+ * saves from before the 1v1 was a mission (#147): graduated, but not played it yet.
+ */
 export type NextStep = 'graduate' | 'ffa' | 'rematch';
 
 const KEY = 'swarm.tutorial';
@@ -836,7 +869,12 @@ const KEY = 'swarm.tutorial';
 export function loadProgress(): TutorialProgress {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { done: [], graduated: false, offered: false, ...JSON.parse(raw) };
+    if (raw) {
+      const p: TutorialProgress = { done: [], graduated: false, offered: false, ...JSON.parse(raw) };
+      // Saved before the 1v1 was a mission (#147): having won it shows as 'ffa'.
+      if (p.graduated && p.next === 'ffa' && !p.done.includes('final')) p.done.push('final');
+      return p;
+    }
   } catch {
     /* ignore */
   }

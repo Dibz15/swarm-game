@@ -1,7 +1,6 @@
 import { FACTION_HEX, FACTION_NAMES } from '../content/factions';
 import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import { CAVE_LEVELS, EVENT_LEVELS, MAP_LAYOUTS, TERRAIN_LEVELS, type CaveLevel, type EventLevel, type MapLayout, type MapSize, type TerrainLevel } from '../sim/mapgen';
-import { hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import type { World } from '../sim/world';
 import { NEUTRAL } from '../sim/constants';
@@ -9,6 +8,7 @@ import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
+import { buildSetup, loadPrefs, randomSeed, savePrefs, type SetupPrefs } from '../game/matchSetup';
 import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
@@ -106,6 +106,8 @@ export const NEXT_STEP_TEXT: Record<NextStep, string> = {
   ffa: '<b>Next step:</b> you beat a Normal bot. Try a 4-player free-for-all, where rivals fight each other too.',
   rematch: '<b>Next step:</b> take on the Normal bot again, or warm up against Easy first.',
 };
+
+export { buildSetup, loadPrefs, quickSetup, randomSeed, type SetupPrefs } from '../game/matchSetup';
 
 // ---- skirmish sub-menu (#43) --------------------------------------------------
 
@@ -221,7 +223,7 @@ export function tutorialMenu(p: TutorialProgress, h: { play: (i: number) => void
             return `<li class="${done ? 'done' : ''}${open ? '' : ' locked'}"><button data-i="${i}" ${open ? '' : 'disabled'}><span class="num">${done ? '✓' : i + 1}</span><b>${ms.title}</b><span class="what">${ms.teaches}</span><span class="play">${tag}</span></button></li>`;
           },
         ).join('')}</ol>
-        <p class="hint">After the last mission you can play a real 1v1 against a Normal bot.</p>
+        <p class="hint">The last mission is a real 1v1 against a Normal bot.</p>
         <div class="row end"><button data-a="back">Back</button></div>
       </div>
     </div>`);
@@ -246,56 +248,45 @@ export function missionBriefing(ms: Mission, i: number, h: { start: () => void; 
   return m;
 }
 
-/** After a mission: what was learned, then onward (or the graduation offer after the last one). */
+/** After a mission: what was learned, then onward (or, after the graduation 1v1, back to the menu). */
 export function missionDebrief(
   ms: Mission,
   i: number,
   won: boolean,
-  h: { next: () => void; retry: () => void; menu: () => void },
+  h: { next: () => void; retry: () => void; menu: () => void; easy?: () => void },
 ): HTMLDivElement {
   const last = i === MISSIONS.length - 1;
+  // The graduation 1v1 (#147): no skipping it, but a warm-up against Easy when it's lost.
+  const real = !!ms.real;
   const body = won
-    ? `<ul class="steps">${ms.learned.map((l) => `<li>${l}</li>`).join('')}</ul>${last ? '<p><b>Tutorial complete!</b> Ready for a real match? A 1v1 against a Normal bot on a small map.</p>' : ''}`
-    : '<p>Your nests and dots are gone. Try again: grow first, and bring more dots than the enemy.</p>';
+    ? `<ul class="steps">${ms.learned.map((l) => `<li>${l}</li>`).join('')}</ul>${real ? '<p><b>Tutorial complete!</b> You’re ready for anything: try a free-for-all next.</p>' : ''}`
+    : real
+      ? '<p>The Normal bot won this time. Try again on a new map, or warm up against an Easy bot first.</p>'
+      : '<p>Your nests and dots are gone. Try again: grow first, and bring more dots than the enemy.</p>';
+  // The primary way on: the next mission, the menu after graduating, a warm-up (only if the
+  // caller offers one) after losing the real match, else skipping this one.
+  const warmUp = real && !won ? h.easy : undefined;
+  const go = won ? (real ? { label: 'Main menu', on: h.menu } : { label: 'Next mission', on: h.next }) : warmUp ? { label: 'Warm up vs Easy', on: warmUp } : real ? null : { label: 'Skip mission', on: h.next };
   const m = el(`
     <div class="screen modal dim">
       <div class="card brief ${won ? 'win' : 'lose'}">
         <small class="eyebrow">Mission ${i + 1} of ${MISSIONS.length}</small>
-        <h2>${won ? (last ? 'Graduated' : 'Mission complete') : 'Defeated'}</h2>
+        <h2>${won ? (real ? 'Graduated' : 'Mission complete') : 'Defeated'}</h2>
         ${body}
         ${!last ? `<p class="hint">Next: ${MISSIONS[i + 1].title}. ${MISSIONS[i + 1].teaches}</p>` : ''}
         <div class="row end">
-          <button data-a="menu">Main menu</button>
-          ${won ? '' : '<button data-a="retry">Retry</button>'}
-          <button class="primary" data-a="next">${won ? (last ? 'Play the 1v1' : 'Next mission') : 'Skip mission'}</button>
+          ${won && real ? '' : '<button data-a="menu">Main menu</button>'}
+          ${won ? '' : `<button data-a="retry"${real ? ' class="primary"' : ''}>Retry</button>`}
+          ${go ? `<button${real && !won ? '' : ' class="primary"'} data-a="next">${go.label}</button>` : ''}
         </div>
       </div>
     </div>`);
-  m.querySelector('[data-a=next]')!.addEventListener('click', h.next);
-  m.querySelector('[data-a=menu]')!.addEventListener('click', h.menu);
+  if (go) m.querySelector('[data-a=next]')!.addEventListener('click', go.on);
+  m.querySelector('[data-a=menu]')?.addEventListener('click', h.menu);
   m.querySelector('[data-a=retry]')?.addEventListener('click', h.retry);
   return m;
 }
 
-/** Ready-made matches the menu suggests: the graduation 1v1 and what comes after. */
-export function quickSetup(kind: 'normal1v1' | 'easy1v1' | 'ffa'): MatchSetup {
-  const p = loadPrefs();
-  const others = [0, 1, 2, 3, 4, 5].filter((c) => c !== p.color);
-  const bots = kind === 'ffa' ? 3 : 1;
-  const difficulty = kind === 'easy1v1' ? 0 : 1;
-  return buildSetup(
-    {
-      ...p,
-      size: kind === 'ffa' ? 'medium' : 'small',
-      terrain: 'standard',
-      caves: 'off',
-      events: 'normal',
-      teams: false,
-      bots: others.slice(0, bots).map((faction, i) => ({ faction, difficulty, personality: 'random', team: i + 1 })),
-    },
-    randomSeed(),
-  );
-}
 
 /** One-time heads-up when mobile mode switched itself on. */
 export function mobileNotice(h: { ok: () => void; desktop: () => void }): HTMLDivElement {
@@ -484,92 +475,8 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
   return m;
 }
 
-interface BotRow {
-  faction: number;
-  difficulty: number;
-  personality: Personality | 'random';
-  team: number;
-}
-
-export interface SetupPrefs {
-  color: number;
-  size: MapSize;
-  terrain: TerrainLevel;
-  caves: CaveLevel;
-  layout: MapLayout | 'random';
-  events: EventLevel;
-  teams: boolean;
-  bots: BotRow[];
-}
-
 const CAVE_LABEL: Record<CaveLevel, string> = { off: 'Open', belt: 'Cave belt', full: 'Caves' };
 const LAYOUT_LABEL: Record<MapLayout | 'random', string> = { random: 'Random', classic: 'Classic', open: 'Open center', core: 'Core', clusters: 'Clusters', lanes: 'Lanes' };
-
-const DEFAULT_PREFS: SetupPrefs = {
-  color: 0,
-  size: 'medium',
-  terrain: 'standard',
-  caves: 'off',
-  layout: 'random',
-  events: 'normal',
-  teams: false,
-  bots: [
-    { faction: 1, difficulty: 1, personality: 'random', team: 1 },
-    { faction: 2, difficulty: 1, personality: 'random', team: 2 },
-    { faction: 3, difficulty: 1, personality: 'random', team: 3 },
-  ],
-};
-
-export function loadPrefs(): SetupPrefs {
-  try {
-    const raw = localStorage.getItem('swarm.setup');
-    if (raw) return { ...DEFAULT_PREFS, ...JSON.parse(raw) };
-  } catch {
-    /* ignore */
-  }
-  return structuredClone(DEFAULT_PREFS);
-}
-
-function savePrefs(p: SetupPrefs): void {
-  try {
-    localStorage.setItem('swarm.setup', JSON.stringify(p));
-  } catch {
-    /* ignore */
-  }
-}
-
-export function randomSeed(): string {
-  const words = ['ember', 'tide', 'nova', 'moss', 'flux', 'drift', 'spark', 'hollow', 'prism', 'vale', 'echo', 'glint', 'rune', 'haze'];
-  const r = () => words[Math.floor(Math.random() * words.length)];
-  return `${r()}-${r()}-${Math.floor(Math.random() * 100)}`;
-}
-
-export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
-  const seed = hashString(seedText.trim() || 'swarm');
-  // Resolve "random" personalities deterministically from the seed.
-  let s = seed;
-  const nextPers = (): Personality => {
-    s = (Math.imul(s ^ (s >>> 13), 0x5bd1e995) + 0x6b43a9b5) >>> 0;
-    return PERSONALITIES[s % PERSONALITIES.length];
-  };
-  return {
-    seed,
-    size: p.size,
-    terrain: p.terrain,
-    caves: p.caves,
-    layout: p.layout,
-    events: p.events,
-    players: [
-      { faction: p.color, team: 0, human: true },
-      ...p.bots.map((b, i) => ({
-        faction: b.faction,
-        team: p.teams ? b.team : i + 1,
-        human: false,
-        bot: { difficulty: b.difficulty, personality: b.personality === 'random' ? nextPers() : b.personality },
-      })),
-    ],
-  };
-}
 
 /** Fixed scenarios for recording sessions (#29), replayed on the same seeds so games compare. */
 interface Scenario {
