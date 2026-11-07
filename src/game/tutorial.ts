@@ -139,6 +139,21 @@ function headingTo(c: StepCtx, spots: Spot[]): boolean[] {
 const headingAny = (c: StepCtx, spots: Spot[]) => headingTo(c, spots).some(Boolean);
 /** Nests that aren't yours yet. */
 const notMine = (c: StepCtx, ids: number[]) => ids.filter((id) => c.w.nests[id].owner !== c.human);
+/** Your energy, and what a power needs when you're short. */
+const energyFor = (name: string, cost: number) => (c: StepCtx) => {
+  const e = c.w.factions[c.human].energy;
+  return `Energy: <b>${Math.floor(e)}</b>${e < cost ? ` (${name} needs ${cost})` : ''}`;
+};
+/** Some of your dots are fortified right now. */
+function fortified(c: StepCtx): boolean {
+  for (let i = 0; i < c.w.n; i++) if (c.w.alive[i] && c.w.owner[i] === c.human && c.w.fortify[i] > c.w.tick) return true;
+  return false;
+}
+/** Seconds of Lockdown left on a nest (from you). */
+const lockedLeft = (c: StepCtx, id: number) => {
+  const n = c.w.nests[id];
+  return n.lockedBy === c.human ? Math.max(0, n.lockedUntil - c.w.tick) / TICK_HZ : 0;
+};
 /** Domination: the nests left to take (anything not yours but a home). */
 const toTake = (c: StepCtx) => c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id);
 /** The waiting line once dots are on their way: what the lesson waits for. */
@@ -425,7 +440,7 @@ export const MISSIONS: Mission[] = [
         done: (c) => orderedSince(c, 'surge'),
         highlight: unowned([4]),
         pulse: '.energy',
-        status: (c) => `Energy: <b>${Math.floor(c.w.factions[c.human].energy)}</b>${c.w.factions[c.human].energy < POWER.surgeCost ? ` (Surge needs ${POWER.surgeCost})` : ''}`,
+        status: energyFor('Surge', POWER.surgeCost),
         demo: (c) => [...selectArmy(c), { t: 'button', a: 'surge' }],
       },
       {
@@ -445,19 +460,162 @@ export const MISSIONS: Mission[] = [
     ],
   },
   {
+    id: 'nestpowers',
+    title: 'Nest powers',
+    teaches: 'Every nest type but the Hive gives a power: Fortify, Barrage, Blink and Lockdown.',
+    learned: [
+      `A Forge ${nestIcon(NestType.Forge)} gives <b>Fortify</b>: your selected dots take half damage, but move slower.`,
+      `A Spire ${nestIcon(NestType.Spire)} gives <b>Barrage</b>: a shell from your nearest nest, for guards near your land.`,
+      `A Den ${nestIcon(NestType.Swift)} gives <b>Blink</b>: your selected dots jump toward the cursor, even over walls.`,
+      `A Bastion ${nestIcon(NestType.Bastion)} gives <b>Lockdown</b>: an enemy nest stops spawning for a while.`,
+      'Powers need the nest held: lose the nest, lose the power.',
+    ],
+    // Surge is known, but its energy is for the new powers here.
+    locked: ['surge', 'nova', 'upgrade'],
+    readPause: true,
+    setup: () => ({
+      // No domination win: holding four of six nests mustn't end the lesson early.
+      domShare: 2,
+      ...versus(
+        map(
+          [
+            nest(120, 340, NestType.Hive, 0, 20),
+            nest(300, 180, NestType.Forge, -1, 4),
+            // Level 2: it shoots back, which is what Fortify is for.
+            nest(300, 500, NestType.Spire, -1, 6, { level: 2 }),
+            // Within Barrage reach of the Spire.
+            nest(560, 340, NestType.Swift, -1, 10),
+            // In a walled pocket, open to the north: Blink hops the west wall.
+            nest(800, 360, NestType.Bastion, -1, 8),
+            // Far from the pocket's mouth, so nobody knocks it out on the way.
+            nest(1000, 580, NestType.Hive, 1, 6),
+          ],
+          { walls: [wall(700, 230, 700, 480), wall(900, 230, 900, 480), wall(700, 480, 900, 480)] },
+        ),
+        'turtler',
+        60,
+        // Only there to be locked down and taken: it never comes for you, and stays tiny.
+        true,
+        8,
+      ),
+    }),
+    steps: [
+      {
+        text: {
+          desktop: `Every nest type but the Hive gives a <b>power</b>. Start with the Forge ${nestIcon(NestType.Forge)}: capture it.`,
+          mobile: `Every nest type but the Hive gives a <b>power</b>. Start with the Forge ${nestIcon(NestType.Forge)}: capture it.`,
+        },
+        done: (c) => c.w.nests[1].owner === c.human,
+        highlight: unowned([1]),
+        wait: waitTake(() => [1], 'capture the Forge'),
+        demo: sendTo(() => [1]),
+      },
+      {
+        text: {
+          desktop: 'Your Forge unlocks <b>Fortify (R)</b>: your selected dots take half damage but move slower, for a few seconds. Select your dots and press it.',
+          mobile: 'Your Forge unlocks <b>Fortify</b>: your selected dots take half damage but move slower, for a few seconds. Select your dots and tap it.',
+        },
+        done: (c) => fortified(c),
+        pulse: '[data-a=fortify]',
+        status: energyFor('Fortify', POWER.fortifyCost),
+        demo: (c) => [...selectArmy(c), { t: 'button', a: 'fortify' }],
+      },
+      {
+        text: {
+          desktop: `Now the Spire ${nestIcon(NestType.Spire)}. It’s level 2, so it shoots back: Fortify your dots before they go in.`,
+          mobile: `Now the Spire ${nestIcon(NestType.Spire)}. It’s level 2, so it shoots back: Fortify your dots before they go in.`,
+        },
+        done: (c) => c.w.nests[2].owner === c.human,
+        highlight: unowned([2]),
+        wait: waitTake(() => [2], 'capture the Spire'),
+        demo: sendTo(() => [2]),
+      },
+      {
+        text: {
+          desktop: `Your Spire unlocks <b>Barrage (F)</b>: a shell launched from your nearest nest. Press it, then click the guards of the Den ${nestIcon(NestType.Swift)}.`,
+          mobile: `Your Spire unlocks <b>Barrage</b>: a shell launched from your nearest nest. Tap it, then tap the guards of the Den ${nestIcon(NestType.Swift)}.`,
+        },
+        // Done once the shell has landed, so the next lesson doesn't freeze it mid-air (#115).
+        done: (c) => orderedSince(c, 'barrage') && !c.w.barrages.some((b) => b.owner === c.human),
+        wait: {
+          text: same('⏳ Shell in the air: watch it land on the guards.'),
+          when: (c) => c.w.barrages.some((b) => b.owner === c.human),
+        },
+        highlight: () => [3],
+        pulse: '[data-a=barrage]',
+        status: energyFor('Barrage', POWER.barrageCost),
+        demo: (c) => [{ t: 'button', a: 'barrage' }, { t: 'tap', at: at(c, 3) }],
+      },
+      {
+        text: {
+          desktop: `Fewer guards now: capture the Den ${nestIcon(NestType.Swift)}.`,
+          mobile: `Fewer guards now: capture the Den ${nestIcon(NestType.Swift)}.`,
+        },
+        done: (c) => c.w.nests[3].owner === c.human,
+        highlight: unowned([3]),
+        wait: waitTake(() => [3], 'capture the Den'),
+        demo: sendTo(() => [3]),
+      },
+      {
+        text: {
+          desktop: `Your Den unlocks <b>Blink (G)</b>: your dots jump toward the cursor, even over walls. Select them, press it, and click inside the walls around the Bastion ${nestIcon(NestType.Bastion)}.`,
+          mobile: `Your Den unlocks <b>Blink</b>: your dots jump toward where you tap, even over walls. Select them, tap it, then tap inside the walls around the Bastion ${nestIcon(NestType.Bastion)}.`,
+        },
+        done: (c) => orderedSince(c, 'blink'),
+        highlight: () => [4],
+        pulse: '[data-a=blink]',
+        status: energyFor('Blink', POWER.blinkCost),
+        demo: (c) => [...selectArmy(c), { t: 'button', a: 'blink' }, { t: 'tap', at: at(c, 4) }],
+      },
+      {
+        text: {
+          desktop: `You’re over the wall: capture the Bastion ${nestIcon(NestType.Bastion)}.`,
+          mobile: `You’re over the wall: capture the Bastion ${nestIcon(NestType.Bastion)}.`,
+        },
+        done: (c) => c.w.nests[4].owner === c.human,
+        highlight: unowned([4]),
+        wait: waitTake(() => [4], 'capture the Bastion'),
+        demo: sendTo(() => [4]),
+      },
+      {
+        text: {
+          desktop: 'Your Bastion unlocks <b>Lockdown (T)</b>: an enemy nest stops making dots for a while. Press it, then click the enemy’s home.',
+          mobile: 'Your Bastion unlocks <b>Lockdown</b>: an enemy nest stops making dots for a while. Tap it, then tap the enemy’s home.',
+        },
+        done: (c) => lockedLeft(c, 5) > 0,
+        highlight: () => [5],
+        pulse: '[data-a=lockdown]',
+        status: energyFor('Lockdown', POWER.lockdownCost),
+        demo: (c) => [{ t: 'button', a: 'lockdown' }, { t: 'tap', at: at(c, 5) }],
+      },
+      {
+        text: {
+          desktop: 'Its home can’t make dots now: take it, and finish its last dots.',
+          mobile: 'Its home can’t make dots now: take it, and finish its last dots.',
+        },
+        done: won,
+        highlight: (c) => notMine(c, [5]),
+        status: (c) => (lockedLeft(c, 5) > 0 ? `Locked down: <b>${Math.ceil(lockedLeft(c, 5))}s</b> left` : null),
+        wait: {
+          text: onTheWay('knock the enemy out'),
+          when: (c) => headingAny(c, notMine(c, [5]).map((id) => nestSpot(c, id))),
+        },
+        demo: sendTo((c) => notMine(c, [5])),
+      },
+    ],
+  },
+  {
     id: 'powers',
     title: 'Grow stronger',
-    teaches: 'Level up nests, and use Barrage and Nova.',
-    learned: ['Feeding dots into a nest levels it up: faster spawns and a turret.', 'Holding a nest type unlocks its power: a Spire gives Barrage, which reaches targets near your nests.', 'Nova blasts everything around the selected dots: save it for big fights.'],
-    locked: ['fortify', 'blink', 'lockdown'],
+    teaches: 'Level up nests, and use Nova.',
+    learned: ['Feeding dots into a nest levels it up: faster spawns and a turret.', 'Nova blasts everything around the selected dots: save it for big fights.'],
+    locked: ['fortify', 'barrage', 'blink', 'lockdown'],
     readPause: true,
     setup: () =>
       solo(
         map(
           [
             nest(200, 340, NestType.Hive, 0, 30),
-            nest(330, 160, NestType.Spire, 0, 2, { capital: false }),
-            // Within Barrage range of the Spire (#41).
             nest(690, 330, NestType.Bastion, -1, 10),
             nest(600, 560, NestType.Hive, -1, 6),
           ],
@@ -487,20 +645,6 @@ export const MISSIONS: Mission[] = [
       },
       {
         text: {
-          desktop: `Your Spire ${nestIcon(NestType.Spire)} unlocks <b>Barrage (F)</b>: a shell launched from your nearest nest. Press it, then click the guards of the Bastion ${nestIcon(NestType.Bastion)}.`,
-          mobile: `Your Spire ${nestIcon(NestType.Spire)} unlocks <b>Barrage</b>: a shell launched from your nearest nest. Tap it, then tap the guards of the Bastion ${nestIcon(NestType.Bastion)}.`,
-        },
-        // Done once the shell has landed, so the next lesson doesn't freeze it mid-air (#115).
-        done: (c) => orderedSince(c, 'barrage') && !c.w.barrages.some((b) => b.owner === c.human),
-        wait: {
-          text: { desktop: '⏳ Shell in the air: watch it land on the guards.', mobile: '⏳ Shell in the air: watch it land on the guards.' },
-          when: (c) => c.w.barrages.some((b) => b.owner === c.human),
-        },
-        highlight: () => [2],
-        demo: (c) => [{ t: 'button', a: 'barrage' }, { t: 'tap', at: at(c, 2) }],
-      },
-      {
-        text: {
           desktop: 'A wild swarm is on its way. Gather your army at home, and when the swarm arrives select them and press <b>Nova (E)</b>.',
           mobile: 'A wild swarm is on its way. Gather your army at home, and when the swarm arrives select them and tap <b>Nova</b>.',
         },
@@ -515,10 +659,10 @@ export const MISSIONS: Mission[] = [
           desktop: `Finish the job: capture the Bastion ${nestIcon(NestType.Bastion)}. Bastions shoot back hard, so go in big.`,
           mobile: `Finish the job: capture the Bastion ${nestIcon(NestType.Bastion)}. Bastions shoot back hard, so go in big.`,
         },
-        done: (c) => c.w.nests[2].owner === c.human,
-        highlight: unowned([2]),
-        wait: waitTake(() => [2], 'capture the Bastion'),
-        demo: sendTo(() => [2]),
+        done: (c) => c.w.nests[1].owner === c.human,
+        highlight: unowned([1]),
+        wait: waitTake(() => [1], 'capture the Bastion'),
+        demo: sendTo(() => [1]),
       },
     ],
   },
