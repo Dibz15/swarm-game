@@ -29,7 +29,17 @@ export interface MusicState {
 
 /** Paused mid-match: music (and the ambience drone) go dull and quiet. */
 export const PAUSE = { cutoff: 260, level: 0.45 };
-const LOOKAHEAD = 0.15;
+
+/** How well the note scheduler keeps up, worst values since the last read (#118). */
+export interface SchedulerStats {
+  lookahead: number;
+  /** longest wait between scheduler runs, ms (the timer is meant to fire every 25) */
+  worstGap: number;
+  /** least time left before a note was due when it was scheduled, s; negative = late */
+  minHeadroom: number;
+  /** times the scheduler fell so far behind it skipped ahead */
+  skips: number;
+}
 
 const hz = (semi: number, base = 220) => base * Math.pow(2, semi / 12);
 const smooth = (a: number, b: number, x: number) => {
@@ -69,6 +79,10 @@ export class Music {
   private echoFb: GainNode;
   /** the lead's last pitch, for styles that glide between notes */
   private lastLead = 0;
+  /** seconds of notes scheduled ahead of the clock (longer on phones) */
+  lookahead = 0.15;
+  private lastRun = 0;
+  private sched = { worstGap: 0, minHeadroom: Infinity, skips: 0 };
 
   constructor(private readonly ctx: AudioContext, bus: AudioNode, reverb: AudioNode) {
     this.filter = ctx.createBiquadFilter();
@@ -174,11 +188,27 @@ export class Music {
 
   // ---- sequencing ----------------------------------------------------------
 
+  /** Scheduler health since the last call; resets the window. */
+  takeStats(): SchedulerStats {
+    const s = { lookahead: this.lookahead, ...this.sched };
+    this.sched = { worstGap: 0, minHeadroom: Infinity, skips: 0 };
+    return s;
+  }
+
   private schedule(): void {
+    const wall = performance.now();
+    if (this.lastRun) this.sched.worstGap = Math.max(this.sched.worstGap, wall - this.lastRun);
+    this.lastRun = wall;
     const now = this.ctx.currentTime;
+    // While suspended the clock stands still: nothing to do.
+    if (this.ctx.state !== 'running') return;
     // If the context stalled (tab hidden), skip ahead instead of bursting.
-    if (this.nextTime < now - 0.2) this.nextTime = now + 0.05;
-    while (this.nextTime < now + LOOKAHEAD) {
+    if (this.nextTime < now - this.lookahead - 0.1) {
+      this.nextTime = now + 0.05;
+      this.sched.skips++;
+    }
+    while (this.nextTime < now + this.lookahead) {
+      this.sched.minHeadroom = Math.min(this.sched.minHeadroom, this.nextTime - now);
       // Swing pushes every odd 16th late.
       this.playStep(this.step, this.nextTime + (this.step % 2 ? this.style.swing * this.stepDur : 0));
       this.step++;

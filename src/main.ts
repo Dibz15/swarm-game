@@ -68,6 +68,12 @@ class App {
   private fpsAcc = 0;
   private fps = 0;
   private showPerf = new URLSearchParams(location.search).has('debug');
+  /** `?audiodebug` (#118): audio health under the perf line; `?debug` shows it too. */
+  private showAudio = ['audiodebug', 'debug'].some((k) => new URLSearchParams(location.search).has(k));
+  private audioAcc = 0;
+  private audioText = '';
+  private worstFrame = 0;
+  private worstSim = 0;
   private frame = 0;
 
   constructor() {
@@ -95,6 +101,8 @@ class App {
     // Save what we have when the tab is hidden: phones may never come back.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') this.saveRec('unload', false);
+      // Back from another app: the context may have been suspended or interrupted.
+      else this.sfx.resume();
     });
     window.addEventListener('keydown', (e) => {
       this.sfx.unlock();
@@ -742,9 +750,27 @@ class App {
     }, { record: false });
   }
 
+  /** The `?audiodebug` lines: frame and sim worst, voices, music scheduler, context. */
+  private audioLine(secs: number): string {
+    const a = this.sfx.stats();
+    const ms = (s: number) => (s * 1000).toFixed(0);
+    const m = a.music;
+    const music = m
+      ? `music: lookahead ${ms(m.lookahead)} ms · timer gap ≤${m.worstGap.toFixed(0)} ms · headroom ≥${Number.isFinite(m.minHeadroom) ? ms(m.minHeadroom) : '-'} ms · skips ${m.skips}`
+      : 'music: off';
+    return [
+      `frame ≤${this.worstFrame.toFixed(0)} ms · sim ≤${this.worstSim.toFixed(1)} ms`,
+      `voices ${a.voices}/${a.softCap}/${a.hardCap} · dropped ${(a.dropped / Math.max(secs, 0.001)).toFixed(0)}/s`,
+      music,
+      `ctx ${a.state} · ${a.sampleRate} Hz · base ${ms(a.baseLatency)} ms · out ${ms(a.outputLatency)} ms`,
+      `quality ${a.quality} (${a.level}) · latency ${a.latencyHint}${a.off.length ? ` · off: ${a.off.join(',')}` : ''}`,
+    ].join('\n');
+  }
+
   // ---- frame loop --------------------------------------------------------
 
   private loop(t: number): void {
+    if (this.last) this.worstFrame = Math.max(this.worstFrame, t - this.last);
     const dt = Math.min(0.1, this.last ? (t - this.last) / 1000 : 0);
     this.last = t;
     this.time += dt;
@@ -815,11 +841,23 @@ class App {
       r.draw(this.camera, this.time);
     }
 
-    if (this.showPerf) {
+    const sess = this.game?.session ?? this.demo;
+    if (sess) this.worstSim = Math.max(this.worstSim, sess.lastStepMs);
+    if (this.showPerf || this.showAudio) {
       const w = this.game?.world ?? this.demo?.world;
-      const s = this.game?.session ?? this.demo;
       this.perf.style.display = 'block';
-      this.perf.textContent = `${this.fps.toFixed(0)} fps · sim ${s?.lastStepMs.toFixed(2) ?? '-'} ms · units ${w?.count ?? 0} · beams ${w?.beamCount ?? 0}`;
+      let text = `${this.fps.toFixed(0)} fps · sim ${sess?.lastStepMs.toFixed(2) ?? '-'} ms · units ${w?.count ?? 0} · beams ${w?.beamCount ?? 0}`;
+      if (this.showAudio) {
+        // A few times a second: cheap on phones, and the worst values per window.
+        this.audioAcc += dt;
+        if (this.audioAcc >= 0.25 || !this.audioText) {
+          this.audioText = this.audioLine(this.audioAcc);
+          this.audioAcc = 0;
+          this.worstFrame = this.worstSim = 0;
+        }
+        text += '\n' + this.audioText;
+      }
+      this.perf.textContent = text;
     } else this.perf.style.display = 'none';
 
     requestAnimationFrame((tt) => this.loop(tt));

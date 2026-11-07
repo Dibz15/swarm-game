@@ -12,6 +12,7 @@ import { buildSetup, loadPrefs, randomSeed, savePrefs, type SetupPrefs } from '.
 import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
+import { AUDIO_QUALITIES, type AudioQuality } from '../audio/quality';
 
 function el(html: string): HTMLDivElement {
   const d = document.createElement('div');
@@ -302,6 +303,7 @@ export function mobileNotice(h: { ok: () => void; desktop: () => void }): HTMLDi
 
 const MODE_LABEL: Record<UiMode, string> = { auto: 'Auto', mobile: 'Mobile', desktop: 'Desktop' };
 const RES_LABEL: Record<Resolution, string> = { sharp: 'Sharp', balanced: 'Balanced', fast: 'Fast' };
+const AQ_LABEL: Record<AudioQuality, string> = { auto: 'Auto', high: 'High', low: 'Low' };
 
 /** Interface mode + volume controls, shared by the Settings screen and the pause menu. */
 function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement {
@@ -323,6 +325,9 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
         <option value="auto">Varied (one per match)</option>
         ${THEMES.map((t) => `<option value="${t.id}">${t.name}</option>`).join('')}
       </select></label>
+      <h3>Audio quality</h3>
+      <div class="seg" data-a="aq">${AUDIO_QUALITIES.map((v) => `<button data-v="${v}">${AQ_LABEL[v]}</button>`).join('')}</div>
+      <p class="hint">Low uses a lighter reverb and fewer sounds at once. Try it if the sound crackles or stutters. Auto picks Low on phones.</p>
       <h3>Recording</h3>
       <label class="check"><input type="checkbox" data-a="rec"> Record my games (stays on this device)</label>
       <div class="row rec-actions">
@@ -351,6 +356,15 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
     }),
   );
   markRes();
+  const aq = [...m.querySelectorAll<HTMLButtonElement>('[data-a=aq] button')];
+  const markAq = () => aq.forEach((b) => b.classList.toggle('on', b.dataset.v === audio.quality));
+  aq.forEach((b) =>
+    b.addEventListener('click', () => {
+      audio.setQuality(b.dataset.v as AudioQuality);
+      markAq();
+    }),
+  );
+  markAq();
   m.querySelectorAll<HTMLInputElement>('[data-vol]').forEach((inp) =>
     inp.addEventListener('input', () => audio.setVolume(inp.dataset.vol as VolumeKind, Number(inp.value) / 100)),
   );

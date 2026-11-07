@@ -53,6 +53,9 @@ html, body {
   display: none;
   pointer-events: none;
   z-index: 50;
+  white-space: pre-wrap;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
 }
 
 button {
