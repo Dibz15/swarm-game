@@ -1,6 +1,6 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
-import { isMobile } from './mobile';
+import { isMobile, LAYOUT_EVENT } from './mobile';
 import { MISSIONS } from '../game/tutorial';
 import { ALLY_MARK, sideOf, teamLayout, teamName, teamsLine, teamsList, verb, type TeamGroup, type TeamLayout } from './teams';
 import { heartSlot, standingNests } from '../sim/heart';
@@ -113,9 +113,20 @@ export class Hud {
   private top: HTMLDivElement;
   private coach: HTMLDivElement;
   private coachKey = '';
-  /** CSS px of the view covered by the top panel and the bottom bar (for the camera) */
+  /** CSS px of the view covered by the top panel and the bottom bar, or the side rails (#113), for the camera */
   insetTop = 0;
   insetBottom = 0;
+  insetLeft = 0;
+  insetRight = 0;
+  /** the selection chips, energy bar and action buttons: the side rails in landscape (#113) */
+  private chipsEl!: HTMLElement;
+  private energyEl!: HTMLElement;
+  private actionsEl!: HTMLElement;
+  /** a turned phone swaps the layout: measure at once, not on the next 0.1 s update */
+  private readonly onLayout = (): void => {
+    this.el.style.setProperty('--hudb', `${this.bottom.offsetHeight}px`);
+    this.measure();
+  };
   private counters: HTMLDivElement;
   private kindChips: HTMLButtonElement[] = [];
   /** the match this HUD is showing (set every update) */
@@ -282,6 +293,11 @@ export class Hud {
       }
     });
     this.showTip();
+    this.chipsEl = q('.selchips');
+    this.energyEl = q('.energy');
+    this.actionsEl = q('.actions');
+    window.addEventListener(LAYOUT_EVENT, this.onLayout);
+    this.measure();
   }
 
   private showTip(): void {
@@ -303,9 +319,26 @@ export class Hud {
     setTimeout(() => t.remove(), 3200);
   }
 
-  /** How much of the screen the top panel and bottom bar cover. */
+  /** How much of the screen the top panel and bottom bar (or the side rails) cover. */
   measure(): void {
     const h = this.el.clientHeight || window.innerHeight;
+    const w = this.el.clientWidth || window.innerWidth;
+    // Landscape phones (#113): chips, energy and the wheel down the left, actions down the right.
+    const rails = !!this.chipsEl && document.body.classList.contains('mobile') && document.body.classList.contains('land');
+    if (rails) {
+      const box = (e: Element) => e.getBoundingClientRect();
+      const shown = (r: DOMRect) => r.width > 0 && r.height > 0;
+      const left = [this.chipsEl, this.energyEl, this.counters].map(box).filter(shown);
+      const right = box(this.actionsEl);
+      // Rects at home: a spotlit element (#115) lifted to the middle doesn't count.
+      this.insetLeft = this.spot === this.counters || this.spot === this.bottom ? this.insetLeft : left.length ? Math.max(...left.map((r) => r.right)) : 0;
+      this.insetRight = this.spot === this.bottom ? this.insetRight : shown(right) ? Math.max(0, w - right.left) : 0;
+    } else {
+      this.insetLeft = 0;
+      this.insetRight = 0;
+    }
+    this.el.style.setProperty('--hudl', `${Math.round(this.insetLeft)}px`);
+    this.el.style.setProperty('--hudr', `${Math.round(this.insetRight)}px`);
     const topBottom = Math.max(0, this.top.getBoundingClientRect().bottom);
     this.coach.style.top = `${Math.round(topBottom + 8)}px`;
     const coach = this.coach.getBoundingClientRect();
@@ -314,7 +347,7 @@ export class Hud {
     this.toasts.style.top = coach.height > 0 ? `${Math.round(coach.bottom + 8)}px` : '';
     // Its laid-out place, not where a tutorial spotlight has lifted it to (#115).
     const b = this.bottom;
-    this.insetBottom = b.offsetHeight > 0 ? Math.max(0, h - b.offsetTop) : 0;
+    this.insetBottom = !rails && b.offsetHeight > 0 ? Math.max(0, h - b.offsetTop) : 0;
   }
 
   /** the element the coach has brought to the middle (#115), and the window and element size it was placed for */
@@ -772,6 +805,7 @@ export class Hud {
   }
 
   destroy(): void {
+    window.removeEventListener(LAYOUT_EVENT, this.onLayout);
     this.el.remove();
   }
 }

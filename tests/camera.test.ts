@@ -65,3 +65,60 @@ describe('camera turns (#98)', () => {
     expect(sy).toBeCloseTo(770, 4);
   });
 });
+
+describe('camera side insets (#113)', () => {
+  /** A landscape phone (812×375 CSS at dpr 1) with side rails. */
+  const L = 130, R = 160, VW = 812, VH = 375;
+
+  it('fits the map between the rails', () => {
+    const c = cam(1800, 1000, VW, VH, [200, 500]);
+    c.setInsets(0, 0, L, R);
+    expect(c.fitZoom).toBeCloseTo(Math.min((VW - L - R) / 1800, VH / 1000) * 0.94, 6);
+    c.fit();
+    const corners = [[0, 0], [1800, 0], [0, 1000], [1800, 1000]].map(([x, y]) => c.toScreen(x, y));
+    for (const [sx] of corners) {
+      expect(sx).toBeGreaterThanOrEqual(L - 1e-6);
+      expect(sx).toBeLessThanOrEqual(VW - R + 1e-6);
+    }
+    // Centred between the rails.
+    const [mx] = c.toScreen(900, 500);
+    expect(mx).toBeCloseTo(L + (VW - L - R) / 2, 4);
+  });
+
+  it('refits a held view when the rails appear', () => {
+    const c = cam(1800, 1000, VW, VH, [200, 500]);
+    const before = c.fitZoom;
+    expect(c.setInsets(0, 0, L, R)).toBe(true);
+    expect(c.fitZoom).toBeLessThan(before);
+    const [mx] = c.toScreen(900, 500);
+    expect(mx).toBeCloseTo(L + (VW - L - R) / 2, 4);
+  });
+
+  it('opens on home in the middle of the visible area, on any turn', () => {
+    for (const [vw, vh, ins] of [
+      [VW, VH, [0, 0, L, R]],
+      [375, 812, [60, 200, 0, 0]],
+    ] as const) {
+      const c = cam(4000, 2400, vw, vh, [1200, 1200]);
+      c.setInsets(ins[0], ins[1], ins[2], ins[3]);
+      c.open(1200, 1200, 1, 0.75, 4, 4);
+      const [sx, sy] = c.toScreen(1200, 1200);
+      const [t, b, l, r] = ins;
+      expect(sx).toBeCloseTo(l + (vw - l - r) / 2, 4);
+      expect(sy).toBeCloseTo(t + (vh - t - b) / 2, 4);
+    }
+  });
+
+  it('pans every edge clear of the rails', () => {
+    const c = cam(1800, 1000, VW, VH, [200, 500]);
+    c.setInsets(0, 0, L, R);
+    c.focus(900, 500, c.fitZoom * 3);
+    // Drag far right: the map's left edge stops past the left rail, not under it.
+    c.pan(100000, 0);
+    const [lx] = c.toScreen(0, 500);
+    expect(lx).toBeGreaterThan(L);
+    c.pan(-200000, 0);
+    const [rx] = c.toScreen(1800, 500);
+    expect(rx).toBeLessThan(VW - R);
+  });
+});
