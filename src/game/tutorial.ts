@@ -352,7 +352,7 @@ export const MISSIONS: Mission[] = [
     learned: [
       'Fights start on their own when armies meet: bring more dots.',
       'Energy builds over time and from captures; powers spend it. Surge gives your selected dots a burst of speed and damage.',
-      'Holding a nest type unlocks its power: a Spire gives Barrage, a Den gives Blink.',
+      `Holding a nest type unlocks a power: a Spire ${nestIcon(NestType.Spire)} gives Barrage.`,
       'A player with no nests and no dots is out.',
     ],
     locked: ['nova', 'upgrade', 'fortify', 'barrage', 'blink', 'lockdown'],
@@ -398,8 +398,8 @@ export const MISSIONS: Mission[] = [
       },
       {
         text: {
-          desktop: '<b>Powers</b> spend energy. Surge is always here; others unlock as you hold nest types: a Spire gives Barrage, a Den gives Blink.',
-          mobile: '<b>Powers</b> spend energy. Surge is always here; others unlock as you hold nest types: a Spire gives Barrage, a Den gives Blink.',
+          desktop: `<b>Powers</b> spend energy. Surge is always here; others unlock as you hold nest types. A Spire ${nestIcon(NestType.Spire)}, say, gives Barrage: you’ll try it next mission.`,
+          mobile: `<b>Powers</b> spend energy. Surge is always here; others unlock as you hold nest types. A Spire ${nestIcon(NestType.Spire)}, say, gives Barrage: you’ll try it next mission.`,
         },
         next: true,
         pulse: '.actions',
