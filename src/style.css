@@ -675,12 +675,6 @@ body.mobile .aimhint.on {
 }
 body.mobile .aimhint button { min-height: 40px; }
 
-/* Landscape phones are short: one row for chips, energy and actions. */
-@media (orientation: landscape) and (max-height: 500px) {
-  body.mobile .hud-bottom { grid-template-columns: auto minmax(120px, 200px) 1fr; grid-template-areas: 'chips energy actions'; padding-top: 6px; }
-  body.mobile .actions button { min-height: 44px; }
-  body.mobile .hud-top { width: calc(100% - 200px); }
-}
 .settings .rec-actions { align-items: center; gap: 8px; margin-top: 6px; }
 .settings .rec-actions .rec-count { margin: 0 auto 0 0; }
 
@@ -1092,3 +1086,98 @@ button:disabled .cost { color: inherit; }
 .fortress-grid .grid { display: flex; flex-wrap: wrap; gap: 12px; grid-template-columns: none; }
 .fortress-grid figure { margin: 0; }
 .fortress-grid figcaption { font-size: 12px; color: #aab0c8; margin-top: 3px; }
+
+/* ---- Landscape phones (#113): side rails, the middle left for the map ----
+   body.land is a short, wide view (mobile.ts isShortWide). The counter wheel sits
+   top left, the selection chips and energy bottom left, under the thumb; the actions down the right, under the
+   thumbs; a slim top row between them. The HUD measures the rails (--hudl, --hudr)
+   for the camera, and the overlays sit in the middle column between them. */
+body.mobile.land .hud {
+  --sl: env(safe-area-inset-left, 0px);
+  --sr: env(safe-area-inset-right, 0px);
+  --st: env(safe-area-inset-top, 0px);
+  --sb: env(safe-area-inset-bottom, 0px);
+  --midl: calc(var(--hudl, 126px) + 8px);
+  --midr: calc(var(--hudr, 158px) + 8px);
+  /* middle column: its centre and width */
+  --midx: calc(var(--midl) + (100% - var(--midl) - var(--midr)) / 2);
+  --midw: calc(100% - var(--midl) - var(--midr));
+}
+/* Slim top row: strength, nest share and the player strip, clear of the clock and pause. */
+body.mobile.land .hud-top { top: calc(4px + var(--st)); left: var(--midl); right: calc(150px + var(--sr)); width: auto; transform: none; }
+body.mobile.land .chips { margin-top: 3px; font-size: 11px; gap: 3px 8px; }
+body.mobile.land .hud-tr { top: calc(4px + var(--st)); }
+
+/* The bar's box goes away; its parts become the rails. A tutorial tour of the bar (#115)
+   brings it back as one panel in the middle. */
+body.mobile.land .hud-bottom:not(.coach-spot) { display: contents; }
+body.mobile.land .hud-bottom:not(.coach-spot) .energy {
+  position: absolute; left: calc(8px + var(--sl)); bottom: calc(8px + var(--sb)); width: 110px; height: 22px;
+}
+body.mobile.land .hud-bottom:not(.coach-spot) .selchips {
+  position: absolute; left: calc(8px + var(--sl)); bottom: calc(38px + var(--sb));
+  display: grid; grid-template-columns: repeat(2, 52px); gap: 6px; pointer-events: auto;
+}
+/* Over the map, not over a panel: solid buttons. */
+body.mobile.land .hud-bottom:not(.coach-spot) .kchip,
+body.mobile.land .hud-bottom:not(.coach-spot) .actions button { background: var(--panel); backdrop-filter: blur(6px); }
+body.mobile.land .hud-bottom:not(.coach-spot) .energy span { line-height: 20px; font-size: 11px; padding-left: 6px; }
+body.mobile.land .hud-bottom:not(.coach-spot) .actions {
+  position: absolute; right: calc(8px + var(--sr)); top: calc(56px + var(--st)); bottom: calc(8px + var(--sb));
+  display: grid; grid-template-columns: repeat(2, 68px); grid-auto-rows: minmax(44px, 48px); align-content: end; gap: 6px;
+}
+body.mobile.land .actions button { min-height: 44px; font-size: 13px; }
+body.mobile.land .actions button small { font-size: 10px; }
+body.mobile.land .hud-bottom.coach-spot { left: 50%; right: auto; bottom: auto; top: 50%; width: min(520px, calc(100% - 32px)); transform: translate(-50%, -50%); border-radius: 12px; border-width: 1px; padding: 8px; }
+body.mobile.land .counters { left: calc(8px + var(--sl)); right: auto; top: calc(8px + var(--st)); bottom: auto; width: 110px; }
+body.mobile.land .warlord-chip, body.mobile.land .warlord-chip.below {
+  top: calc(104px + var(--st)); bottom: auto; left: calc(8px + var(--sl)); max-width: 110px; padding: 4px 8px;
+}
+body.mobile.land .warlord-chip small { font-size: 10px; }
+
+/* Overlays: in the middle column. */
+body.mobile.land .coach { left: var(--midl); right: var(--midr); width: auto; max-width: 520px; margin: 0 auto; transform: none; }
+body.mobile.land .toasts { top: calc(48px + var(--st)); left: var(--midx); }
+body.mobile.land .hud.has-siege .toasts, body.mobile.land .hud.has-lord .toasts { top: calc(92px + var(--st)); }
+body.mobile.land .toast { font-size: 13px; padding: 4px 12px; white-space: normal; max-width: var(--midw); }
+body.mobile.land .aimhint.on { top: calc(48px + var(--st)); left: var(--midx); max-width: var(--midw); white-space: normal; }
+body.mobile.land .siege, body.mobile.land .heartbar { top: calc(44px + var(--st)); left: var(--midx); width: min(480px, calc(var(--midw) - 8px)); }
+body.mobile.land .heartbar { padding: 4px 10px 5px; }
+body.mobile.land .dom { top: calc(44px + var(--st)); left: var(--midx); min-width: min(320px, var(--midw)); padding: 4px 12px 6px; }
+body.mobile.land .dom-time { font-size: 26px; }
+body.mobile.land .dom.urgent .dom-time { font-size: 30px; }
+body.mobile.land .team-banner { left: var(--midx); max-width: var(--midw); top: calc(48px + var(--st)); }
+body.mobile.land .boon { left: var(--midx); bottom: calc(8px + var(--sb)); width: min(560px, calc(var(--midw) - 8px)); padding: 8px 10px 10px; }
+body.mobile.land .boon-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+body.mobile.land .boon-list button { padding: 6px 8px; }
+body.mobile.land .nestcard { left: var(--midl); right: auto; bottom: calc(8px + var(--sb)); max-width: var(--midw); }
+
+/* Menus in a short, wide view (any device): use the width, not the height. */
+.card { max-height: calc(100dvh - 32px); }
+body.land .screen.modal { padding: 8px calc(8px + env(safe-area-inset-right, 0px)) 8px calc(8px + env(safe-area-inset-left, 0px)); }
+body.land .card { padding: 14px 18px; max-height: calc(100dvh - 16px); }
+body.land .card h2 { margin-bottom: 10px; font-size: 19px; }
+/* Run map: full width, a thin header, the node card as a panel beside the map. */
+body.land .runmap header { padding: 4px calc(12px + env(safe-area-inset-right, 0px)) 4px calc(12px + env(safe-area-inset-left, 0px)); gap: 10px; }
+body.land .node-veil { justify-content: flex-end; align-items: stretch; padding: 8px calc(8px + env(safe-area-inset-right, 0px)) 8px 8px; background: linear-gradient(90deg, transparent 40%, rgba(4, 5, 12, 0.45)); }
+body.land .node-card { width: min(360px, 48%); max-height: 100%; overflow-y: auto; padding: 14px 16px; }
+body.land .map-hint { bottom: 8px; }
+body.land .map-wrap:has(.node-veil:not([hidden])) .map-hint { display: none; }
+/* Camp: tabs in a row across the top, the body full width. */
+body.land .camp { padding: 6px calc(8px + env(safe-area-inset-right, 0px)) 6px calc(8px + env(safe-area-inset-left, 0px)); }
+body.land .camp-card { width: min(900px, 100%); grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); gap: 8px; padding: 10px 14px; }
+body.land .camp-tabs { flex-direction: row; }
+body.land .camp-tabs button { flex: 1; text-align: center; white-space: nowrap; padding: 6px 8px; }
+body.land .brood-card { flex-basis: 210px; }
+/* Rewards and starter packs: side by side. */
+body.land .reward-card { max-width: min(860px, 100%); width: 100%; }
+body.land .rewards, body.land .packs { flex-direction: row; gap: 8px; margin: 8px 0 4px; }
+body.land .reward, body.land .pack { flex: 1; min-width: 0; padding: 8px 10px; }
+body.land .strain-compare { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+/* End screen: the verdict and the table on the left, the chart on the right. */
+body.land .card.end { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 16px; align-items: start; }
+body.land .end .result { grid-column: 1; font-size: 36px; }
+body.land .end .sub { grid-column: 1; margin: 2px 0 6px; }
+body.land .end .chart { grid-column: 2; grid-row: 1 / span 3; height: 140px; margin: 0; align-self: center; }
+body.land .end .stats { grid-column: 1 / -1; font-size: 13px; }
+body.land .end .row { grid-column: 1 / -1; }

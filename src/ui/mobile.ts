@@ -47,13 +47,36 @@ export function setUiMode(m: UiMode): void {
 }
 
 export function applyUiMode(): void {
+  const was = document.body.classList.contains('mobile');
   document.body.classList.toggle('mobile', isMobile());
+  if (was !== isMobile()) window.dispatchEvent(new Event(LAYOUT_EVENT));
+}
+
+/**
+ * A short, wide view (#113): a phone held sideways, not a tablet or a desktop
+ * window that merely is wider than tall. Gets the side-rail layout (`body.land`).
+ */
+export function isShortWide(w: number, h: number): boolean {
+  return h > 0 && h <= 540 && w >= h * (4 / 3);
+}
+
+/** Fired on window when `body.land` turns on or off, so the HUD re-measures at once. */
+export const LAYOUT_EVENT = 'swarm:layout';
+
+export function applyLayout(): void {
+  const land = isShortWide(window.innerWidth, window.innerHeight);
+  if (document.body.classList.contains('land') === land) return;
+  document.body.classList.toggle('land', land);
+  window.dispatchEvent(new Event(LAYOUT_EVENT));
 }
 
 /** Apply now, and again if the pointer changes (tablet keyboard docks, devtools emulation). */
 export function initUiMode(): void {
   applyUiMode();
+  applyLayout();
   for (const q of ['(pointer: coarse)', '(hover: hover)']) window.matchMedia?.(q).addEventListener?.('change', applyUiMode);
+  window.addEventListener('resize', applyLayout);
+  window.addEventListener('orientationchange', applyLayout);
 }
 
 /** First time auto-detection turns mobile mode on, say so once. */

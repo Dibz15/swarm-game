@@ -600,7 +600,8 @@ class App {
   private applyInsets(): void {
     const d = this.renderer.dpr;
     this.camera.edgePad = 40 * d;
-    if (this.hud) this.camera.setInsets(Math.round(this.hud.insetTop * d), Math.round(this.hud.insetBottom * d));
+    const h = this.hud;
+    if (h) this.camera.setInsets(Math.round(h.insetTop * d), Math.round(h.insetBottom * d), Math.round(h.insetLeft * d), Math.round(h.insetRight * d));
   }
 
   private togglePause(): void {

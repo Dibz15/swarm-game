@@ -140,10 +140,14 @@ export class Camera {
     this.anchor = { x, y, k };
   }
 
+  /** Put (x, y) at the middle of the visible area (between the HUD insets), at `zoom`. */
   private place(x: number, y: number, zoom: number): void {
     this.zoom = clamp(zoom, this.fitZoom * 0.7, this.fitZoom * 5);
-    this.cx = x;
-    this.cy = y;
+    // The visible area's middle, off the view's middle (device px), turned back onto the map.
+    const ox = (this.inset.left - this.inset.right) / 2, oy = (this.inset.top - this.inset.bottom) / 2;
+    const c = COS[this.turn], s = SIN[this.turn];
+    this.cx = x - (c * ox + s * oy) / this.zoom;
+    this.cy = y - (-s * ox + c * oy) / this.zoom;
     this.clampPos();
   }
 
