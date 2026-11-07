@@ -463,7 +463,10 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   padding: 8px 10px;
   pointer-events: auto;
   max-width: calc(100% - 16px);
+  transition: transform 0.8s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s, border-color 0.3s;
 }
+/* The tutorial's spotlight (#115): the bar comes up to the middle, enlarged, for a tour of its parts. */
+.hud-bottom.coach-spot { z-index: 20; border-color: var(--accent); box-shadow: 0 0 30px rgba(45, 226, 230, 0.35); }
 .selinfo { min-width: 120px; font-size: 14px; display: flex; flex-direction: column; line-height: 1.2; }
 .selinfo small { color: var(--muted); font-size: 11px; }
 .energy { position: relative; width: 140px; height: 22px; background: rgba(0, 0, 0, 0.4); border-radius: 4px; overflow: hidden; border: 1px solid var(--line); }

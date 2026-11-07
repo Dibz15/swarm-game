@@ -311,19 +311,23 @@ export class Hud {
     this.insetTop = coach.height > 0 ? Math.max(topBottom, coach.bottom) : topBottom;
     // Toasts drop below the tutorial coach while it's up.
     this.toasts.style.top = coach.height > 0 ? `${Math.round(coach.bottom + 8)}px` : '';
-    const b = this.bottom.getBoundingClientRect();
-    this.insetBottom = b.height > 0 ? Math.max(0, h - b.top) : 0;
+    // Its laid-out place, not where a tutorial spotlight has lifted it to (#115).
+    const b = this.bottom;
+    this.insetBottom = b.offsetHeight > 0 ? Math.max(0, h - b.offsetTop) : 0;
   }
 
-  /** the element the coach has brought to the middle (#115), and the window size it was placed for */
+  /** the element the coach has brought to the middle (#115), and the window and element size it was placed for */
   private spot: HTMLElement | null = null;
   private spotView = '';
+  /** the spotlit element's own transform at home */
+  private spotBase = '';
 
   private clearSpot(): void {
     if (!this.spot) return;
     this.spot.classList.remove('coach-spot');
     this.spot.style.transform = '';
     this.spot = null;
+    this.spotBase = '';
   }
 
   /** Move the spotlit element from its home spot to the middle of the screen, enlarged. */
@@ -335,17 +339,25 @@ export class Hud {
       e.style.transform = '';
     }
     const r = e.getBoundingClientRect();
-    // Into the space under the coach panel, so it never covers the text or Next.
+    // Its own transform at home (the bottom bar is centred with one): kept, with the move on top.
+    if (remeasure || !this.spotBase) this.spotBase = getComputedStyle(e).transform.replace('none', '');
+    // Into the space under the coach panel, so it never covers the text or Next: as large as
+    // fits (2.4× at most), never smaller than it is.
     const top = this.coach.getBoundingClientRect().bottom + 12;
     const room = Math.max(40, innerHeight - top - 12);
-    const k = Math.min(2.4, (0.5 * Math.min(innerWidth, innerHeight)) / Math.max(1, r.width), (0.85 * room) / Math.max(1, r.height));
+    const fit = Math.min(2.4, (0.92 * innerWidth) / Math.max(1, r.width), Math.min(0.85 * room, 0.5 * Math.min(innerWidth, innerHeight)) / Math.max(1, r.height));
+    const k = Math.max(1, fit);
     const dx = innerWidth / 2 - (r.left + r.width / 2), dy = top + room / 2 - (r.top + r.height / 2);
-    e.style.transform = `translate(${dx}px, ${dy}px) scale(${k})`;
+    e.style.transform = `translate(${dx}px, ${dy}px) ${this.spotBase} scale(${k})`;
     if (remeasure) {
       void e.offsetWidth;
       e.style.transition = '';
     }
-    this.spotView = `${innerWidth}x${innerHeight}`;
+    this.spotView = this.spotKey();
+  }
+
+  private spotKey(): string {
+    return `${innerWidth}x${innerHeight}:${this.spot?.offsetWidth}x${this.spot?.offsetHeight}`;
   }
 
   /** Tutorial coach: the current step's instruction and progress (#17). */
@@ -366,8 +378,9 @@ export class Hud {
     st.style.display = status ? '' : 'none';
     const shown = wait ? (mobile ? wait.mobile : wait.desktop) : '';
     const key = m ? `${m.index}:${m.step}:${mobile}:${shown}` : '';
-    // A resize or a turned phone moves the spotlit element's home: centre it again.
-    if (this.spot && `${innerWidth}x${innerHeight}` !== this.spotView) this.placeSpot(true);
+    // A resize, a turned phone, or the element changing size (buttons shown or hidden) moves its
+    // home: centre it again.
+    if (this.spot && this.spotKey() !== this.spotView) this.placeSpot(true);
     if (key === this.coachKey) return;
     this.coachKey = key;
     this.coach.classList.toggle('on', !!m);
@@ -387,11 +400,15 @@ export class Hud {
     this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
     if (step?.pulse) this.el.querySelector(step.pulse)?.classList.add('coach-pulse');
     // A spotlit element (#115) glides to the middle, enlarged; clearing it glides it home.
-    this.clearSpot();
-    this.spot = step?.spotlight ? this.el.querySelector<HTMLElement>(step.spotlight) : null;
-    if (this.spot) {
-      this.spot.classList.add('coach-spot');
-      this.placeSpot(false);
+    // Consecutive steps on the same element (a tour of the bottom bar) keep it where it is.
+    const next = step?.spotlight ? this.el.querySelector<HTMLElement>(step.spotlight) : null;
+    if (next !== this.spot) {
+      this.clearSpot();
+      this.spot = next;
+      if (next) {
+        next.classList.add('coach-spot');
+        this.placeSpot(false);
+      }
     }
     this.coach.classList.remove('pop');
     void this.coach.offsetWidth;
