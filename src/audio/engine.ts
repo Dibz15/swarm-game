@@ -1,7 +1,8 @@
 import { NEUTRAL, escalation } from '../sim/constants';
 import type { World } from '../sim/world';
 import { Ambience } from './ambience';
-import { Music, type MusicMode } from './music';
+import { Music, type MusicMode, type SchedulerStats } from './music';
+import { admit, audioProfile, audioQuality, parseAudioOff, setAudioQuality, type AudioProfile, type AudioQuality, type Priority } from './quality';
 import { CLASSIC, leadNotes, mapSemi, themeById, themeForSeed, type Theme } from './themes';
 
 /** What the audio needs to know about the camera. */
@@ -42,12 +43,39 @@ const A = 220;
 const hz = (semi: number) => A * Math.pow(2, semi / 12);
 /** `?theme=<id>` forces a theme, to audition them. */
 const URL_THEME = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('theme');
+/** `?audiooff=music,ambience,reverb,sfx` switches parts off, to find what a device struggles with (#118). */
+const AUDIO_OFF = parseAudioOff(typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('audiooff'));
+
+/** What the `?audiodebug` overlay shows. */
+export interface AudioStats {
+  quality: AudioQuality;
+  level: string;
+  latencyHint: string;
+  state: string;
+  sampleRate: number;
+  baseLatency: number;
+  outputLatency: number;
+  voices: number;
+  softCap: number;
+  hardCap: number;
+  /** sounds not played because of the voice cap, since the last read */
+  dropped: number;
+  /** audio-thread underruns since the last read (Chrome only; null elsewhere) */
+  underruns: { events: number; ms: number } | null;
+  off: string[];
+  music: SchedulerStats | null;
+}
 
 /** Token bucket so dense fights stay a texture, not a wall of noise. */
 class RateLimit {
   private tokens: number;
-  constructor(private readonly perSec: number, private readonly burst: number) {
+  constructor(private perSec: number, private burst: number) {
     this.tokens = burst;
+  }
+  set(perSec: number, burst: number): void {
+    this.perSec = perSec;
+    this.burst = burst;
+    this.tokens = Math.min(this.tokens, burst);
   }
   refill(dt: number): void {
     this.tokens = Math.min(this.burst, this.tokens + dt * this.perSec);
@@ -69,6 +97,7 @@ export class AudioEngine {
   private master!: GainNode;
   private buses!: Record<'sfx' | 'ambience' | 'music', GainNode>;
   private reverbIn!: GainNode;
+  private conv: ConvolverNode | null = null;
   private noiseBuf!: AudioBuffer;
   private nearBed!: { gain: GainNode; filter: BiquadFilterNode };
   private farBed!: { gain: GainNode; filter: BiquadFilterNode };
@@ -77,7 +106,16 @@ export class AudioEngine {
   private listener: Listener | null = null;
   private last = new Map<string, number>();
   private bloom = 0;
-  private deathLimit = new RateLimit(16, 6);
+  private profile: AudioProfile = audioProfile();
+  private deathLimit = new RateLimit(...this.profile.deaths);
+  /** one-shot sound sources playing now */
+  private voices = 0;
+  private dropped = 0;
+  /** placement chains and how many sources still feed each, so they can be let go */
+  private chains = new Map<AudioNode, { n: number; g: GainNode }>();
+  /** suspended by us because the page is hidden */
+  private asleep = false;
+  private lastUnderrun = { events: 0, secs: 0 };
   private spawnLimit = new RateLimit(3, 2);
   private nearLevel = 0;
   private farLevel = 0;
@@ -112,14 +150,74 @@ export class AudioEngine {
   /** Must be called from a user gesture (browser autoplay rules). */
   unlock(): void {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') void this.ctx.resume();
+      this.resume();
       return;
     }
     try {
-      this.build(new AudioContext());
+      let ctx: AudioContext;
+      try {
+        ctx = new AudioContext({ latencyHint: this.profile.latencyHint });
+      } catch {
+        ctx = new AudioContext();
+      }
+      this.build(ctx);
     } catch {
       this.ctx = null;
     }
+  }
+
+  /**
+   * Phones suspend or interrupt the context (a call, another app, the iOS
+   * silent switch). Try to resume; if the browser wants a gesture, the next
+   * pointerdown calls unlock() again. The music skips ahead after a stall.
+   */
+  resume(): void {
+    const st = this.ctx?.state as string | undefined;
+    if (st === 'suspended' || st === 'interrupted') void this.ctx!.resume().catch(() => {});
+  }
+
+  /**
+   * The page went to the background or came back. Hidden, the timers that
+   * drive the music are throttled to about once a second, so it can't keep
+   * time: suspend the whole context rather than let it stutter, and resume
+   * on return.
+   */
+  setHidden(hidden: boolean): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (hidden && ctx.state === 'running') {
+      this.asleep = true;
+      void ctx.suspend().catch(() => {});
+    } else if (!hidden && this.asleep) {
+      this.asleep = false;
+      this.resume();
+    }
+  }
+
+  get quality(): AudioQuality {
+    return audioQuality();
+  }
+
+  /** Change the quality live. The output buffer size only changes on reload. */
+  setQuality(q: AudioQuality): void {
+    setAudioQuality(q);
+    const old = this.profile;
+    // A context's buffer size is fixed once made: keep reporting the one in use.
+    this.profile = this.ctx ? { ...audioProfile(), latencyHint: old.latencyHint } : audioProfile();
+    this.deathLimit.set(...this.profile.deaths);
+    if (this.music) this.music.lookahead = this.profile.lookahead;
+    if (this.ctx && this.conv && this.profile.reverb !== old.reverb) this.conv.buffer = this.impulse(this.ctx, this.profile.reverb);
+  }
+
+  /** Generated impulse response: stereo decaying noise. */
+  private impulse(ctx: AudioContext, secs: number): AudioBuffer {
+    const len = Math.floor(ctx.sampleRate * secs);
+    const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2);
+    }
+    return ir;
   }
 
   private build(ctx: AudioContext): void {
@@ -140,19 +238,16 @@ export class AudioEngine {
     };
     this.buses = { sfx: bus(), ambience: bus(), music: bus() };
 
-    // Generated impulse response: stereo decaying noise, ~2.8s tail.
-    const len = Math.floor(ctx.sampleRate * 2.8);
-    const ir = ctx.createBuffer(2, len, ctx.sampleRate);
-    for (let ch = 0; ch < 2; ch++) {
-      const d = ir.getChannelData(ch);
-      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2);
-    }
-    const conv = ctx.createConvolver();
-    conv.buffer = ir;
+    // Reverb: the costliest node, so its tail is shorter on Low quality.
+    // Switched off, the sends go into a gain that leads nowhere.
     this.reverbIn = ctx.createGain();
-    const wet = ctx.createGain();
-    wet.gain.value = 0.55;
-    this.reverbIn.connect(conv).connect(wet).connect(comp);
+    if (!AUDIO_OFF.has('reverb')) {
+      const conv = (this.conv = ctx.createConvolver());
+      conv.buffer = this.impulse(ctx, this.profile.reverb);
+      const wet = ctx.createGain();
+      wet.gain.value = 0.55;
+      this.reverbIn.connect(conv).connect(wet).connect(comp);
+    }
 
     // Shared noise for beds and transients.
     const nlen = ctx.sampleRate * 2;
@@ -164,10 +259,13 @@ export class AudioEngine {
     this.nearBed = this.bed('bandpass', 1000, 0.8, 0.25);
     this.farBed = this.bed('lowpass', 260, 0.7, 0.5);
 
-    this.ambience = new Ambience(ctx, this.buses.ambience, this.reverbIn);
-    this.music = new Music(ctx, this.buses.music, this.reverbIn);
-    this.music.setTheme(this.wanted);
-    this.music.start();
+    if (!AUDIO_OFF.has('ambience')) this.ambience = new Ambience(ctx, this.buses.ambience, this.reverbIn);
+    if (!AUDIO_OFF.has('music')) {
+      this.music = new Music(ctx, this.buses.music, this.reverbIn, AUDIO_OFF);
+      this.music.lookahead = this.profile.lookahead;
+      this.music.setTheme(this.wanted);
+      this.music.start();
+    }
     this.applyVolumes();
   }
 
@@ -304,9 +402,48 @@ export class AudioEngine {
     const send = ctx.createGain();
     send.gain.value = p.wet;
     g.connect(send).connect(this.reverbIn);
-    // Let the graph be collected after the sound ends.
-    setTimeout(() => g.disconnect(), (dur + 3.5) * 1000 + (t - ctx.currentTime) * 1000);
+    // Let the graph go once the last source feeding it ends (see track()).
+    // If the cap dropped every source, nothing will end: let it go now.
+    const chain = { n: 0, g };
+    this.chains.set(filter, chain);
+    queueMicrotask(() => {
+      if (chain.n === 0) this.release(filter);
+    });
     return filter;
+  }
+
+  private release(out: AudioNode): void {
+    const chain = this.chains.get(out);
+    if (!chain) return;
+    this.chains.delete(out);
+    chain.g.disconnect();
+  }
+
+  /** A one-shot source may start: under the hard cap, and effects not switched off. */
+  private open(): boolean {
+    if (AUDIO_OFF.has('sfx')) return false;
+    if (admit(this.voices, 'major', this.profile)) return true;
+    this.dropped++;
+    return false;
+  }
+
+  /** Count a source while it plays, and free its placement chain after the last one. */
+  private track(src: AudioScheduledSourceNode, out: AudioNode): void {
+    this.voices++;
+    const chain = this.chains.get(out);
+    if (chain) chain.n++;
+    src.onended = () => {
+      this.voices--;
+      // The reverb tail rings on inside the convolver, so the chain can go now.
+      if (chain && --chain.n === 0) this.release(out);
+    };
+  }
+
+  /** Minor sounds (they come in bulk) give way first when many are playing. */
+  private room(priority: Priority): boolean {
+    if (admit(this.voices, priority, this.profile)) return true;
+    this.dropped++;
+    return false;
   }
 
   private throttle(key: string, ms: number): boolean {
@@ -326,6 +463,7 @@ export class AudioEngine {
     vol: number,
     opts: { slide?: number; delay?: number; attack?: number } = {},
   ): void {
+    if (!this.open()) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime + (opts.delay ?? 0);
     const o = ctx.createOscillator();
@@ -337,11 +475,13 @@ export class AudioEngine {
     g.gain.linearRampToValueAtTime(vol, t + (opts.attack ?? 0.006));
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g).connect(out);
+    this.track(o, out);
     o.start(t);
     o.stop(t + dur + 0.05);
   }
 
   private noise(out: AudioNode, dur: number, vol: number, type: BiquadFilterType, from: number, to: number, delay = 0): void {
+    if (!this.open()) return;
     const ctx = this.ctx!;
     const t = ctx.currentTime + delay;
     const src = ctx.createBufferSource();
@@ -354,6 +494,7 @@ export class AudioEngine {
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     src.connect(f).connect(g).connect(out);
+    this.track(src, out);
     src.start(t, Math.random() * 1.5, dur + 0.05);
   }
 
@@ -392,7 +533,7 @@ export class AudioEngine {
   death(x: number, y: number, faction: number): void {
     if (!this.ctx) return;
     // Zoomed out, let fewer individual pops through so it stays a texture.
-    if (Math.random() > this.heightGain() * 1.4 - 0.2 || !this.deathLimit.take()) return;
+    if (Math.random() > this.heightGain() * 1.4 - 0.2 || !this.deathLimit.take() || !this.room('minor')) return;
     const out = this.at(x, y, 1, 0.3, 0.12);
     if (!out) return;
     const v = VOICE[faction] ?? VOICE[NEUTRAL];
@@ -406,7 +547,7 @@ export class AudioEngine {
   }
 
   spawn(x: number, y: number): void {
-    if (!this.ctx || !this.spawnLimit.take()) return;
+    if (!this.ctx || !this.spawnLimit.take() || !this.room('minor')) return;
     const out = this.at(x, y, 1, 0.2, 0.3);
     if (!out) return;
     this.tone(out, this.note(43), 0.07, 'sine', 0.012, { slide: 1.1 });
@@ -886,9 +1027,10 @@ export class AudioEngine {
     this.nearLevel += (Math.min(1, near / 220) - this.nearLevel) * k;
     this.farLevel += (Math.min(1, far / 900) - this.farLevel) * k;
     const t = this.ctx.currentTime;
-    this.nearBed.gain.gain.setTargetAtTime(this.nearLevel * 0.12 * this.heightGain(), t, 0.1);
+    const beds = AUDIO_OFF.has('sfx') ? 0 : 1;
+    this.nearBed.gain.gain.setTargetAtTime(beds * this.nearLevel * 0.12 * this.heightGain(), t, 0.1);
     this.nearBed.filter.frequency.setTargetAtTime(800 + this.nearLevel * 900, t, 0.2);
-    this.farBed.gain.gain.setTargetAtTime(this.farLevel * 0.35, t, 0.2);
+    this.farBed.gain.gain.setTargetAtTime(beds * this.farLevel * 0.35, t, 0.2);
 
     this.tension += (Math.min(1, this.nearLevel * 0.8 + this.farLevel * 0.35 + danger * 0.35) - this.tension) * (1 - Math.exp(-dt * 0.8));
     const musicOn = mode === 'ended' || this.muted ? 0 : Math.min(1, this.volumes.music * 1.5);
@@ -897,6 +1039,38 @@ export class AudioEngine {
     // The Bloom: set by the run map, or read from a campaign battle (its swarms, its heart).
     const bloom = w && mode !== 'menu' ? (w.heart ? 1 : w.events?.spec.params.bloom ? 0.6 : 0) : this.bloom;
     this.music?.update(dt, { mode, tension: this.tension, danger, escalation: escal, domination: dom, bloom });
+  }
+
+  /** For the `?audiodebug` overlay; resets the per-window counters. */
+  stats(): AudioStats {
+    const ctx = this.ctx;
+    const s: AudioStats = {
+      quality: audioQuality(),
+      level: this.profile.level,
+      latencyHint: String(this.profile.latencyHint),
+      state: ctx?.state ?? 'locked',
+      sampleRate: ctx?.sampleRate ?? 0,
+      baseLatency: ctx?.baseLatency ?? 0,
+      outputLatency: (ctx as AudioContext & { outputLatency?: number })?.outputLatency ?? 0,
+      voices: this.voices,
+      softCap: this.profile.softCap,
+      hardCap: this.profile.hardCap,
+      dropped: this.dropped,
+      underruns: this.underruns(),
+      off: [...AUDIO_OFF],
+      music: this.music?.takeStats() ?? null,
+    };
+    this.dropped = 0;
+    return s;
+  }
+
+  /** Underruns since the last call, from Chrome's playbackStats (null where it's missing). */
+  private underruns(): { events: number; ms: number } | null {
+    const ps = (this.ctx as (AudioContext & { playbackStats?: { underrunEvents: number; underrunDuration: number } }) | null)?.playbackStats;
+    if (!ps) return null;
+    const d = { events: ps.underrunEvents - this.lastUnderrun.events, ms: (ps.underrunDuration - this.lastUnderrun.secs) * 1000 };
+    this.lastUnderrun = { events: ps.underrunEvents, secs: ps.underrunDuration };
+    return d;
   }
 
   /** How close the Bloom is on the run map (0..1); the menu score darkens with it. */

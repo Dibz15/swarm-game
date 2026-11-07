@@ -12,6 +12,7 @@
  */
 
 import { hits, notes, phrase, styleOf, type MelodyNote, type Style } from './styles';
+import type { AudioPart } from './quality';
 import { CLASSIC, chord, leadNotes, voiced, type Mood, type Theme } from './themes';
 
 export type MusicMode = 'menu' | 'play' | 'paused' | 'ended';
@@ -29,7 +30,22 @@ export interface MusicState {
 
 /** Paused mid-match: music (and the ambience drone) go dull and quiet. */
 export const PAUSE = { cutoff: 260, level: 0.45 };
-const LOOKAHEAD = 0.15;
+
+/** How well the note scheduler keeps up, worst values since the last read (#118). */
+export interface SchedulerStats {
+  lookahead: number;
+  /** longest wait between scheduler runs, ms (the timer is meant to fire every 25) */
+  worstGap: number;
+  /** least time left before a note was due when it was scheduled, s; negative = late */
+  minHeadroom: number;
+  /** times the scheduler fell so far behind it skipped ahead */
+  skips: number;
+  /** 16th-note steps whose time had passed when they were scheduled: their notes were dropped */
+  late: number;
+}
+
+/** A note must start at least this far ahead of the clock, or it plays with its attack cut off (a click). */
+const MARGIN = 0.02;
 
 const hz = (semi: number, base = 220) => base * Math.pow(2, semi / 12);
 const smooth = (a: number, b: number, x: number) => {
@@ -69,8 +85,21 @@ export class Music {
   private echoFb: GainNode;
   /** the lead's last pitch, for styles that glide between notes */
   private lastLead = 0;
+  /** seconds of notes scheduled ahead of the clock (longer on phones) */
+  lookahead = 0.15;
+  private lastRun = 0;
+  private sched = { worstGap: 0, minHeadroom: Infinity, skips: 0, late: 0 };
 
-  constructor(private readonly ctx: AudioContext, bus: AudioNode, reverb: AudioNode) {
+  /** time since the levels were last applied, when `automation` is switched off */
+  private sinceApply = Infinity;
+
+  constructor(
+    private readonly ctx: AudioContext,
+    bus: AudioNode,
+    reverb: AudioNode,
+    /** parts switched off by `?audiooff=`, to bisect a device's glitches */
+    private readonly off: ReadonlySet<AudioPart> = new Set(),
+  ) {
     this.filter = ctx.createBiquadFilter();
     this.filter.type = 'lowpass';
     this.filter.frequency.value = 20000;
@@ -103,7 +132,7 @@ export class Music {
     const echoTone = ctx.createBiquadFilter();
     echoTone.type = 'lowpass';
     echoTone.frequency.value = 2500;
-    this.layers.arp.connect(echo);
+    if (!off.has('echo')) this.layers.arp.connect(echo);
     echo.connect(echoTone).connect(fb).connect(echo);
     echoTone.connect(this.filter);
 
@@ -144,6 +173,13 @@ export class Music {
   /** Called every frame with the game's state; adjusts layer levels. */
   update(dt: number, s: MusicState): void {
     this.state = s;
+    // Bisecting: move the levels twice a second instead of every frame.
+    if (this.off.has('automation')) {
+      this.sinceApply += dt;
+      if (this.sinceApply < 0.5) return;
+      dt = Math.min(this.sinceApply, 0.5);
+      this.sinceApply = 0;
+    }
     const bloom = s.bloom ?? 0;
     const target =
       s.mode === 'menu' ? 0.12 + 0.2 * bloom : Math.max(s.tension * 0.9, s.danger * 0.75, s.escalation * 0.85 + s.tension * 0.2);
@@ -174,13 +210,36 @@ export class Music {
 
   // ---- sequencing ----------------------------------------------------------
 
+  /** Scheduler health since the last call; resets the window. */
+  takeStats(): SchedulerStats {
+    const s = { lookahead: this.lookahead, ...this.sched };
+    this.sched = { worstGap: 0, minHeadroom: Infinity, skips: 0, late: 0 };
+    return s;
+  }
+
   private schedule(): void {
+    const wall = performance.now();
+    if (this.lastRun) this.sched.worstGap = Math.max(this.sched.worstGap, wall - this.lastRun);
+    this.lastRun = wall;
     const now = this.ctx.currentTime;
+    // While suspended the clock stands still: nothing to do.
+    if (this.ctx.state !== 'running') return;
     // If the context stalled (tab hidden), skip ahead instead of bursting.
-    if (this.nextTime < now - 0.2) this.nextTime = now + 0.05;
-    while (this.nextTime < now + LOOKAHEAD) {
+    if (this.nextTime < now - this.lookahead - 0.1) {
+      this.nextTime = now + 0.05;
+      this.sched.skips++;
+    }
+    // A late timer (the main thread was busy, or the page is in the
+    // background) leaves steps whose time has passed. Started now, their notes
+    // would all sound at once with their attacks cut off: a burst of crackle.
+    // So late steps keep the harmony moving but play nothing.
+    const safe = now + MARGIN;
+    while (this.nextTime < now + this.lookahead) {
+      this.sched.minHeadroom = Math.min(this.sched.minHeadroom, this.nextTime - now);
       // Swing pushes every odd 16th late.
-      this.playStep(this.step, this.nextTime + (this.step % 2 ? this.style.swing * this.stepDur : 0));
+      const t = this.nextTime + (this.step % 2 ? this.style.swing * this.stepDur : 0);
+      if (t < safe) this.sched.late++;
+      this.playStep(this.step, t, safe);
       this.step++;
       this.nextTime += this.stepDur;
     }
@@ -194,11 +253,12 @@ export class Music {
     return 'calm';
   }
 
-  private playStep(step: number, t: number): void {
+  private playStep(step: number, t: number, safe: number): void {
+    const late = t < safe;
     if (this.pending) {
       // New theme: fade out what the old one is holding and restart the bar
       // count so the new progression starts on its first chord.
-      this.release(t);
+      this.release(Math.max(t, safe));
       this.theme = this.pending;
       this.style = styleOf(this.theme.style);
       this.pending = null;
@@ -227,9 +287,13 @@ export class Music {
       const sym = p.chords[this.chordIdx];
       this.chord = chord(this.theme, sym);
       this.tones = voiced(this.theme, sym, st.pad.voicing);
-      this.pad(this.tones, t, this.stepDur * st.steps * p.bars);
+      // The pad fades in slowly, so a late chord can still start now; it ends on time.
+      const start = Math.max(t, safe);
+      const dur = t + this.stepDur * st.steps * p.bars - start;
+      if (dur > 0.2) this.pad(this.tones, start, dur);
       if (!this.phrase.length || (this.chordIdx === 0 && Math.floor(bar / p.bars) % 8 === 0)) this.newPhrase();
     }
+    if (late) return;
     const tones = this.tones;
     const root = this.theme.root;
     const STEP = this.stepDur;
@@ -316,6 +380,7 @@ export class Music {
   }
 
   private pad(tones: number[], t: number, dur: number): void {
+    if (this.off.has('pad')) return;
     const p = this.style.pad;
     // Same loudness however many notes the voicing has.
     const peak = (0.022 * 3) / tones.length;
@@ -336,6 +401,7 @@ export class Music {
   }
 
   private pluck(freq: number, t: number, dur: number): void {
+    if (this.off.has('arp')) return;
     const a = this.style.arp;
     const o = this.ctx.createOscillator();
     o.type = a.type;
@@ -350,6 +416,7 @@ export class Music {
   }
 
   private bass(freq: number, t: number, dur: number): void {
+    if (this.off.has('bass')) return;
     const b = this.style.bass;
     const o = this.ctx.createOscillator();
     o.type = b.type;
@@ -373,6 +440,7 @@ export class Music {
   }
 
   private kick(t: number, v: number): void {
+    if (this.off.has('drums')) return;
     const k = this.style.drums.kit.kick;
     const o = this.ctx.createOscillator();
     o.type = 'sine';
@@ -387,6 +455,7 @@ export class Music {
   }
 
   private snare(t: number, v: number): void {
+    if (this.off.has('drums')) return;
     const kind = this.style.drums.kit.snare;
     const src = this.ctx.createBufferSource();
     src.buffer = this.noise;
@@ -414,6 +483,7 @@ export class Music {
   }
 
   private hat(t: number, v: number): void {
+    if (this.off.has('drums')) return;
     const h = this.style.drums.kit.hat;
     // Accents ring longer in styles with an open hat.
     const dur = v > 1 && h.open ? h.open : h.decay;
@@ -431,6 +501,7 @@ export class Music {
 
   /** A low tom pitched on the key. */
   private tom(t: number, freq: number, v: number): void {
+    if (this.off.has('drums')) return;
     const o = this.ctx.createOscillator();
     o.type = 'sine';
     o.frequency.setValueAtTime(freq * 1.2, t);
@@ -444,6 +515,7 @@ export class Music {
   }
 
   private lead(freq: number, t: number, dur: number): void {
+    if (this.off.has('lead')) return;
     const l = this.style.lead;
     const o = this.ctx.createOscillator();
     o.type = l.type;
@@ -457,7 +529,7 @@ export class Music {
     const vibAmt = this.ctx.createGain();
     vibAmt.gain.setValueAtTime(0, t);
     vibAmt.gain.linearRampToValueAtTime(freq * l.vibrato, t + dur * 0.6);
-    vib.connect(vibAmt).connect(o.frequency);
+    if (!this.off.has('vibrato')) vib.connect(vibAmt).connect(o.frequency);
     const g = this.ctx.createGain();
     this.env(g, t, 0.032, 0.08, dur, dur * 0.5);
     if (l.cutoff < 8000) {
