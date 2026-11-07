@@ -104,11 +104,13 @@ describe('Barrage (#41)', () => {
     expect(run(3)).toBeLessThan(4);
   });
 
-  it('tutorial mission 4: the Bastion is in reach of the Spire', () => {
-    const m = MISSIONS.find((x) => x.id === 'powers')!;
+  it('tutorial "Nest powers" (#146): the Den is in reach once the Spire is taken', () => {
+    const m = MISSIONS.find((x) => x.id === 'nestpowers')!;
     const w = createWorld(m.setup());
-    const bastion = w.nests.find((n) => n.type === NestType.Bastion)!;
-    expect(barrageLaunch(w, 0, bastion.x, bastion.y)).not.toBeNull();
+    const spire = w.nests.find((n) => n.type === NestType.Spire)!;
+    spire.owner = 0;
+    const den = w.nests.find((n) => n.type === NestType.Swift)!;
+    expect(barrageLaunch(w, 0, den.x, den.y)).not.toBeNull();
   });
 
   it('Cluster (#125): each shell lands on a different knot of enemies, the aim point where none is left', () => {

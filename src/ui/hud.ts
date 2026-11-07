@@ -1,6 +1,7 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
 import { isMobile } from './mobile';
+import { MISSIONS } from '../game/tutorial';
 import { ALLY_MARK, sideOf, teamLayout, teamName, teamsLine, teamsList, verb, type TeamGroup, type TeamLayout } from './teams';
 import { heartSlot, standingNests } from '../sim/heart';
 import { BOONS, SIEGE, WAVE_KINDS, waveSize } from '../sim/siege';
@@ -392,7 +393,7 @@ export class Hud {
     }
     this.tip.style.display = 'none';
     const step = m.current;
-    (this.coach.querySelector('small') as HTMLElement).textContent = `Mission ${m.index + 1} of 5 · ${m.mission.title}`;
+    (this.coach.querySelector('small') as HTMLElement).textContent = `Mission ${m.index + 1} of ${MISSIONS.length} · ${m.mission.title}`;
     const text = wait ?? step?.text;
     (this.coach.querySelector('p') as HTMLElement).innerHTML = text ? (mobile ? text.mobile : text.desktop) : 'Mission complete!';
     this.coach.classList.toggle('waiting', waiting);
@@ -579,6 +580,8 @@ export class Hud {
       this.nestShare.innerHTML = active.map((f) => `<i style="background:${hex(f.id)}"></i>`).join('');
     }
     this.domMark.style.left = `${w.domShare * 100}%`;
+    // No domination win in this match (a share past 1, #146): no marker.
+    this.domMark.style.display = w.domShare > 1 ? 'none' : '';
     active.forEach((f, k) => {
       (this.nestShare.children[k] as HTMLElement).style.width = `${(100 * nestsOf(f.id)) / Math.max(1, w.nests.length)}%`;
     });

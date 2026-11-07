@@ -53,6 +53,18 @@ function autopilot(w: World, me: number, run: MissionRun, locked: Set<Lock>): Co
   if (!locked.has('nova') && energy >= POWER.novaCost && fight >= 10) out.push({ t: 'nova', p: me, units: uids(army) });
   // Surge only with energy to spare when Nova is the lesson.
   else if (!locked.has('surge') && energy >= POWER.surgeCost + (locked.has('nova') ? 0 : POWER.novaCost) && fight >= 4) out.push({ t: 'surge', p: me, units: uids(army) });
+  // The nest powers (#146): each on its own lesson, once held and with energy for it.
+  const tgt = hl.length ? w.nests[hl[0]] : null;
+  if (!locked.has('fortify') && hasPower(w, me, 'fortify') && energy >= POWER.fortifyCost && run.current?.pulse === '[data-a=fortify]') {
+    out.push({ t: 'fortify', p: me, units: uids(army) });
+  }
+  if (!locked.has('blink') && hasPower(w, me, 'blink') && energy >= POWER.blinkCost && tgt && tgt.owner !== me && run.current?.pulse === '[data-a=blink]') {
+    out.push({ t: 'blink', p: me, units: uids(army), x: tgt.x, y: tgt.y });
+  }
+  if (!locked.has('lockdown') && hasPower(w, me, 'lockdown') && energy >= POWER.lockdownCost && run.current?.pulse === '[data-a=lockdown]') {
+    const foe = w.nests.find((n) => n.owner >= 0 && n.owner !== NEUTRAL && w.hostile(n.owner, me) && n.lockedUntil <= w.tick);
+    if (foe) out.push({ t: 'lockdown', p: me, nest: foe.id });
+  }
   if (!locked.has('barrage') && hasPower(w, me, 'barrage') && energy >= POWER.barrageCost + (locked.has('nova') ? 0 : POWER.novaCost) && hl.length) {
     const n = w.nests[hl[0]];
     out.push({ t: 'barrage', p: me, x: n.x, y: n.y });
@@ -95,7 +107,8 @@ describe('tutorial (#17)', () => {
         const run = new MissionRun(m, i);
         const log: TimedCommand[] = [];
         const locked = new Set(m.locked);
-        while (!run.complete && w.tick < 6 * 60 * TICK_HZ && !w.factions[me].eliminated) {
+        // A match that ends early (an early knockout) must fail the test, not spin forever.
+        while (!run.complete && !w.over && w.tick < 6 * 60 * TICK_HZ && !w.factions[me].eliminated) {
           const cmds = [...run.take({ w, human: me, log }), ...(w.tick % 30 === 0 ? autopilot(w, me, run, locked) : [])];
           for (const c of cmds) log.push({ tick: w.tick + 1, cmd: c });
           step(w, cmds);
@@ -111,7 +124,7 @@ describe('tutorial (#17)', () => {
           }
         }
         times.push(`${m.id} ${(w.tick / TICK_HZ).toFixed(0)}s`);
-        expect(run.step, `stuck on step ${run.step + 1}: ${run.current?.text.desktop}`).toBe(m.steps.length);
+        expect(run.step, `stuck on step ${run.step + 1} (over: ${w.over} ${w.winReason} team ${w.winnerTeam}, energy ${w.factions[me].energy.toFixed(0)}, enemy nests ${w.nests.filter((n) => n.owner === 1).length} dots ${w.unitCount[1]}): ${run.current?.text.desktop.slice(0, 30)}`).toBe(m.steps.length);
         expect(w.factions[me].eliminated).toBe(false);
         // The last lesson is domination: it should be how the mission is won.
         if (m.id === 'domination') expect(w.winReason).toBe('domination');
@@ -237,7 +250,7 @@ describe('tutorial hints (#115)', () => {
 
   it('every step that waits on the world in missions 3 to 5 has a waiting line', () => {
     // Steps done by the order itself need none: tour steps, and the casts listed here by index.
-    const casts: Record<string, Record<number, string>> = { fight: { 4: 'surge' }, powers: { 2: 'nova' }, domination: {} };
+    const casts: Record<string, Record<number, string>> = { fight: { 4: 'surge' }, nestpowers: { 1: 'fortify', 5: 'blink', 7: 'lockdown' }, powers: { 1: 'nova' }, domination: {} };
     for (const [id, cast] of Object.entries(casts)) {
       const m = MISSIONS.find((x) => x.id === id)!;
       m.steps.forEach((s, k) => {
@@ -264,9 +277,11 @@ describe('tutorial hints (#115)', () => {
   });
 
   it('a power cast in an earlier step does not pass the lesson about it', () => {
-    const { m, w, run, log } = play('powers');
+    const { m, w, run, log } = play('nestpowers');
+    // Barrage fired while the Spire is still being taken: the Barrage lesson still waits for one.
+    run.step = 2;
     log.push({ tick: 1, cmd: { t: 'barrage', p: 0, x: 0, y: 0 } });
-    w.nests[0].level = 2;
+    w.nests[2].owner = 0;
     run.update({ w, human: 0, log });
     expect(m.steps[run.step].text.desktop).toContain('Barrage');
   });
@@ -290,7 +305,7 @@ describe('tutorial hints (#115)', () => {
   });
 
   it('Barrage waits for its shell to land before moving on', () => {
-    const { m, w, run, log } = play('powers');
+    const { m, w, run, log } = play('nestpowers');
     run.step = m.steps.findIndex((s) => s.text.desktop.includes('Barrage'));
     log.push({ tick: 1, cmd: { t: 'barrage', p: 0, x: 0, y: 0 } });
     w.barrages.push({ x: 1, y: 1, owner: 0, impact: 99, r: 40, x0: 0, y0: 0, t0: 0 });
@@ -308,5 +323,18 @@ describe('tutorial hints (#115)', () => {
     // Older saves that skipped ahead, or graduated, keep everything open.
     expect(missionUnlocked({ done: ['domination'], graduated: false, offered: true }, 2)).toBe(true);
     expect(missionUnlocked({ done: [], graduated: true, offered: true }, 4)).toBe(true);
+  });
+
+  it('the nest powers mission (#146) slots in after mission 3, old saves included', () => {
+    const at = (id: string) => MISSIONS.findIndex((m) => m.id === id);
+    expect(at('nestpowers')).toBe(at('fight') + 1);
+    expect(at('powers')).toBe(at('nestpowers') + 1);
+    const fresh = { done: ['move', 'rally', 'fight'], graduated: false, offered: true };
+    expect(missionUnlocked(fresh, at('nestpowers'))).toBe(true);
+    expect(missionUnlocked(fresh, at('powers'))).toBe(false);
+    // A save from before it existed, already past "Grow stronger".
+    const old = { done: ['move', 'rally', 'fight', 'powers'], graduated: false, offered: true };
+    expect(missionUnlocked(old, at('nestpowers'))).toBe(true);
+    expect(missionUnlocked(old, at('domination'))).toBe(true);
   });
 });
