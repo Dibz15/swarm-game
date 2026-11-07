@@ -20,6 +20,9 @@ import type { TimedCommand } from './session';
 export type Lock = 'surge' | 'nova' | 'upgrade' | 'fortify' | 'barrage' | 'blink' | 'lockdown';
 const ALL_POWERS: Lock[] = ['surge', 'nova', 'upgrade', 'fortify', 'barrage', 'blink', 'lockdown'];
 
+/** A line of coach text, for mouse and for touch. */
+export type Hint = { desktop: string; mobile: string };
+
 export interface StepCtx {
   w: World;
   human: number;
@@ -47,7 +50,7 @@ export interface Step {
    * Once you've done your part and the step waits on the world (#115): what
    * the coach says instead of the action hint ("your dots are on their way").
    */
-  wait?: { text: { desktop: string; mobile: string }; when: (c: StepCtx) => boolean };
+  wait?: { text: Hint | ((c: StepCtx) => Hint); when: (c: StepCtx) => boolean };
   /** a tour step (#115): the game holds and the coach shows Next; `MissionRun.ack` moves on */
   next?: true;
   /** a HUD element brought to the middle of the screen, enlarged, while the step lasts (it goes home after) */
@@ -125,6 +128,19 @@ const onTheWay = (what: string): { desktop: string; mobile: string } => {
 };
 /** Wait for the dots sent at these nests to take them. */
 const waitTake = (ids: number[], what: string): Step['wait'] => ({ text: onTheWay(what), when: sentTo(() => ids) });
+/**
+ * Several nests to take: waiting starts with the first one you send dots at,
+ * and until every one has dots on the way the coach says which is left.
+ */
+const waitTakeEach = (ids: (c: StepCtx) => number[], what: string, rest: string): Step['wait'] => ({
+  when: (c) => ids(c).some((id) => c.w.nests[id].owner !== c.human && sentTo(() => [id])(c)),
+  text: (c) => {
+    const left = ids(c).filter((id) => c.w.nests[id].owner !== c.human && !sentTo(() => [id])(c));
+    if (!left.length) return onTheWay(what);
+    const t = `⏳ Good, dots on their way. ${rest}`;
+    return { desktop: t, mobile: t };
+  },
+});
 
 /** Your dots within reach of a nest, against what feeding it needs (#115). */
 function feedStatus(c: StepCtx, id: number): string | null {
@@ -282,7 +298,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[1].owner === c.human && c.w.nests[2].owner === c.human,
         highlight: unowned([1, 2]),
-        wait: { text: onTheWay('hold the Forge and the Hive'), when: (c) => [1, 2].every((id) => c.w.nests[id].owner === c.human || sentTo(() => [id])(c)) },
+        wait: waitTakeEach(() => [1, 2], 'hold the Forge and the Hive', 'Now send some to the other glowing nest too.'),
         demo: sendTo(() => [1, 2]),
       },
       // Rock, paper, scissors (#115): the wheel comes to the middle, then goes home to its corner.
@@ -346,7 +362,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[2].owner === c.human && c.w.nests[3].owner === c.human,
         highlight: unowned([2, 3]),
-        wait: { text: onTheWay('hold both nests'), when: (c) => [2, 3].every((id) => c.w.nests[id].owner === c.human || sentTo(() => [id])(c)) },
+        wait: waitTakeEach(() => [2, 3], 'hold both nests', 'Now send some to the other glowing nest too.'),
         demo: sendTo(() => [2, 3]),
       },
       // A short tour of the screen before the first power (#115).
@@ -395,7 +411,11 @@ export const MISSIONS: Mission[] = [
         },
         done: won,
         highlight: (c) => c.w.nests.filter((n) => n.owner !== c.human && n.owner >= 0 && n.owner !== NEUTRAL).map((n) => n.id),
-        wait: { text: onTheWay('knock the enemy out'), when: sentTo((c) => c.w.nests.filter((n) => n.owner !== c.human && n.owner >= 0 && n.owner !== NEUTRAL).map((n) => n.id)) },
+        // Any push counts, through the middle nest too: the enemy is out once its home and dots are gone.
+        wait: {
+          text: onTheWay('knock the enemy out: its home nest and every last dot'),
+          when: sentTo((c) => c.w.nests.filter((n) => n.owner !== c.human).map((n) => n.id)),
+        },
         demo: sendTo((c) => c.w.nests.filter((n) => n.owner !== c.human && n.owner >= 0 && n.owner !== NEUTRAL).map((n) => n.id)),
       },
     ],
@@ -540,6 +560,16 @@ export const MISSIONS: Mission[] = [
           const left = c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id);
           return left.length ? left : [0];
         },
+        // Dots on the move, or every glowing nest held: now it's a matter of holding on.
+        wait: {
+          when: (c) => !c.w.nests.some((n) => n.owner !== c.human && !n.capital) || sentTo((cc) => cc.w.nests.filter((n) => n.owner !== cc.human && !n.capital).map((n) => n.id))(c),
+          text: (c) => {
+            const t = c.w.nests.some((n) => n.owner !== c.human && !n.capital)
+              ? '⏳ Good, dots on their way. Keep taking the glowing nests until the top bar passes its marker.'
+              : '⏳ Hold on: stay past the top bar’s marker for 30 seconds to win. Send dots to any nest the enemy raids.';
+            return { desktop: t, mobile: t };
+          },
+        },
         demo: sendTo((c) => c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id)),
       },
     ],
@@ -593,6 +623,13 @@ export class MissionRun {
   /** Has the player done their part, so the step now waits on the world? */
   waiting(c: StepCtx): boolean {
     return !!this.current?.wait?.when(this.ctx(c));
+  }
+
+  /** The coach's line while waiting (null when not). */
+  waitText(c: StepCtx): Hint | null {
+    const w = this.current?.wait;
+    if (!w || !this.waiting(c)) return null;
+    return typeof w.text === 'function' ? w.text(this.ctx(c)) : w.text;
   }
 
   /** Check the current step (and any that are already satisfied). True if it moved on. */

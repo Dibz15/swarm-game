@@ -322,7 +322,8 @@ export class Hud {
     const ctx = { w: g.world, human: g.human, log: g.session.log };
     const status = m?.current?.status?.(m.ctx(ctx)) ?? '';
     // Your part done, the step waits on the world (#115): say so instead of asking again.
-    const waiting = !!m && m.waiting(ctx);
+    const wait = m?.waitText(ctx) ?? null;
+    const waiting = !!wait;
     (this.coach.querySelector('.coach-next') as HTMLElement).style.display = m?.current?.next ? '' : 'none';
     const hold = this.coach.querySelector('.coach-hold') as HTMLElement;
     hold.style.display = g.readLeft > 0 ? '' : 'none';
@@ -330,7 +331,7 @@ export class Hud {
     const st = this.coach.querySelector('.coach-status') as HTMLElement;
     if (st.innerHTML !== status) st.innerHTML = status;
     st.style.display = status ? '' : 'none';
-    const key = m ? `${m.index}:${m.step}:${mobile}:${waiting}` : '';
+    const key = m ? `${m.index}:${m.step}:${mobile}:${wait ? wait.desktop : ''}` : '';
     if (key === this.coachKey) return;
     this.coachKey = key;
     this.coach.classList.toggle('on', !!m);
@@ -341,7 +342,7 @@ export class Hud {
     this.tip.style.display = 'none';
     const step = m.current;
     (this.coach.querySelector('small') as HTMLElement).textContent = `Mission ${m.index + 1} of 5 · ${m.mission.title}`;
-    const text = waiting && step?.wait ? step.wait.text : step?.text;
+    const text = wait ?? step?.text;
     (this.coach.querySelector('p') as HTMLElement).innerHTML = text ? (mobile ? text.mobile : text.desktop) : 'Mission complete!';
     this.coach.classList.toggle('waiting', waiting);
     (this.coach.querySelector('.pips') as HTMLElement).innerHTML = m.mission.steps.map((_, i) => `<i class="${i < m.step ? 'done' : i === m.step ? 'now' : ''}"></i>`).join('');

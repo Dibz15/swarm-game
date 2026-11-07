@@ -208,6 +208,42 @@ describe('tutorial hints (#115)', () => {
     expect(run.waiting({ w, human: 0, log })).toBe(false);
   });
 
+  it('two nests to take: waiting starts with the first send, and names what is left', () => {
+    const { w, run, log } = play('fight');
+    const ctx = { w, human: 0, log };
+    expect(run.waitText(ctx)).toBeNull();
+    const a = w.nests[2];
+    log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(w), x: a.x, y: a.y, nest: a.id } });
+    expect(run.waitText(ctx)?.desktop).toContain('other glowing nest');
+    const b = w.nests[3];
+    log.push({ tick: 2, cmd: { t: 'move', p: 0, units: army(w), x: b.x, y: b.y, nest: b.id } });
+    expect(run.waitText(ctx)?.desktop).toContain('hold both nests');
+  });
+
+  it('every world-waiting step in missions 3 to 5 has a waiting line', () => {
+    for (const id of ['fight', 'powers', 'domination']) {
+      const m = MISSIONS.find((x) => x.id === id)!;
+      for (const s of m.steps) {
+        if (s.next) continue;
+        // Steps done by the order itself (a power cast) need none.
+        const byOrder = /<b>(Surge|Nova) \(/.test(s.text.desktop);
+        if (!byOrder) expect(s.wait, `${id}: ${s.text.desktop.slice(0, 40)}`).toBeDefined();
+      }
+    }
+  });
+
+  it('domination: sending dots at a glowing nest says so', () => {
+    const { m, w, run, log } = play('domination');
+    run.step = m.steps.length - 1;
+    const ctx = { w, human: 0, log };
+    expect(run.waiting(ctx)).toBe(false);
+    const n = w.nests[2];
+    log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(w), x: n.x, y: n.y, nest: n.id } });
+    expect(run.waitText(ctx)?.desktop).toContain('Keep taking');
+    for (const k of w.nests) if (!k.capital) k.owner = 0;
+    expect(run.waitText(ctx)?.desktop).toContain('30 seconds');
+  });
+
   it('the mission 3 tour moves on only with Next', () => {
     const { m, w, run, log } = play('fight');
     w.nests[2].owner = w.nests[3].owner = 0;
