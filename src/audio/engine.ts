@@ -60,6 +60,8 @@ export interface AudioStats {
   hardCap: number;
   /** sounds not played because of the voice cap, since the last read */
   dropped: number;
+  /** audio-thread underruns since the last read (Chrome only; null elsewhere) */
+  underruns: { events: number; ms: number } | null;
   off: string[];
   music: SchedulerStats | null;
 }
@@ -111,6 +113,9 @@ export class AudioEngine {
   private dropped = 0;
   /** placement chains and how many sources still feed each, so they can be let go */
   private chains = new Map<AudioNode, { n: number; g: GainNode }>();
+  /** suspended by us because the page is hidden */
+  private asleep = false;
+  private lastUnderrun = { events: 0, secs: 0 };
   private spawnLimit = new RateLimit(3, 2);
   private nearLevel = 0;
   private farLevel = 0;
@@ -169,6 +174,24 @@ export class AudioEngine {
   resume(): void {
     const st = this.ctx?.state as string | undefined;
     if (st === 'suspended' || st === 'interrupted') void this.ctx!.resume().catch(() => {});
+  }
+
+  /**
+   * The page went to the background or came back. Hidden, the timers that
+   * drive the music are throttled to about once a second, so it can't keep
+   * time: suspend the whole context rather than let it stutter, and resume
+   * on return.
+   */
+  setHidden(hidden: boolean): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (hidden && ctx.state === 'running') {
+      this.asleep = true;
+      void ctx.suspend().catch(() => {});
+    } else if (!hidden && this.asleep) {
+      this.asleep = false;
+      this.resume();
+    }
   }
 
   get quality(): AudioQuality {
@@ -1033,11 +1056,21 @@ export class AudioEngine {
       softCap: this.profile.softCap,
       hardCap: this.profile.hardCap,
       dropped: this.dropped,
+      underruns: this.underruns(),
       off: [...AUDIO_OFF],
       music: this.music?.takeStats() ?? null,
     };
     this.dropped = 0;
     return s;
+  }
+
+  /** Underruns since the last call, from Chrome's playbackStats (null where it's missing). */
+  private underruns(): { events: number; ms: number } | null {
+    const ps = (this.ctx as (AudioContext & { playbackStats?: { underrunEvents: number; underrunDuration: number } }) | null)?.playbackStats;
+    if (!ps) return null;
+    const d = { events: ps.underrunEvents - this.lastUnderrun.events, ms: (ps.underrunDuration - this.lastUnderrun.secs) * 1000 };
+    this.lastUnderrun = { events: ps.underrunEvents, secs: ps.underrunDuration };
+    return d;
   }
 
   /** How close the Bloom is on the run map (0..1); the menu score darkens with it. */

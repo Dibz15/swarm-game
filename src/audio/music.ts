@@ -39,7 +39,12 @@ export interface SchedulerStats {
   minHeadroom: number;
   /** times the scheduler fell so far behind it skipped ahead */
   skips: number;
+  /** 16th-note steps whose time had passed when they were scheduled: their notes were dropped */
+  late: number;
 }
+
+/** A note must start at least this far ahead of the clock, or it plays with its attack cut off (a click). */
+const MARGIN = 0.02;
 
 const hz = (semi: number, base = 220) => base * Math.pow(2, semi / 12);
 const smooth = (a: number, b: number, x: number) => {
@@ -82,7 +87,7 @@ export class Music {
   /** seconds of notes scheduled ahead of the clock (longer on phones) */
   lookahead = 0.15;
   private lastRun = 0;
-  private sched = { worstGap: 0, minHeadroom: Infinity, skips: 0 };
+  private sched = { worstGap: 0, minHeadroom: Infinity, skips: 0, late: 0 };
 
   constructor(private readonly ctx: AudioContext, bus: AudioNode, reverb: AudioNode) {
     this.filter = ctx.createBiquadFilter();
@@ -191,7 +196,7 @@ export class Music {
   /** Scheduler health since the last call; resets the window. */
   takeStats(): SchedulerStats {
     const s = { lookahead: this.lookahead, ...this.sched };
-    this.sched = { worstGap: 0, minHeadroom: Infinity, skips: 0 };
+    this.sched = { worstGap: 0, minHeadroom: Infinity, skips: 0, late: 0 };
     return s;
   }
 
@@ -207,10 +212,17 @@ export class Music {
       this.nextTime = now + 0.05;
       this.sched.skips++;
     }
+    // A late timer (the main thread was busy, or the page is in the
+    // background) leaves steps whose time has passed. Started now, their notes
+    // would all sound at once with their attacks cut off: a burst of crackle.
+    // So late steps keep the harmony moving but play nothing.
+    const safe = now + MARGIN;
     while (this.nextTime < now + this.lookahead) {
       this.sched.minHeadroom = Math.min(this.sched.minHeadroom, this.nextTime - now);
       // Swing pushes every odd 16th late.
-      this.playStep(this.step, this.nextTime + (this.step % 2 ? this.style.swing * this.stepDur : 0));
+      const t = this.nextTime + (this.step % 2 ? this.style.swing * this.stepDur : 0);
+      if (t < safe) this.sched.late++;
+      this.playStep(this.step, t, safe);
       this.step++;
       this.nextTime += this.stepDur;
     }
@@ -224,11 +236,12 @@ export class Music {
     return 'calm';
   }
 
-  private playStep(step: number, t: number): void {
+  private playStep(step: number, t: number, safe: number): void {
+    const late = t < safe;
     if (this.pending) {
       // New theme: fade out what the old one is holding and restart the bar
       // count so the new progression starts on its first chord.
-      this.release(t);
+      this.release(Math.max(t, safe));
       this.theme = this.pending;
       this.style = styleOf(this.theme.style);
       this.pending = null;
@@ -257,9 +270,13 @@ export class Music {
       const sym = p.chords[this.chordIdx];
       this.chord = chord(this.theme, sym);
       this.tones = voiced(this.theme, sym, st.pad.voicing);
-      this.pad(this.tones, t, this.stepDur * st.steps * p.bars);
+      // The pad fades in slowly, so a late chord can still start now; it ends on time.
+      const start = Math.max(t, safe);
+      const dur = t + this.stepDur * st.steps * p.bars - start;
+      if (dur > 0.2) this.pad(this.tones, start, dur);
       if (!this.phrase.length || (this.chordIdx === 0 && Math.floor(bar / p.bars) % 8 === 0)) this.newPhrase();
     }
+    if (late) return;
     const tones = this.tones;
     const root = this.theme.root;
     const STEP = this.stepDur;

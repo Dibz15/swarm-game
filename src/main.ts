@@ -74,6 +74,8 @@ class App {
   private audioText = '';
   private worstFrame = 0;
   private worstSim = 0;
+  /** the last audio glitch the overlay saw, so a crackle heard can be matched to it */
+  private glitch: { at: number; what: string } | null = null;
   private frame = 0;
 
   constructor() {
@@ -100,9 +102,10 @@ class App {
     );
     // Save what we have when the tab is hidden: phones may never come back.
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') this.saveRec('unload', false);
-      // Back from another app: the context may have been suspended or interrupted.
-      else this.sfx.resume();
+      const hidden = document.visibilityState === 'hidden';
+      if (hidden) this.saveRec('unload', false);
+      // Hidden, the music can't keep time: sleep, and wake (or recover from an interruption) on return.
+      this.sfx.setHidden(hidden);
     });
     window.addEventListener('keydown', (e) => {
       this.sfx.unlock();
@@ -758,10 +761,19 @@ class App {
     const music = m
       ? `music: lookahead ${ms(m.lookahead)} ms · timer gap ≤${m.worstGap.toFixed(0)} ms · headroom ≥${Number.isFinite(m.minHeadroom) ? ms(m.minHeadroom) : '-'} ms · skips ${m.skips}`
       : 'music: off';
+    const u = a.underruns;
+    // Remember the latest glitch, so a crackle heard can be matched to its cause.
+    const now = performance.now();
+    if (u && u.events > 0) this.glitch = { at: now, what: `audio thread underrun ×${u.events} (${u.ms.toFixed(0)} ms)` };
+    if (m && (m.late > 0 || m.skips > 0))
+      this.glitch = { at: now, what: `music timer late (gap ${m.worstGap.toFixed(0)} ms): ${m.skips ? 'skipped ahead' : `${m.late} steps dropped`}` };
+    const ago = this.glitch ? `${((now - this.glitch.at) / 1000).toFixed(1)} s ago: ${this.glitch.what}` : 'none yet';
     return [
       `frame ≤${this.worstFrame.toFixed(0)} ms · sim ≤${this.worstSim.toFixed(1)} ms`,
       `voices ${a.voices}/${a.softCap}/${a.hardCap} · dropped ${(a.dropped / Math.max(secs, 0.001)).toFixed(0)}/s`,
       music,
+      `underruns ${u ? `${u.events} (${u.ms.toFixed(0)} ms)` : 'n/a in this browser'} · late steps ${m?.late ?? '-'}`,
+      `last glitch: ${ago}`,
       `ctx ${a.state} · ${a.sampleRate} Hz · base ${ms(a.baseLatency)} ms · out ${ms(a.outputLatency)} ms`,
       `quality ${a.quality} (${a.level}) · latency ${a.latencyHint}${a.off.length ? ` · off: ${a.off.join(',')}` : ''}`,
     ].join('\n');
