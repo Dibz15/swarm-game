@@ -1088,8 +1088,8 @@ button:disabled .cost { color: inherit; }
 .fortress-grid figcaption { font-size: 12px; color: #aab0c8; margin-top: 3px; }
 
 /* ---- Landscape phones (#113): side rails, the middle left for the map ----
-   body.land is a short, wide view (mobile.ts isShortWide). Selection chips, energy
-   and the counter wheel run down the left; the actions down the right, under the
+   body.land is a short, wide view (mobile.ts isShortWide). The counter wheel sits
+   top left, the selection chips and energy bottom left, under the thumb; the actions down the right, under the
    thumbs; a slim top row between them. The HUD measures the rails (--hudl, --hudr)
    for the camera, and the overlays sit in the middle column between them. */
 body.mobile.land .hud {
@@ -1112,10 +1112,10 @@ body.mobile.land .hud-tr { top: calc(4px + var(--st)); }
    brings it back as one panel in the middle. */
 body.mobile.land .hud-bottom:not(.coach-spot) { display: contents; }
 body.mobile.land .hud-bottom:not(.coach-spot) .energy {
-  position: absolute; left: calc(8px + var(--sl)); top: calc(8px + var(--st)); width: 110px; height: 22px;
+  position: absolute; left: calc(8px + var(--sl)); bottom: calc(8px + var(--sb)); width: 110px; height: 22px;
 }
 body.mobile.land .hud-bottom:not(.coach-spot) .selchips {
-  position: absolute; left: calc(8px + var(--sl)); top: calc(38px + var(--st));
+  position: absolute; left: calc(8px + var(--sl)); bottom: calc(38px + var(--sb));
   display: grid; grid-template-columns: repeat(2, 52px); gap: 6px; pointer-events: auto;
 }
 /* Over the map, not over a panel: solid buttons. */
@@ -1129,9 +1129,9 @@ body.mobile.land .hud-bottom:not(.coach-spot) .actions {
 body.mobile.land .actions button { min-height: 44px; font-size: 13px; }
 body.mobile.land .actions button small { font-size: 10px; }
 body.mobile.land .hud-bottom.coach-spot { left: 50%; right: auto; bottom: auto; top: 50%; width: min(520px, calc(100% - 32px)); transform: translate(-50%, -50%); border-radius: 12px; border-width: 1px; padding: 8px; }
-body.mobile.land .counters { left: calc(8px + var(--sl)); right: auto; top: calc(140px + var(--st)); bottom: auto; width: 110px; }
+body.mobile.land .counters { left: calc(8px + var(--sl)); right: auto; top: calc(8px + var(--st)); bottom: auto; width: 110px; }
 body.mobile.land .warlord-chip, body.mobile.land .warlord-chip.below {
-  top: auto; bottom: calc(8px + var(--sb)); left: calc(8px + var(--sl)); max-width: 110px; padding: 4px 8px;
+  top: calc(104px + var(--st)); bottom: auto; left: calc(8px + var(--sl)); max-width: 110px; padding: 4px 8px;
 }
 body.mobile.land .warlord-chip small { font-size: 10px; }
 
