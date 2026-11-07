@@ -15,7 +15,7 @@ import { inArmy, type Nest, type World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
 import { LocalSession } from './session';
-import type { Lock, MissionRun } from './tutorial';
+import type { Hint, Lock, MissionRun } from './tutorial';
 
 export interface Services {
   renderer: Renderer;
@@ -68,9 +68,12 @@ export class GameView {
   private readStep = -1;
   readUntil = 0;
   readFrom = 0;
-  /** the order log's length when the reading pause began: an order ends it (#115) */
-  private readLog = 0;
-  private readQueue = 0;
+  /** orders issued when the reading pause began: one more ends it (#115) */
+  private readIssued = 0;
+  /** orders you gave while the game was held, still waiting when the pause began */
+  private readHeld = false;
+  /** the coach's waiting line this frame (#115), read by the HUD and the demo */
+  waitHint: Hint | null = null;
   /** 0..1 of the reading pause left, for the coach's bar */
   readLeft = 0;
   private mask = new Uint8Array(MAX_UNITS);
@@ -162,14 +165,26 @@ export class GameView {
   /** Advance the tutorial steps, pulse the nests the current step is about, end on success. */
   private updateMission(time: number): void {
     const m = this.mission!;
-    const ctx = m.ctx({ w: this.world, human: this.human, log: this.session.log });
-    for (const c of m.take(ctx)) this.session.issue(c);
-    if (m.update(ctx)) {
+    const base = { w: this.world, human: this.human, log: this.session.log };
+    let entered = 0;
+    const enter = () => {
+      for (const c of m.take(m.ctx(base))) {
+        this.session.issue(c);
+        entered++;
+      }
+    };
+    enter();
+    if (m.update(base)) {
       const c = this.s.camera;
       this.s.sfx.levelUp(c.cx, c.cy, true);
+      // The new step's own commands (a summoned swarm) go out now, before its reading pause starts.
+      entered = 0;
+      enter();
     }
+    const ctx = m.ctx(base);
     if (m.complete) {
       this.session.held = false;
+      this.waitHint = null;
       return this.finish('victory', time);
     }
     // Hold the game briefly on each new instruction, so it can be read before things move.
@@ -177,15 +192,16 @@ export class GameView {
       this.readStep = m.step;
       this.readFrom = time;
       this.readUntil = time + READ_PAUSE;
-      this.readLog = this.session.log.length;
-      // The step's own entry commands (a summoned swarm) are already queued: they don't count.
-      this.readQueue = this.session.queued;
+      // The step's own commands don't count; orders you gave while held already do.
+      this.readIssued = this.session.issued;
+      this.readHeld = this.session.queued > entered;
     }
     // Your first order ends the pause and goes through (#115): no hint asks for what you can't do yet.
     if (this.readUntil > time && this.pendingOrders()) this.skipRead();
     // A tour step holds the game until Next.
     this.session.held = time < this.readUntil || !!m.current?.next;
     this.readLeft = this.session.held ? (this.readUntil - time) / READ_PAUSE : 0;
+    this.waitHint = m.waitText(base);
     if (time - this.highlightAt < 1.1) return;
     this.highlightAt = time;
     for (const id of m.current?.highlight?.(ctx) ?? []) {
@@ -196,7 +212,7 @@ export class GameView {
 
   /** Has the player given an order during the reading pause (still queued, or logged)? */
   private pendingOrders(): boolean {
-    return this.session.log.length > this.readLog || this.session.queued > this.readQueue;
+    return this.readHeld || this.session.issued > this.readIssued;
   }
 
   /** Next, on a tour step (#115). */

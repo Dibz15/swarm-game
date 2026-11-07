@@ -7,6 +7,7 @@ import type { DemoAction } from '../ui/demo';
 import { feedNeed, novaRadius, type Command } from '../sim/commands';
 import { nestIcon } from '../ui/nesticon';
 import { inArmy, UNIT_FEEDING, WILD_SWARM } from '../sim/world';
+import { queryRadius } from '../sim/spatial';
 import type { TimedCommand } from './session';
 
 /**
@@ -106,50 +107,70 @@ const versus = (m: MapSpec, personality: 'turtler' | 'expander', energy = 0, pas
 // ---- step checks -------------------------------------------------------------
 
 const owned = (c: StepCtx) => c.w.nests.filter((n) => n.owner === c.human).length;
-const ordered = (c: StepCtx, t: TimedCommand['cmd']['t']) => c.log.some((l) => l.cmd.t === t);
 const unowned = (ids: number[]) => (c: StepCtx) => ids.filter((id) => c.w.nests[id]?.owner !== c.human);
 const won = (c: StepCtx) => c.w.over && c.w.winnerTeam === c.w.teamOf[c.human];
 
 /** Orders given since the current step began. */
 const sinceStep = (c: StepCtx) => c.log.slice(c.since ?? 0);
 const orderedSince = (c: StepCtx, t: TimedCommand['cmd']['t']) => sinceStep(c).some((l) => l.cmd.t === t);
-/** Dots sent (or a rally set) at one of these nests since the step began. */
-const sentTo = (ids: (c: StepCtx) => number[]) => (c: StepCtx): boolean => {
-  const want = ids(c).map((id) => c.w.nests[id]);
-  return sinceStep(c).some(({ cmd }) => {
-    if (cmd.t !== 'move' && cmd.t !== 'rally') return false;
-    return want.some((n) => (cmd.t === 'move' && cmd.nest === n.id) || (cmd.x - n.x) ** 2 + (cmd.y - n.y) ** 2 <= (n.r * 1.6) ** 2);
-  });
-};
+/** A spot dots can be headed for, and how close their order point must be to count. */
+type Spot = { x: number; y: number; r: number };
+const nestSpot = (c: StepCtx, id: number): Spot => ({ x: c.w.nests[id].x, y: c.w.nests[id].y, r: c.w.nests[id].r * 1.6 });
+/**
+ * Which of these spots some of your dots are headed for, read from the world
+ * (#115): each dot's order point, so it counts however and whenever you sent
+ * them (a step early, a rally point), and stops counting if they all die.
+ */
+function headingTo(c: StepCtx, spots: Spot[]): boolean[] {
+  const hit = spots.map(() => false);
+  let left = spots.length;
+  const { w } = c;
+  for (let i = 0; i < w.n && left; i++) {
+    if (w.owner[i] !== c.human || !inArmy(w, i)) continue;
+    spots.forEach((p, k) => {
+      if (!hit[k] && (w.ox[i] - p.x) ** 2 + (w.oy[i] - p.y) ** 2 <= p.r * p.r) {
+        hit[k] = true;
+        left--;
+      }
+    });
+  }
+  return hit;
+}
+const headingAny = (c: StepCtx, spots: Spot[]) => headingTo(c, spots).some(Boolean);
+/** Nests that aren't yours yet. */
+const notMine = (c: StepCtx, ids: number[]) => ids.filter((id) => c.w.nests[id].owner !== c.human);
+/** Domination: the nests left to take (anything not yours but a home). */
+const toTake = (c: StepCtx) => c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id);
 /** The waiting line once dots are on their way: what the lesson waits for. */
-const onTheWay = (what: string): { desktop: string; mobile: string } => {
+const onTheWay = (what: string): Hint => {
   const t = `⏳ Your dots are on their way. The lesson goes on when they ${what}.`;
   return { desktop: t, mobile: t };
 };
-/** Wait for the dots sent at these nests to take them. */
-const waitTake = (ids: number[], what: string): Step['wait'] => ({ text: onTheWay(what), when: sentTo(() => ids) });
+const same = (t: string): Hint => ({ desktop: t, mobile: t });
 /**
- * Several nests to take: waiting starts with the first one you send dots at,
- * and until every one has dots on the way the coach says which is left.
+ * Nests to take: waiting starts once dots head for any of them, and until
+ * every one has dots on the way the coach says what's left (`rest`).
  */
-const waitTakeEach = (ids: (c: StepCtx) => number[], what: string, rest: string): Step['wait'] => ({
-  when: (c) => ids(c).some((id) => c.w.nests[id].owner !== c.human && sentTo(() => [id])(c)),
-  text: (c) => {
-    const left = ids(c).filter((id) => c.w.nests[id].owner !== c.human && !sentTo(() => [id])(c));
-    if (!left.length) return onTheWay(what);
-    const t = `⏳ Good, dots on their way. ${rest}`;
-    return { desktop: t, mobile: t };
-  },
-});
+const waitTake = (ids: (c: StepCtx) => number[], what: string, rest = 'Now send some to the other glowing nest too.'): Step['wait'] => {
+  const heading = (c: StepCtx) => {
+    const left = notMine(c, ids(c));
+    return { left, to: headingTo(c, left.map((id) => nestSpot(c, id))) };
+  };
+  return {
+    when: (c) => heading(c).to.some(Boolean),
+    text: (c) => (heading(c).to.every(Boolean) ? onTheWay(what) : same(`⏳ Good, dots on their way. ${rest}`)),
+  };
+};
 
+const scratch: number[] = [];
 /** Your dots within reach of a nest, against what feeding it needs (#115). */
 function feedStatus(c: StepCtx, id: number): string | null {
   const n = c.w.nests[id];
   if (n.owner !== c.human || n.level >= 2) return null;
+  // The sim's own grid, as the upgrade order counts them: no scan of every dot each frame.
+  queryRadius(c.w, n.x, n.y, UPGRADE_PICK_RADIUS, scratch);
   let near = 0;
-  for (let i = 0; i < c.w.n; i++) {
-    if (c.w.owner[i] === c.human && inArmy(c.w, i) && (c.w.x[i] - n.x) ** 2 + (c.w.y[i] - n.y) ** 2 <= UPGRADE_PICK_RADIUS ** 2) near++;
-  }
+  for (const i of scratch) if (c.w.owner[i] === c.human && inArmy(c.w, i)) near++;
   const need = Math.max(0, feedNeed(n));
   if (n.feedIncoming > 0) return null;
   return near < need
@@ -249,7 +270,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => owned(c) >= 2,
         highlight: unowned([1]),
-        wait: waitTake([1], 'capture the glowing nest'),
+        wait: waitTake(() => [1], 'capture the glowing nest'),
         demo: sendTo(() => [1]),
       },
       {
@@ -259,7 +280,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => owned(c) >= 3,
         highlight: unowned([2]),
-        wait: waitTake([2], 'capture it'),
+        wait: waitTake(() => [2], 'capture it'),
         demo: sendTo(() => [2]),
       },
     ],
@@ -287,7 +308,7 @@ export const MISSIONS: Mission[] = [
           desktop: `<b>Click your nest</b> to select it, then right-click the glowing Forge ${nestIcon(NestType.Forge)}. That sets a rally point: new dots walk there by themselves.`,
           mobile: `<b>Drag across your nest</b> (dots and all) to select it, then tap the glowing Forge ${nestIcon(NestType.Forge)}. That sets a rally point: new dots walk there by themselves.`,
         },
-        done: (c) => ordered(c, 'rally'),
+        done: (c) => orderedSince(c, 'rally'),
         highlight: () => [1],
         demo: (c) => [{ t: 'tap', at: at(c, 0) }, { t: 'tap', at: at(c, 1), order: true }],
       },
@@ -298,7 +319,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[1].owner === c.human && c.w.nests[2].owner === c.human,
         highlight: unowned([1, 2]),
-        wait: waitTakeEach(() => [1, 2], 'hold the Forge and the Hive', 'Now send some to the other glowing nest too.'),
+        wait: waitTake(() => [1, 2], 'hold the Forge and the Hive'),
         demo: sendTo(() => [1, 2]),
       },
       // Rock, paper, scissors (#115): the wheel comes to the middle, then goes home to its corner.
@@ -319,7 +340,7 @@ export const MISSIONS: Mission[] = [
         pulse: '.counters',
         done: (c) => c.w.nests[3].owner === c.human,
         highlight: unowned([3]),
-        wait: waitTake([3], 'capture the Spire'),
+        wait: waitTake(() => [3], 'capture the Spire'),
         demo: sendTo(() => [3]),
       },
     ],
@@ -362,7 +383,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[2].owner === c.human && c.w.nests[3].owner === c.human,
         highlight: unowned([2, 3]),
-        wait: waitTakeEach(() => [2, 3], 'hold both nests', 'Now send some to the other glowing nest too.'),
+        wait: waitTake(() => [2, 3], 'hold both nests'),
         demo: sendTo(() => [2, 3]),
       },
       // A short tour of the screen before the first power (#115).
@@ -398,7 +419,7 @@ export const MISSIONS: Mission[] = [
           desktop: `Fights happen by themselves when armies meet. When yours does, select your dots and press <b>Surge (Q)</b>. It <b>spends ${POWER.surgeCost} energy</b>: your dots run faster and hit harder for a while. Watch the energy bar drop.`,
           mobile: `Fights happen by themselves when armies meet. When yours does, select your dots and tap <b>Surge</b>. It <b>spends ${POWER.surgeCost} energy</b>: your dots run faster and hit harder for a while. Watch the energy bar drop.`,
         },
-        done: (c) => ordered(c, 'surge'),
+        done: (c) => orderedSince(c, 'surge'),
         highlight: unowned([4]),
         pulse: '.energy',
         status: (c) => `Energy: <b>${Math.floor(c.w.factions[c.human].energy)}</b>${c.w.factions[c.human].energy < POWER.surgeCost ? ` (Surge needs ${POWER.surgeCost})` : ''}`,
@@ -414,7 +435,7 @@ export const MISSIONS: Mission[] = [
         // Any push counts, through the middle nest too: the enemy is out once its home and dots are gone.
         wait: {
           text: onTheWay('knock the enemy out: its home nest and every last dot'),
-          when: sentTo((c) => c.w.nests.filter((n) => n.owner !== c.human).map((n) => n.id)),
+          when: (c) => headingAny(c, notMine(c, c.w.nests.map((n) => n.id)).map((id) => nestSpot(c, id))),
         },
         demo: sendTo((c) => c.w.nests.filter((n) => n.owner !== c.human && n.owner >= 0 && n.owner !== NEUTRAL).map((n) => n.id)),
       },
@@ -467,7 +488,7 @@ export const MISSIONS: Mission[] = [
           mobile: `Your Spire ${nestIcon(NestType.Spire)} unlocks <b>Barrage</b>: a shell launched from your nearest nest. Tap it, then tap the guards of the Bastion ${nestIcon(NestType.Bastion)}.`,
         },
         // Done once the shell has landed, so the next lesson doesn't freeze it mid-air (#115).
-        done: (c) => ordered(c, 'barrage') && !c.w.barrages.some((b) => b.owner === c.human),
+        done: (c) => orderedSince(c, 'barrage') && !c.w.barrages.some((b) => b.owner === c.human),
         wait: {
           text: { desktop: '⏳ Shell in the air: watch it land on the guards.', mobile: '⏳ Shell in the air: watch it land on the guards.' },
           when: (c) => c.w.barrages.some((b) => b.owner === c.human),
@@ -480,7 +501,7 @@ export const MISSIONS: Mission[] = [
           desktop: 'A wild swarm is on its way. Gather your army at home, and when the swarm arrives select them and press <b>Nova (E)</b>.',
           mobile: 'A wild swarm is on its way. Gather your army at home, and when the swarm arrives select them and tap <b>Nova</b>.',
         },
-        done: (c) => ordered(c, 'nova'),
+        done: (c) => orderedSince(c, 'nova'),
         highlight: () => [0],
         status: swarmStatus,
         enter: (c) => [{ t: 'summon', p: c.human, secs: SWARM_LEAD }],
@@ -493,7 +514,7 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[2].owner === c.human,
         highlight: unowned([2]),
-        wait: waitTake([2], 'capture the Bastion'),
+        wait: waitTake(() => [2], 'capture the Bastion'),
         demo: sendTo(() => [2]),
       },
     ],
@@ -545,7 +566,7 @@ export const MISSIONS: Mission[] = [
         done: (c) => c.w.crystals.some((k) => k.holder === c.human),
         wait: {
           text: { desktop: '⏳ Dots heading to the crystal: it starts charging when they stand on it.', mobile: '⏳ Dots heading to the crystal: it starts charging when they stand on it.' },
-          when: (c) => sinceStep(c).some(({ cmd }) => cmd.t === 'move' && (cmd.x - c.w.crystals[0].x) ** 2 + (cmd.y - c.w.crystals[0].y) ** 2 <= (c.w.crystals[0].r * 1.5) ** 2),
+          when: (c) => headingAny(c, [{ x: c.w.crystals[0].x, y: c.w.crystals[0].y, r: c.w.crystals[0].r * 1.5 }]),
         },
         demo: (c) => [...selectArmy(c, 80), { t: 'tap', at: [c.w.crystals[0].x, c.w.crystals[0].y], order: true }],
       },
@@ -555,22 +576,22 @@ export const MISSIONS: Mission[] = [
           mobile: 'Take the glowing nests. The top bar shows nests held: <b>stay past its marker for 30 seconds</b> to win by domination. No need to storm the enemy’s home.',
         },
         done: won,
-        // The neutral nests to take; once they're held, home: hold on rather than attack.
+        // The nests to take; once they're held, home: hold on rather than attack.
         highlight: (c) => {
-          const left = c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id);
+          const left = toTake(c);
           return left.length ? left : [0];
         },
         // Dots on the move, or every glowing nest held: now it's a matter of holding on.
         wait: {
-          when: (c) => !c.w.nests.some((n) => n.owner !== c.human && !n.capital) || sentTo((cc) => cc.w.nests.filter((n) => n.owner !== cc.human && !n.capital).map((n) => n.id))(c),
-          text: (c) => {
-            const t = c.w.nests.some((n) => n.owner !== c.human && !n.capital)
-              ? '⏳ Good, dots on their way. Keep taking the glowing nests until the top bar passes its marker.'
-              : '⏳ Hold on: stay past the top bar’s marker for 30 seconds to win. Send dots to any nest the enemy raids.';
-            return { desktop: t, mobile: t };
-          },
+          when: (c) => !toTake(c).length || headingAny(c, toTake(c).map((id) => nestSpot(c, id))),
+          text: (c) =>
+            same(
+              toTake(c).length
+                ? '⏳ Good, dots on their way. Keep taking the glowing nests until the top bar passes its marker.'
+                : '⏳ Hold on: stay past the top bar’s marker for 30 seconds to win. Send dots to any nest the enemy raids.',
+            ),
         },
-        demo: sendTo((c) => c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id)),
+        demo: sendTo(toTake),
       },
     ],
   },

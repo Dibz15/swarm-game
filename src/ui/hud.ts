@@ -315,6 +315,39 @@ export class Hud {
     this.insetBottom = b.height > 0 ? Math.max(0, h - b.top) : 0;
   }
 
+  /** the element the coach has brought to the middle (#115), and the window size it was placed for */
+  private spot: HTMLElement | null = null;
+  private spotView = '';
+
+  private clearSpot(): void {
+    if (!this.spot) return;
+    this.spot.classList.remove('coach-spot');
+    this.spot.style.transform = '';
+    this.spot = null;
+  }
+
+  /** Move the spotlit element from its home spot to the middle of the screen, enlarged. */
+  private placeSpot(remeasure: boolean): void {
+    const e = this.spot!;
+    // Measure its home without the transform (and without a transition, so the reading is real).
+    if (remeasure) {
+      e.style.transition = 'none';
+      e.style.transform = '';
+    }
+    const r = e.getBoundingClientRect();
+    // Into the space under the coach panel, so it never covers the text or Next.
+    const top = this.coach.getBoundingClientRect().bottom + 12;
+    const room = Math.max(40, innerHeight - top - 12);
+    const k = Math.min(2.4, (0.5 * Math.min(innerWidth, innerHeight)) / Math.max(1, r.width), (0.85 * room) / Math.max(1, r.height));
+    const dx = innerWidth / 2 - (r.left + r.width / 2), dy = top + room / 2 - (r.top + r.height / 2);
+    e.style.transform = `translate(${dx}px, ${dy}px) scale(${k})`;
+    if (remeasure) {
+      void e.offsetWidth;
+      e.style.transition = '';
+    }
+    this.spotView = `${innerWidth}x${innerHeight}`;
+  }
+
   /** Tutorial coach: the current step's instruction and progress (#17). */
   private updateCoach(g: GameView, mobile: boolean): void {
     const m = g.mission;
@@ -322,7 +355,7 @@ export class Hud {
     const ctx = { w: g.world, human: g.human, log: g.session.log };
     const status = m?.current?.status?.(m.ctx(ctx)) ?? '';
     // Your part done, the step waits on the world (#115): say so instead of asking again.
-    const wait = m?.waitText(ctx) ?? null;
+    const wait = m ? g.waitHint : null;
     const waiting = !!wait;
     (this.coach.querySelector('.coach-next') as HTMLElement).style.display = m?.current?.next ? '' : 'none';
     const hold = this.coach.querySelector('.coach-hold') as HTMLElement;
@@ -331,12 +364,17 @@ export class Hud {
     const st = this.coach.querySelector('.coach-status') as HTMLElement;
     if (st.innerHTML !== status) st.innerHTML = status;
     st.style.display = status ? '' : 'none';
-    const key = m ? `${m.index}:${m.step}:${mobile}:${wait ? wait.desktop : ''}` : '';
+    const shown = wait ? (mobile ? wait.mobile : wait.desktop) : '';
+    const key = m ? `${m.index}:${m.step}:${mobile}:${shown}` : '';
+    // A resize or a turned phone moves the spotlit element's home: centre it again.
+    if (this.spot && `${innerWidth}x${innerHeight}` !== this.spotView) this.placeSpot(true);
     if (key === this.coachKey) return;
     this.coachKey = key;
     this.coach.classList.toggle('on', !!m);
     if (!m) {
       this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
+      // A mission skipped mid-spotlight sends the element home too.
+      this.clearSpot();
       return;
     }
     this.tip.style.display = 'none';
@@ -349,17 +387,11 @@ export class Hud {
     this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
     if (step?.pulse) this.el.querySelector(step.pulse)?.classList.add('coach-pulse');
     // A spotlit element (#115) glides to the middle, enlarged; clearing it glides it home.
-    this.el.querySelectorAll<HTMLElement>('.coach-spot').forEach((e) => {
-      e.classList.remove('coach-spot');
-      e.style.transform = '';
-    });
-    const spot = step?.spotlight ? this.el.querySelector<HTMLElement>(step.spotlight) : null;
-    if (spot) {
-      const r = spot.getBoundingClientRect();
-      const k = Math.min(2.4, (0.5 * Math.min(innerWidth, innerHeight)) / Math.max(1, r.width));
-      const dx = innerWidth / 2 - (r.left + r.width / 2), dy = innerHeight * 0.6 - (r.top + r.height / 2);
-      spot.classList.add('coach-spot');
-      spot.style.transform = `translate(${dx}px, ${dy}px) scale(${k})`;
+    this.clearSpot();
+    this.spot = step?.spotlight ? this.el.querySelector<HTMLElement>(step.spotlight) : null;
+    if (this.spot) {
+      this.spot.classList.add('coach-spot');
+      this.placeSpot(false);
     }
     this.coach.classList.remove('pop');
     void this.coach.offsetWidth;

@@ -457,7 +457,7 @@ class App {
     if (!d || !m) return;
     // Once you've done your part and the step waits on the world, the demo stops (#115):
     // replaying the action then reads as the next thing to do.
-    const waiting = m.waiting({ w: g.world, human: g.human, log: g.session.log });
+    const waiting = !!g.waitHint;
     const key = `${m.step}:${waiting}`;
     if (key !== this.demoKey) {
       this.demoKey = key;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MISSIONS, MissionRun, missionUnlocked, type Lock } from '../src/game/tutorial';
 import type { TimedCommand } from '../src/game/session';
-import { hasPower, type Command } from '../src/sim/commands';
+import { applyCommand, hasPower, type Command } from '../src/sim/commands';
 import { NEUTRAL, POWER, TICK_HZ, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS } from '../src/sim/constants';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
@@ -185,24 +185,40 @@ describe('tutorial hints (#115)', () => {
     return out;
   };
 
-  it('waits on the world once the order is given, not before', () => {
+  /** Send some of your dots at a spot, as the player would: through the sim, and logged. */
+  const send = (w: World, log: TimedCommand[], x: number, y: number, nest = -1, units = army(w)) => {
+    const cmd: Command = { t: 'move', p: 0, units, x, y, nest };
+    applyCommand(w, cmd);
+    log.push({ tick: w.tick, cmd });
+  };
+  const sendNest = (w: World, log: TimedCommand[], id: number, units?: number[]) => send(w, log, w.nests[id].x, w.nests[id].y, id, units);
+
+  it('waits on the world once dots head for the goal, not before', () => {
     const { w, run, log } = play('move');
     const ctx = { w, human: 0, log };
     expect(run.waiting(ctx)).toBe(false);
-    const n = w.nests[1];
-    log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(w), x: n.x, y: n.y, nest: n.id } });
-    expect(run.waiting(ctx)).toBe(true);
     // An order somewhere else doesn't count.
-    const other = play('move');
-    other.log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(other.w), x: 20, y: 20, nest: -1 } });
-    expect(other.run.waiting({ w: other.w, human: 0, log: other.log })).toBe(false);
+    send(w, log, 20, 20);
+    expect(run.waiting(ctx)).toBe(false);
+    sendNest(w, log, 1);
+    expect(run.waiting(ctx)).toBe(true);
   });
 
-  it("a step's orders are its own: the next step starts waiting afresh", () => {
+  it('dots sent a step early count: the next step waits at once', () => {
     const { w, run, log } = play('move');
-    const n = w.nests[1];
-    log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(w), x: n.x, y: n.y, nest: n.id } });
-    n.owner = 0;
+    const all = army(w);
+    sendNest(w, log, 1, all.slice(0, Math.ceil(all.length / 2)));
+    sendNest(w, log, 2, all.slice(Math.ceil(all.length / 2)));
+    w.nests[1].owner = 0;
+    run.update({ w, human: 0, log });
+    expect(run.step).toBe(1);
+    expect(run.waiting({ w, human: 0, log })).toBe(true);
+  });
+
+  it('the next step starts afresh when no dots are headed for its goal', () => {
+    const { w, run, log } = play('move');
+    sendNest(w, log, 1);
+    w.nests[1].owner = 0;
     run.update({ w, human: 0, log });
     expect(run.step).toBe(1);
     expect(run.waiting({ w, human: 0, log })).toBe(false);
@@ -212,23 +228,27 @@ describe('tutorial hints (#115)', () => {
     const { w, run, log } = play('fight');
     const ctx = { w, human: 0, log };
     expect(run.waitText(ctx)).toBeNull();
-    const a = w.nests[2];
-    log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(w), x: a.x, y: a.y, nest: a.id } });
+    const all = army(w);
+    sendNest(w, log, 2, all.slice(0, 5));
     expect(run.waitText(ctx)?.desktop).toContain('other glowing nest');
-    const b = w.nests[3];
-    log.push({ tick: 2, cmd: { t: 'move', p: 0, units: army(w), x: b.x, y: b.y, nest: b.id } });
+    sendNest(w, log, 3, all.slice(5));
     expect(run.waitText(ctx)?.desktop).toContain('hold both nests');
   });
 
-  it('every world-waiting step in missions 3 to 5 has a waiting line', () => {
-    for (const id of ['fight', 'powers', 'domination']) {
+  it('every step that waits on the world in missions 3 to 5 has a waiting line', () => {
+    // Steps done by the order itself need none: tour steps, and the casts listed here by index.
+    const casts: Record<string, Record<number, string>> = { fight: { 4: 'surge' }, powers: { 2: 'nova' }, domination: {} };
+    for (const [id, cast] of Object.entries(casts)) {
       const m = MISSIONS.find((x) => x.id === id)!;
-      for (const s of m.steps) {
-        if (s.next) continue;
-        // Steps done by the order itself (a power cast) need none.
-        const byOrder = /<b>(Surge|Nova) \(/.test(s.text.desktop);
-        if (!byOrder) expect(s.wait, `${id}: ${s.text.desktop.slice(0, 40)}`).toBeDefined();
-      }
+      m.steps.forEach((s, k) => {
+        if (s.next) return;
+        if (cast[k]) {
+          // Still the cast this list says it is.
+          expect(s.text.desktop.toLowerCase(), `${id} step ${k}`).toContain(cast[k]);
+          return;
+        }
+        expect(s.wait, `${id}: ${s.text.desktop.slice(0, 40)}`).toBeDefined();
+      });
     }
   });
 
@@ -237,11 +257,18 @@ describe('tutorial hints (#115)', () => {
     run.step = m.steps.length - 1;
     const ctx = { w, human: 0, log };
     expect(run.waiting(ctx)).toBe(false);
-    const n = w.nests[2];
-    log.push({ tick: 1, cmd: { t: 'move', p: 0, units: army(w), x: n.x, y: n.y, nest: n.id } });
+    sendNest(w, log, 2);
     expect(run.waitText(ctx)?.desktop).toContain('Keep taking');
     for (const k of w.nests) if (!k.capital) k.owner = 0;
     expect(run.waitText(ctx)?.desktop).toContain('30 seconds');
+  });
+
+  it('a power cast in an earlier step does not pass the lesson about it', () => {
+    const { m, w, run, log } = play('powers');
+    log.push({ tick: 1, cmd: { t: 'barrage', p: 0, x: 0, y: 0 } });
+    w.nests[0].level = 2;
+    run.update({ w, human: 0, log });
+    expect(m.steps[run.step].text.desktop).toContain('Barrage');
   });
 
   it('the mission 3 tour moves on only with Next', () => {
