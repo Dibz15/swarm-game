@@ -6,6 +6,7 @@ import type { World } from '../sim/world';
 import type { DemoAction } from '../ui/demo';
 import { feedNeed, novaRadius, type Command } from '../sim/commands';
 import { nestIcon } from '../ui/nesticon';
+import { quickSetup } from './matchSetup';
 import { inArmy, UNIT_FEEDING, WILD_SWARM } from '../sim/world';
 import { queryRadius } from '../sim/spatial';
 import type { TimedCommand } from './session';
@@ -67,7 +68,7 @@ export interface Mission {
   learned: string[];
   setup: () => MatchSetup;
   locked: Lock[];
-  /** a real match (#147): played on a fresh random map against a real bot, and it can't be skipped */
+  /** a real match (#147): the graduation 1v1. It can't be skipped, and finishing it graduates you */
   real?: true;
   /** hold the game for a few seconds whenever the instruction changes, so it can be read first */
   readPause?: boolean;
@@ -753,16 +754,8 @@ export const MISSIONS: Mission[] = [
     learned: ['You beat a Normal bot.', 'From here: harder bots, bigger maps, free-for-alls and the campaign.'],
     locked: [],
     real: true,
-    // The game plays this on a fresh random map (quickSetup); this fixed one is for tests.
-    setup: () => ({
-      seed: 1707,
-      size: 'small',
-      map: map([nest(150, 340, NestType.Hive, 0, 14), nest(950, 340, NestType.Hive, 1, 14), nest(420, 170, NestType.Forge, -1, 5), nest(420, 510, NestType.Spire, -1, 5), nest(550, 340, NestType.Hive, -1, 8), nest(680, 170, NestType.Spire, -1, 5), nest(680, 510, NestType.Forge, -1, 5)]),
-      players: [
-        { faction: 0, team: 0, human: true, energy: 0 },
-        { faction: 1, team: 1, human: false, bot: { difficulty: 1, personality: 'expander' } },
-      ],
-    }),
+    // A fresh random small map in your colour each time, like any quick 1v1.
+    setup: () => quickSetup('normal1v1'),
     steps: [
       {
         text: {
@@ -865,7 +858,10 @@ export interface TutorialProgress {
   next?: NextStep;
 }
 
-/** graduate: the 1v1 wasn't played yet; ffa: they won it; rematch: they lost it */
+/**
+ * ffa: they won the graduation 1v1; rematch: they lost it. graduate is only in
+ * saves from before the 1v1 was a mission (#147): graduated, but not played it yet.
+ */
 export type NextStep = 'graduate' | 'ffa' | 'rematch';
 
 const KEY = 'swarm.tutorial';

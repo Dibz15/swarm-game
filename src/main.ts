@@ -439,8 +439,7 @@ class App {
 
   private playMission(i: number, prevEnd: EndReason = 'quit'): void {
     const m = MISSIONS[i];
-    // A real match (#147) gets a fresh random map in your colour, like any quick 1v1.
-    this.startGame(m.real ? quickSetup('normal1v1') : m.setup(), { scenario: `tutorial: ${m.title}` }, prevEnd);
+    this.startGame(m.setup(), { scenario: `tutorial: ${m.title}` }, prevEnd);
     const g = this.game!;
     g.mission = new MissionRun(m, i);
     g.locked = new Set(m.locked);
@@ -476,9 +475,11 @@ class App {
   /** Record a finished (or skipped) mission and move on. */
   private completeMission(i: number): void {
     const p = loadProgress();
-    if (!p.done.includes(MISSIONS[i].id)) p.done.push(MISSIONS[i].id);
-    // The last mission is the graduation 1v1 (#147): won, the menu suggests a free-for-all next.
-    if (i === MISSIONS.length - 1) {
+    const first = !p.done.includes(MISSIONS[i].id);
+    if (first) p.done.push(MISSIONS[i].id);
+    // Winning the graduation 1v1 (#147) the first time: graduated, and the menu suggests a
+    // free-for-all. A replay later doesn't bring that suggestion back.
+    if (MISSIONS[i].real && first) {
       p.graduated = true;
       p.next = 'ffa';
     }
@@ -488,7 +489,6 @@ class App {
   /** Straight into the next mission: the debrief already said what's next, and the coach names it. */
   private afterMission(i: number): void {
     if (i < MISSIONS.length - 1) this.playMission(i + 1);
-    else this.showMenu();
   }
 
   private skipMission(): void {
@@ -661,8 +661,8 @@ class App {
       const i = g.mission.index;
       const real = !!g.mission.mission.real;
       if (won) this.completeMission(i);
-      // Lost the graduation 1v1: the menu suggests a rematch, or a warm-up against Easy.
-      else if (real) saveProgress({ ...loadProgress(), next: 'rematch' });
+      // Lost the graduation 1v1 before ever winning it: the menu suggests a rematch, or a warm-up.
+      else if (real && !loadProgress().done.includes(g.mission.mission.id)) saveProgress({ ...loadProgress(), next: 'rematch' });
       this.setModal(
         missionDebrief(g.mission.mission, i, won, {
           next: () => (won ? this.afterMission(i) : this.skipMission()),

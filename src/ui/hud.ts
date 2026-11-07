@@ -371,8 +371,6 @@ export class Hud {
     const wait = m ? g.waitHint : null;
     const waiting = !!wait;
     (this.coach.querySelector('.coach-next') as HTMLElement).style.display = m?.current?.next ? '' : 'none';
-    // The graduation match can't be skipped (#147).
-    (this.coach.querySelector('[data-a=skip]') as HTMLElement).style.display = m?.mission.real ? 'none' : '';
     const hold = this.coach.querySelector('.coach-hold') as HTMLElement;
     hold.style.display = g.readLeft > 0 ? '' : 'none';
     (hold.querySelector('b') as HTMLElement).style.width = `${Math.round(g.readLeft * 100)}%`;
@@ -396,6 +394,8 @@ export class Hud {
     this.tip.style.display = 'none';
     const step = m.current;
     (this.coach.querySelector('small') as HTMLElement).textContent = `Mission ${m.index + 1} of ${MISSIONS.length} · ${m.mission.title}`;
+    // The graduation match can't be skipped (#147).
+    (this.coach.querySelector('[data-a=skip]') as HTMLElement).style.display = m.mission.real ? 'none' : '';
     const text = wait ?? step?.text;
     (this.coach.querySelector('p') as HTMLElement).innerHTML = text ? (mobile ? text.mobile : text.desktop) : 'Mission complete!';
     this.coach.classList.toggle('waiting', waiting);

@@ -349,7 +349,10 @@ describe('the graduation match (#147)', () => {
     expect(m.id).toBe('final');
     expect(m.real).toBe(true);
     expect(m.locked).toEqual([]);
-    const bots = m.setup().players.filter((p) => p.bot);
+    // The setup the game plays: a quick small 1v1 against Normal.
+    const a = m.setup();
+    expect(a.size).toBe('small');
+    const bots = a.players.filter((p) => p.bot);
     expect(bots.length).toBe(1);
     expect(bots[0].bot!.difficulty).toBe(1);
   });
