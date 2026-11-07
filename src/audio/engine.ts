@@ -261,7 +261,7 @@ export class AudioEngine {
 
     if (!AUDIO_OFF.has('ambience')) this.ambience = new Ambience(ctx, this.buses.ambience, this.reverbIn);
     if (!AUDIO_OFF.has('music')) {
-      this.music = new Music(ctx, this.buses.music, this.reverbIn);
+      this.music = new Music(ctx, this.buses.music, this.reverbIn, AUDIO_OFF);
       this.music.lookahead = this.profile.lookahead;
       this.music.setTheme(this.wanted);
       this.music.start();

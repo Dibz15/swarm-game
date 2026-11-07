@@ -86,9 +86,15 @@ export function admit(voices: number, priority: Priority, p: Pick<AudioProfile, 
   return voices < (priority === 'minor' ? p.softCap : p.hardCap);
 }
 
-/** `?audiooff=music,ambience,reverb,sfx`: switch parts of the audio off, to find what a device struggles with. */
-export type AudioPart = 'music' | 'ambience' | 'reverb' | 'sfx';
+/**
+ * `?audiooff=...`: switch parts of the audio off, to find what a device
+ * struggles with. Whole buses: music, ambience, reverb, sfx. Inside the
+ * music: pad, arp, echo (the arp's feedback delay), bass, drums, lead,
+ * vibrato (the lead's), automation (the per-frame level and filter moves,
+ * applied twice a second instead).
+ */
+export const AUDIO_PARTS = ['music', 'ambience', 'reverb', 'sfx', 'pad', 'arp', 'echo', 'bass', 'drums', 'lead', 'vibrato', 'automation'] as const;
+export type AudioPart = (typeof AUDIO_PARTS)[number];
 export function parseAudioOff(v: string | null): Set<AudioPart> {
-  const parts: AudioPart[] = ['music', 'ambience', 'reverb', 'sfx'];
-  return new Set((v ?? '').split(',').map((s) => s.trim()).filter((s): s is AudioPart => (parts as string[]).includes(s)));
+  return new Set((v ?? '').split(',').map((s) => s.trim()).filter((s): s is AudioPart => (AUDIO_PARTS as readonly string[]).includes(s)));
 }

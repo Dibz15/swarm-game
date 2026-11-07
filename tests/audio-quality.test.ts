@@ -45,5 +45,6 @@ describe('audio quality (#118)', () => {
   it('parses ?audiooff, ignoring unknown parts', () => {
     expect([...parseAudioOff('music, reverb,bogus')].sort()).toEqual(['music', 'reverb']);
     expect(parseAudioOff(null).size).toBe(0);
+    expect([...parseAudioOff('pad,echo,automation')]).toEqual(['pad', 'echo', 'automation']);
   });
 });

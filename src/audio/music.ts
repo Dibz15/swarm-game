@@ -12,6 +12,7 @@
  */
 
 import { hits, notes, phrase, styleOf, type MelodyNote, type Style } from './styles';
+import type { AudioPart } from './quality';
 import { CLASSIC, chord, leadNotes, voiced, type Mood, type Theme } from './themes';
 
 export type MusicMode = 'menu' | 'play' | 'paused' | 'ended';
@@ -89,7 +90,16 @@ export class Music {
   private lastRun = 0;
   private sched = { worstGap: 0, minHeadroom: Infinity, skips: 0, late: 0 };
 
-  constructor(private readonly ctx: AudioContext, bus: AudioNode, reverb: AudioNode) {
+  /** time since the levels were last applied, when `automation` is switched off */
+  private sinceApply = Infinity;
+
+  constructor(
+    private readonly ctx: AudioContext,
+    bus: AudioNode,
+    reverb: AudioNode,
+    /** parts switched off by `?audiooff=`, to bisect a device's glitches */
+    private readonly off: ReadonlySet<AudioPart> = new Set(),
+  ) {
     this.filter = ctx.createBiquadFilter();
     this.filter.type = 'lowpass';
     this.filter.frequency.value = 20000;
@@ -122,7 +132,7 @@ export class Music {
     const echoTone = ctx.createBiquadFilter();
     echoTone.type = 'lowpass';
     echoTone.frequency.value = 2500;
-    this.layers.arp.connect(echo);
+    if (!off.has('echo')) this.layers.arp.connect(echo);
     echo.connect(echoTone).connect(fb).connect(echo);
     echoTone.connect(this.filter);
 
@@ -163,6 +173,13 @@ export class Music {
   /** Called every frame with the game's state; adjusts layer levels. */
   update(dt: number, s: MusicState): void {
     this.state = s;
+    // Bisecting: move the levels twice a second instead of every frame.
+    if (this.off.has('automation')) {
+      this.sinceApply += dt;
+      if (this.sinceApply < 0.5) return;
+      dt = Math.min(this.sinceApply, 0.5);
+      this.sinceApply = 0;
+    }
     const bloom = s.bloom ?? 0;
     const target =
       s.mode === 'menu' ? 0.12 + 0.2 * bloom : Math.max(s.tension * 0.9, s.danger * 0.75, s.escalation * 0.85 + s.tension * 0.2);
@@ -363,6 +380,7 @@ export class Music {
   }
 
   private pad(tones: number[], t: number, dur: number): void {
+    if (this.off.has('pad')) return;
     const p = this.style.pad;
     // Same loudness however many notes the voicing has.
     const peak = (0.022 * 3) / tones.length;
@@ -383,6 +401,7 @@ export class Music {
   }
 
   private pluck(freq: number, t: number, dur: number): void {
+    if (this.off.has('arp')) return;
     const a = this.style.arp;
     const o = this.ctx.createOscillator();
     o.type = a.type;
@@ -397,6 +416,7 @@ export class Music {
   }
 
   private bass(freq: number, t: number, dur: number): void {
+    if (this.off.has('bass')) return;
     const b = this.style.bass;
     const o = this.ctx.createOscillator();
     o.type = b.type;
@@ -420,6 +440,7 @@ export class Music {
   }
 
   private kick(t: number, v: number): void {
+    if (this.off.has('drums')) return;
     const k = this.style.drums.kit.kick;
     const o = this.ctx.createOscillator();
     o.type = 'sine';
@@ -434,6 +455,7 @@ export class Music {
   }
 
   private snare(t: number, v: number): void {
+    if (this.off.has('drums')) return;
     const kind = this.style.drums.kit.snare;
     const src = this.ctx.createBufferSource();
     src.buffer = this.noise;
@@ -461,6 +483,7 @@ export class Music {
   }
 
   private hat(t: number, v: number): void {
+    if (this.off.has('drums')) return;
     const h = this.style.drums.kit.hat;
     // Accents ring longer in styles with an open hat.
     const dur = v > 1 && h.open ? h.open : h.decay;
@@ -478,6 +501,7 @@ export class Music {
 
   /** A low tom pitched on the key. */
   private tom(t: number, freq: number, v: number): void {
+    if (this.off.has('drums')) return;
     const o = this.ctx.createOscillator();
     o.type = 'sine';
     o.frequency.setValueAtTime(freq * 1.2, t);
@@ -491,6 +515,7 @@ export class Music {
   }
 
   private lead(freq: number, t: number, dur: number): void {
+    if (this.off.has('lead')) return;
     const l = this.style.lead;
     const o = this.ctx.createOscillator();
     o.type = l.type;
@@ -504,7 +529,7 @@ export class Music {
     const vibAmt = this.ctx.createGain();
     vibAmt.gain.setValueAtTime(0, t);
     vibAmt.gain.linearRampToValueAtTime(freq * l.vibrato, t + dur * 0.6);
-    vib.connect(vibAmt).connect(o.frequency);
+    if (!this.off.has('vibrato')) vib.connect(vibAmt).connect(o.frequency);
     const g = this.ctx.createGain();
     this.env(g, t, 0.032, 0.08, dur, dur * 0.5);
     if (l.cutoff < 8000) {
