@@ -136,7 +136,8 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 24px 26px;
-  width: min(440px, 100%);
+  /* a little wider on wide screens, so it isn't a narrow strip down the middle */
+  width: min(clamp(440px, 36vw, 600px), 100%);
   box-shadow: 0 20px 80px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(8px);
   max-height: calc(100vh - 32px);
@@ -230,6 +231,35 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .chip.me b { text-decoration: underline; text-underline-offset: 3px; }
 .chip.me.blocked b { color: #ffb627; text-shadow: 0 0 8px rgba(255, 182, 39, 0.6); }
 .chip.dead { opacity: 0.3; text-decoration: line-through; }
+/* Teams (#74): the strip grouped by team, allies marked with a shape; tap it for the list. */
+.chips .team { display: flex; gap: 10px; align-items: center; padding: 1px 8px 1px 6px; border: 1px solid rgba(150, 170, 255, 0.18); border-radius: 8px; }
+.chips .team.mine { border-color: rgba(230, 234, 255, 0.55); background: rgba(230, 234, 255, 0.06); }
+.chips .team small { font-size: 10px; letter-spacing: 0.06em; color: var(--muted); }
+.chips .team.mine small { color: var(--text); }
+.chips:has(.team) { pointer-events: auto; cursor: pointer; }
+.chip.ally::after { content: '◆'; font-size: 10px; }
+.team-pop { display: none; pointer-events: auto; margin: 8px auto 0; width: max-content; max-width: 100%; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(10, 13, 28, 0.94); }
+.team-pop.on { display: block; }
+.hud-top:has(.team-pop.on) { z-index: 5; }
+.team-banner {
+  position: absolute; top: 64px; left: 50%; transform: translate(-50%, -6px); max-width: calc(100% - 24px); opacity: 0; pointer-events: none;
+  transition: opacity 0.6s, transform 0.6s;
+}
+.team-banner.on { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.team-banner > div {
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 12px; padding: 10px 16px; font-size: 14px;
+  border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(10, 13, 28, 0.9);
+}
+.team-banner em { font-style: normal; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+.tg.mine b { color: var(--text); }
+.tm { color: var(--c); white-space: nowrap; }
+.tm i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; background: var(--c); box-shadow: 0 0 6px var(--c); }
+.tm.out { opacity: 0.4; text-decoration: line-through; }
+.teams { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.teams li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.teams li > b { min-width: 86px; color: var(--muted); font-size: 12px; }
+.teams li.mine > b { color: var(--text); }
+.teams small { color: var(--muted); }
 
 .hud-tr { position: absolute; top: 10px; right: 12px; display: flex; gap: 6px; align-items: center; }
 .clock { font: 14px ui-monospace, monospace; color: var(--muted); margin-right: 6px; }
@@ -240,6 +270,115 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .nestshare .segs { display: flex; height: 100%; gap: 1px; border-radius: 2px; overflow: hidden; }
 .nestshare .segs i { display: block; height: 100%; transition: width 0.4s; opacity: 0.8; }
 .nestshare .mark { position: absolute; top: -3px; width: 2px; height: 10px; margin-left: -1px; background: #fff; border-radius: 1px; box-shadow: 0 0 6px #fff; opacity: 0.8; }
+
+/* The Bloom's heart (campaign finale): a boss bar under the top bar. */
+.heartbar {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100% - 32px));
+  padding: 6px 14px 8px;
+  text-align: center;
+  background: rgba(14, 8, 14, 0.82);
+  border: 1px solid rgba(214, 92, 78, 0.55);
+  border-radius: 8px;
+  display: none;
+  pointer-events: none;
+}
+.heart-name { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: #e3707a; }
+.heart-hp { margin-top: 5px; height: 7px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.heart-hp i { display: block; height: 100%; background: linear-gradient(90deg, #8e2338, #e0485e); box-shadow: 0 0 10px #c4364a; transition: width 0.2s linear; }
+.heart-ward { margin-top: 5px; font-size: 12px; color: #c9b9c3; }
+.heartbar.open .heart-ward { color: #ffd2d8; font-weight: 600; }
+
+/* Hold the line (#67): the waves walk along a timeline to its left edge; the clock on the right. */
+.siege {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(480px, calc(100% - 32px));
+  display: none;
+  pointer-events: none;
+}
+.siege-track {
+  position: relative;
+  height: 30px;
+  margin-right: 76px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(196, 54, 74, 0.35), rgba(14, 8, 14, 0.75) 22%);
+  border: 1px solid rgba(214, 92, 78, 0.45);
+  pointer-events: auto;
+}
+.siege-now { position: absolute; left: 0; top: -3px; bottom: -3px; width: 3px; background: #ff7a8a; box-shadow: 0 0 8px #ff5d73; border-radius: 2px; }
+.siege .wave {
+  position: absolute;
+  top: 50%;
+  width: calc(18px * var(--s, 1));
+  height: calc(18px * var(--s, 1));
+  transform: translate(-50%, -50%);
+  color: #f0c9cf;
+  will-change: left;
+}
+.siege .wave svg { width: 100%; height: 100%; fill: currentColor; filter: drop-shadow(0 0 3px rgba(255, 90, 110, 0.6)); }
+.siege .wave.late { color: #ff7f8f; }
+.siege .wave b { position: absolute; right: -10px; top: -6px; font-size: 9px; color: #fff; }
+.siege .wave.arrived { animation: wave-in 0.6s ease-out forwards; }
+@keyframes wave-in { to { transform: translate(-50%, -50%) scale(2.2); opacity: 0; } }
+.siege-clock { position: absolute; right: 0; top: 0; width: 70px; white-space: nowrap; height: 30px; line-height: 30px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; color: #fff; background: rgba(14, 8, 14, 0.82); border: 1px solid rgba(214, 92, 78, 0.45); border-radius: 6px; }
+.siege-lost { display: none; margin-top: 6px; text-align: center; font-weight: 700; color: #ff5d73; text-shadow: 0 0 8px rgba(255, 93, 115, 0.7); animation: pulse-lost 0.8s ease-in-out infinite alternate; }
+@keyframes pulse-lost { from { opacity: 0.6; } to { opacity: 1; } }
+.hud.has-siege .toasts { top: 150px; }
+.siege-bloom { margin-top: 5px; text-align: center; font-size: 12px; color: #e3a3ae; text-shadow: 0 1px 3px #000; }
+/* Holding the line: a boon to pick between waves. */
+.boon {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--hudb, 80px) + 16px);
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 32px));
+  padding: 10px 12px 12px;
+  background: rgba(14, 10, 24, 0.92);
+  border: 1px solid rgba(214, 92, 78, 0.55);
+  border-radius: 10px;
+  display: none;
+  pointer-events: auto;
+  animation: boon-in 0.25s ease-out;
+}
+@keyframes boon-in { from { transform: translate(-50%, 12px); opacity: 0; } }
+.boon-head { font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: #e3707a; margin-bottom: 8px; }
+.boon-head span { text-transform: none; letter-spacing: 0; color: #aab0c8; margin-left: 6px; }
+.boon-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.boon-list button { display: block; text-align: left; padding: 8px 10px; }
+.boon-list b { display: block; font-size: 13px; }
+.boon-list small { display: block; margin-top: 3px; font-size: 11px; line-height: 1.3; color: #aab0c8; white-space: normal; }
+@media (max-width: 560px) { .boon-list { grid-template-columns: 1fr; } }
+
+/* A campaign warlord (#66): who leads this battle, and its trait. */
+.warlord-chip {
+  position: absolute;
+  top: 54px;
+  left: 12px;
+  max-width: min(260px, calc(100% - 24px));
+  padding: 5px 10px 6px;
+  background: rgba(8, 10, 22, 0.8);
+  border: 1px solid var(--c);
+  border-left-width: 3px;
+  border-radius: 6px;
+  display: none;
+  pointer-events: none;
+  transition: opacity 0.4s;
+}
+.warlord-chip b { display: block; font-size: 13px; color: var(--c); }
+.warlord-chip small { display: block; font-size: 11px; color: #c9cde0; }
+.warlord-chip.below { top: 128px; }
+.hud.has-lord .toasts { top: 200px; }
+.warlord-chip .citadel-goal { margin-top: 4px; font-size: 11px; font-weight: 600; color: #fff; }
+.warlord-chip .citadel-goal span { display: block; margin-top: 3px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.warlord-chip .citadel-goal i { display: block; height: 100%; width: 0; background: var(--c); transition: width 0.3s; }
+.warlord-chip.down { opacity: 0.4; }
+.warlord-chip.down b { text-decoration: line-through; }
 
 /* Domination countdown: big, in the dominating color, impossible to miss. */
 .dom {
@@ -324,7 +463,10 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   padding: 8px 10px;
   pointer-events: auto;
   max-width: calc(100% - 16px);
+  transition: transform 0.8s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s, border-color 0.3s;
 }
+/* The tutorial's spotlight (#115): the bar comes up to the middle, enlarged, for a tour of its parts. */
+.hud-bottom.coach-spot { z-index: 20; border-color: var(--accent); box-shadow: 0 0 30px rgba(45, 226, 230, 0.35); }
 .selinfo { min-width: 120px; font-size: 14px; display: flex; flex-direction: column; line-height: 1.2; }
 .selinfo small { color: var(--muted); font-size: 11px; }
 .energy { position: relative; width: 140px; height: 22px; background: rgba(0, 0, 0, 0.4); border-radius: 4px; overflow: hidden; border: 1px solid var(--line); }
@@ -352,6 +494,7 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 @media (max-width: 720px) {
   .hud-top { width: calc(100% - 130px); left: 12px; transform: none; }
   .chips { justify-content: flex-start; gap: 8px; font-size: 12px; flex-wrap: wrap; }
+  .chips .team { gap: 6px; padding: 1px 5px; flex-wrap: wrap; max-width: 100%; }
   .hud-bottom { flex-wrap: wrap; justify-content: center; gap: 8px; bottom: 8px; }
   .selinfo { display: none; }
   .energy { width: 100%; height: 18px; }
@@ -362,10 +505,10 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   .stats th:nth-child(n+5), .stats td:nth-child(n+5) { display: none; }
 }
 
-.vols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; }
+.vols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 18px; }
 .vol { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #c6cceb; }
-.vol span { width: 72px; }
-.vol input { flex: 1; accent-color: var(--accent); padding: 0; }
+.vol span { flex: none; width: 72px; }
+.vol input { flex: 1; min-width: 0; accent-color: var(--accent); padding: 0; }
 .vol select { flex: 1; min-width: 0; }
 @media (max-width: 720px) { .vols { grid-template-columns: 1fr; } }
 
@@ -391,10 +534,22 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   border: 1px solid var(--line);
   border-radius: 10px;
   opacity: 0.55;
-  transition: opacity 0.2s, border-color 0.2s;
+  transition: opacity 0.2s, border-color 0.2s, transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: auto;
 }
 .counters.active { opacity: 1; border-color: var(--line-strong); }
+/* The tutorial's spotlight (#115): in the middle, enlarged, fully lit, over everything. */
+.counters.coach-spot { opacity: 1; z-index: 20; border-color: var(--accent); box-shadow: 0 0 30px rgba(45, 226, 230, 0.35); }
+.counters.coach-spot .node polygon, .counters.coach-spot .node rect { fill: #fff; }
+.counters.coach-spot .node rect.hollow { fill: none; stroke: #fff; }
+.counters.coach-spot .arrow { stroke: var(--accent); }
+.counters.coach-spot .counter-cap { display: none; }
+/* Names on the wheel's glyphs while it's spotlit; the hotkey numbers step aside. */
+.counters .kname { display: none; }
+.counters.coach-spot .node text { display: none; }
+.counters.coach-spot .node text.kname { display: inline; font-size: 6.5px; fill: #fff; text-anchor: middle; }
+.counters.coach-spot .node[data-k="2"] text.kname { text-anchor: start; }
+.counters.coach-spot .node.raider text.kname { fill: #9aa4c7; }
 .counters.enemy { border-color: rgba(255, 93, 115, 0.55); }
 .counters svg { display: block; width: 100%; height: auto; }
 .counters .node polygon, .counters .node rect { fill: #59607f; stroke: none; transition: fill 0.2s; }
@@ -546,8 +701,26 @@ body.mobile .aimhint button { min-height: 40px; }
   pointer-events: auto;
 }
 .coach.on { display: block; }
-.coach.pop { animation: coach-pop 0.35s ease-out; }
-@keyframes coach-pop { from { box-shadow: 0 0 0 3px rgba(45, 226, 230, 0.55); } to { box-shadow: 0 0 0 0 rgba(45, 226, 230, 0); } }
+/* The coach glows (#115): an accent edge and a slow breathing glow, so the eye
+   finds it among the other panels; a flash on each new instruction, and calm
+   while it only waits on the world. */
+.coach.on {
+  border: 1.5px solid var(--accent);
+  background: linear-gradient(rgba(45, 226, 230, 0.13), rgba(45, 226, 230, 0.04)), var(--panel);
+  box-shadow: inset 5px 0 0 var(--accent), 0 0 0 1px rgba(45, 226, 230, 0.35), 0 0 22px rgba(45, 226, 230, 0.4);
+  animation: coach-breathe 2.6s ease-in-out infinite;
+}
+.coach.on.pop { animation: coach-pop 1.4s ease-out, coach-breathe 2.6s ease-in-out 1.4s infinite; }
+.coach.on.waiting { animation: none; border-color: rgba(150, 170, 255, 0.5); box-shadow: inset 5px 0 0 rgba(150, 170, 255, 0.6), 0 0 12px rgba(150, 170, 255, 0.15); }
+@keyframes coach-breathe {
+  0%, 100% { box-shadow: inset 5px 0 0 var(--accent), 0 0 0 1px rgba(45, 226, 230, 0.35), 0 0 18px rgba(45, 226, 230, 0.32); }
+  50% { box-shadow: inset 5px 0 0 var(--accent), 0 0 0 2px rgba(45, 226, 230, 0.55), 0 0 38px rgba(45, 226, 230, 0.65); }
+}
+@keyframes coach-pop {
+  from { box-shadow: inset 5px 0 0 var(--accent), 0 0 0 5px rgba(45, 226, 230, 0.8), 0 0 44px rgba(45, 226, 230, 0.75); }
+  to { box-shadow: inset 5px 0 0 var(--accent), 0 0 0 1px rgba(45, 226, 230, 0.35), 0 0 18px rgba(45, 226, 230, 0.32); }
+}
+@media (prefers-reduced-motion: reduce) { .coach.on, .coach.on.pop { animation: none; } }
 .coach small { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
 .coach p { margin: 4px 0 6px; line-height: 1.35; }
 .coach-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -561,9 +734,20 @@ body.mobile .coach p { margin: 2px 0 4px; }
 body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .card.tutorial h2 small { font-size: 13px; color: var(--muted); font-weight: normal; margin-left: 6px; }
 .missions { list-style: none; padding: 0; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
-.missions button { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; }
-.missions button span { font-size: 13px; color: var(--muted); }
-.missions li.done b::after { content: ' ✓'; color: var(--accent); }
+/* #115: missions read as cards you can tap; locked ones are greyed and say why. */
+.missions button {
+  width: 100%; text-align: left; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; padding: 12px 14px;
+  border-radius: 12px; transition: transform 0.12s, border-color 0.12s, background 0.12s;
+}
+.missions button:hover:not(:disabled) { border-color: var(--accent); background: rgba(45, 226, 230, 0.1); transform: translateY(-1px); }
+.missions button:active:not(:disabled) { transform: translateY(1px); }
+.missions .num { grid-row: span 2; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; border: 1px solid var(--line-strong); }
+.missions li.done .num { background: var(--accent); color: #06070f; border-color: var(--accent); }
+.missions button span.what { grid-column: 2; font-size: 13px; color: var(--muted); }
+.missions .play { grid-row: 1 / span 2; grid-column: 3; font-size: 12px; padding: 4px 10px; border-radius: 999px; background: rgba(45, 226, 230, 0.16); color: var(--accent); white-space: nowrap; }
+.missions li.done .play { background: rgba(150, 170, 255, 0.12); color: var(--text); }
+.missions li.locked button { opacity: 0.45; cursor: not-allowed; }
+.missions li.locked .play { background: none; color: var(--muted); }
 .card.brief { max-width: 460px; }
 .card.brief .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
 .card.brief h2 { margin-top: 4px; }
@@ -609,6 +793,10 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .coach-hold { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
 .coach-hold i { flex: 1; height: 4px; border-radius: 2px; background: var(--line-strong); overflow: hidden; }
 .coach-hold i b { display: block; height: 100%; background: var(--accent); }
+/* #115: once your part is done, the coach waits with you; tour steps move on with Next. */
+.coach.waiting p { color: #c6cceb; }
+.coach-next { display: flex; justify-content: flex-end; margin: 0 0 6px; }
+.nest-ico { display: inline-block; width: 1.05em; height: 1.05em; vertical-align: -0.15em; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
 .coach-hold button { padding: 2px 12px; }
 .card.campaign .menu-buttons { width: 100%; margin: 12px 0 4px; }
 .card.campaign .menu-buttons button { display: flex; flex-direction: column; gap: 2px; text-align: left; }
@@ -638,3 +826,269 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .card.campaign .quick .seg { display: flex; }
 .card.campaign .quick .seg button { flex: 1; }
 .card.campaign .quick button.primary { margin-top: 6px; align-items: center; }
+
+/* ---- procedural campaign (#62) ---------------------------------------- */
+
+.card.hub { width: min(620px, 100%); }
+.card.hub .hint, .runmap .hint, .run-debrief .hint { font-size: 13px; color: var(--muted); }
+.lives { color: var(--accent); letter-spacing: 0.15em; }
+.runs { display: flex; flex-direction: column; gap: 8px; }
+.run-row { display: flex; gap: 12px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: rgba(10, 12, 26, 0.5); }
+.run-thumb { width: 120px; height: 74px; display: block; border-radius: 6px; background: rgba(6, 7, 15, 0.7); }
+.run-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.run-info b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-actions { display: flex; flex-direction: column; gap: 6px; }
+.new-run input { flex: 1; min-width: 0; }
+.past { display: flex; flex-direction: column; gap: 4px; }
+.past-row { display: flex; gap: 10px; align-items: center; font-size: 14px; }
+.past-row b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.past-row .won { color: #b4ff39; }
+.past-row .lost { color: var(--hot); }
+@media (max-width: 520px) {
+  .run-thumb { width: 84px; height: 52px; }
+  .run-row { flex-wrap: wrap; }
+}
+
+/* Opaque, no backdrop blur: the menu and its battle pause underneath it (#130). */
+.runmap { padding: 0; background: #04050c; }
+#ui.covered > .menu { visibility: hidden; }
+.runmap-frame {
+  width: 100%; height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+.runmap header {
+  display: flex; gap: 16px; align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.run-title { flex: 1; min-width: 0; display: flex; gap: 12px; align-items: baseline; }
+.run-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: 0.06em; }
+.run-title span, .run-stats .biomass { color: var(--muted); font-size: 14px; }
+.run-stats .biomass b { color: #b4ff39; font-size: 16px; font-variant-numeric: tabular-nums; }
+.run-stats { display: flex; gap: 12px; align-items: baseline; }
+.map-wrap { position: relative; min-height: 0; overflow: hidden; }
+.map-wrap > canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.map-fog { pointer-events: none; }
+.map-hint {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  width: min(520px, calc(100% - 32px)); margin: 0; padding: 8px 14px;
+  text-align: center; font-size: 13px; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  pointer-events: none;
+}
+.node-veil { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(4, 5, 12, 0.35); }
+.node-veil[hidden] { display: none; }
+.node-card { position: relative; width: min(360px, 100%); padding: 20px 22px; }
+.node-card .close { position: absolute; top: 10px; right: 10px; }
+.node-card h3 { margin: 0 34px 6px 0; font-size: 14px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+.node-card p { line-height: 1.45; margin: 6px 0; font-size: 14px; }
+.node-card .hint { color: var(--muted); font-size: 13px; }
+.node-card dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 10px 0; font-size: 14px; }
+.node-card dt { color: var(--muted); }
+.node-card dd { margin: 0; }
+.battle-map-slot { margin-top: 6px; }
+.node-card h3.with-sigil { display: flex; align-items: center; gap: 10px; }
+.sigil-slot canvas { display: block; }
+.battle-map-slot canvas { display: block; border: 1px solid var(--line); border-radius: 6px; max-width: 100%; height: auto !important; }
+.node-card button.primary { width: 100%; margin-top: 10px; padding: 12px; font-size: 16px; }
+@media (max-width: 520px) {
+  .runmap header { gap: 10px; padding: 8px 12px; }
+  .run-title span { display: none; }
+}
+button.danger, button.danger:hover:not(:disabled) { border-color: var(--hot); color: var(--hot); }
+.run-debrief.win h2 { color: #b4ff39; }
+.run-debrief.lose h2 { color: var(--hot); }
+
+/* ---- creature portraits (#72) ----------------------------------------- */
+
+canvas.creature { display: block; }
+.rival-strip { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0; }
+.rival-strip.small { gap: 6px 12px; margin: 6px 0 0; }
+.rival { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rival .portrait { flex: none; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--c) 14%, transparent), transparent 70%); }
+.rival .who { display: flex; flex-direction: column; line-height: 1.2; }
+.rival .who b { color: var(--c); font-size: 14px; }
+.rival .who small { color: var(--muted); font-size: 12px; }
+.rival-strip.beaten .portrait { position: relative; }
+.rival-strip.beaten canvas { opacity: 0.4; }
+.rival-strip.beaten .portrait::after { content: '✕'; position: absolute; inset: 0; display: grid; place-items: center; color: var(--hot); font-size: 22px; text-shadow: 0 0 8px var(--hot); }
+.rival-strip.beaten .who b { text-decoration: line-through; text-decoration-color: var(--hot); }
+.facing { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.facing .rival-strip { margin: 4px 0; }
+
+/* ---- creature dev grid (?creatures) ----------------------------------- */
+
+.creature-grid { position: absolute; inset: 0; overflow: auto; padding: 16px; pointer-events: auto; background: var(--bg); touch-action: pan-y; user-select: text; }
+.creature-grid header { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.creature-grid h2 { margin: 0 12px 0 0; font-size: 18px; letter-spacing: 0.1em; }
+.creature-grid .big, .creature-grid .grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.creature-grid .grid { display: grid; grid-template-columns: auto repeat(5, max-content); align-items: center; gap: 4px 10px; margin-top: 16px; }
+.creature-grid figure { margin: 0; text-align: center; font-size: 11px; color: var(--muted); }
+.creature-grid .cell { display: flex; gap: 2px; }
+.creature-grid button.on { border-color: var(--accent); color: var(--accent); }
+
+/* ---- broods and camp (#63) -------------------------------------------- */
+
+/* The camp (#76): a tabbed modal over the run map. */
+.camp { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: 12px; background: rgba(4, 5, 12, 0.55); backdrop-filter: blur(2px); }
+.camp-card {
+  width: min(760px, 100%); max-height: 100%; display: grid; grid-template-columns: 132px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px 16px; padding: 18px 20px;
+}
+.camp-card header { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; }
+.camp-card header h3 { margin: 0; font-size: 15px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+.camp-biomass { position: relative; margin-left: auto; color: var(--muted); font-size: 14px; }
+.camp-biomass b { color: #b4ff39; font-size: 20px; font-variant-numeric: tabular-nums; }
+.camp-biomass .spent { position: absolute; left: 0; top: -2px; color: var(--hot); font-weight: 700; animation: spent 0.9s ease-out forwards; pointer-events: none; }
+@keyframes spent { to { transform: translateY(-22px); opacity: 0; } }
+.camp-tabs { display: flex; flex-direction: column; gap: 6px; }
+.camp-tabs button { min-height: 44px; text-align: left; padding: 8px 12px; }
+.camp-tabs button span { color: var(--accent); margin-right: 4px; }
+.camp-tabs button.on { border-color: var(--accent); background: rgba(45, 226, 230, 0.14); color: var(--text); }
+.camp-body { min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
+.camp-body .hint { color: var(--muted); font-size: 13px; line-height: 1.45; margin: 4px 0 10px; }
+
+.brood-cards {
+  display: flex; gap: 12px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory;
+  padding: 4px 2px 10px; touch-action: pan-x; -webkit-overflow-scrolling: touch;
+}
+.brood-card {
+  position: relative; flex: 0 0 210px; scroll-snap-align: start; display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(10, 13, 28, 0.85);
+}
+.brood-card.vet { border-color: rgba(255, 182, 39, 0.55); }
+.brood-card .portrait { align-self: center; border-radius: 50%; background: radial-gradient(circle, rgba(45, 226, 230, 0.12), transparent 70%); }
+.brood-card.hurt .portrait { filter: saturate(0.5); }
+.brood-card .badge.vet { position: absolute; top: 10px; right: 12px; color: var(--warn); font-size: 18px; text-shadow: 0 0 8px var(--warn); }
+.brood-card .temper { position: absolute; top: 12px; left: 14px; color: var(--muted); font-size: 12px; font-style: italic; }
+.brood-card h4 { margin: 0; font-size: 16px; text-align: center; }
+.brood-card .kind, .brood-card .state { margin: 0; text-align: center; font-size: 13px; color: var(--muted); }
+.brood-card .kind .glyph { color: var(--accent); }
+.brood-card.hurt .state { color: var(--hot); }
+/* #134: why a small brood stays small */
+.brood-card .why { margin: 0; text-align: center; font-size: 12px; line-height: 1.35; color: var(--warn); }
+.size-bar { position: relative; height: 16px; border-radius: 8px; background: rgba(150, 170, 255, 0.12); overflow: hidden; }
+.size-bar i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(45, 226, 230, 0.45), rgba(45, 226, 230, 0.8)); }
+.size-bar span { position: relative; display: block; text-align: center; font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.strains { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.strain-slot { padding: 5px 8px; border: 1px dashed var(--line-strong); border-radius: 8px; font-size: 12px; color: var(--muted); }
+.strain-slot.on { border-style: solid; border-color: rgba(160, 123, 255, 0.6); color: var(--text); display: flex; flex-direction: column; }
+.strain-slot.on b { color: #c9b4ff; font-size: 12px; }
+.strain-slot.on small { color: var(--muted); font-size: 11px; }
+.brood-card .actions { margin-top: auto; display: flex; gap: 6px; }
+.brood-card .actions button, .unlock-card button { flex: 1; min-height: 40px; padding: 6px 8px; font-size: 13px; }
+.cost { color: #b4ff39; margin-left: 2px; }
+button:disabled .cost { color: inherit; }
+
+.unlock-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.unlock-card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: rgba(10, 13, 28, 0.85); }
+.unlock-card .icon-art { flex: none; color: var(--muted); display: grid; place-items: center; width: 40px; }
+.unlock-card .icon-art.reward { color: #c9b4ff; font-size: 24px; }
+.unlock-card.on { border-color: rgba(45, 226, 230, 0.5); }
+.unlock-card.on .icon-art { color: var(--accent); filter: drop-shadow(0 0 6px var(--accent)); }
+.unlock-card .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 14px; }
+.unlock-card .who small { color: var(--muted); font-size: 12px; }
+.unlock-card .state { color: var(--accent); font-size: 12px; }
+.unlock-card button { flex: 0 0 auto; }
+
+@media (max-width: 560px) {
+  .camp { padding: 8px; }
+  .camp-card { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); padding: 14px; }
+  .camp-tabs { flex-direction: row; }
+  .camp-tabs button { flex: 1; min-height: 40px; text-align: center; padding: 6px 4px; white-space: nowrap; font-size: 13px; }
+  .brood-card { flex-basis: 78%; }
+}
+
+.broods { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.brood-chip { font-size: 13px; color: var(--accent); white-space: nowrap; }
+.brood-chip.hurt { color: var(--hot); }
+.brood-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.brood-pick { display: flex; gap: 10px; align-items: center; text-align: left; padding: 8px 10px; }
+.brood-pick.on { border-color: var(--accent); background: rgba(45, 226, 230, 0.14); }
+.brood-pick .glyph, .brood-events .glyph { color: var(--accent); width: 16px; text-align: center; }
+.brood-pick .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 14px; }
+.brood-pick small { color: var(--muted); font-size: 12px; margin-left: 0; }
+/* #109: choosing a strain's brood, with the brood you know from camp */
+.brood-pick.rich { align-items: center; padding: 8px 10px; }
+.brood-pick.rich .portrait { flex: none; width: 48px; height: 48px; border-radius: 50%; background: radial-gradient(circle, rgba(45, 226, 230, 0.12), transparent 70%); }
+.brood-pick.rich .who { gap: 4px; }
+.brood-pick.rich .size-bar { height: 12px; max-width: 160px; }
+.brood-pick.rich .size-bar span { font-size: 10px; line-height: 12px; }
+.brood-pick .pips { display: inline-flex; gap: 3px; margin-right: 6px; vertical-align: middle; }
+.brood-pick .pips i { width: 8px; height: 8px; border-radius: 50%; border: 1px solid rgba(180, 255, 57, 0.6); }
+.brood-pick .pips i.on { background: #b4ff39; box-shadow: 0 0 6px rgba(180, 255, 57, 0.6); }
+.brood-pick .flags { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex: none; }
+.brood-pick .flag { font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
+.brood-pick .flag.hurt { color: var(--hot); border-color: currentColor; }
+.brood-pick .flag.full { color: var(--warn); border-color: currentColor; }
+.strain-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin: 10px 0; align-items: start; }
+.strain-compare .reward { cursor: default; border-style: solid; border-width: 1px 1px 1px 4px; border-radius: 10px; }
+.strain-compare .olds { display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 480px) {
+  .strain-compare { grid-template-columns: minmax(0, 1fr); }
+  .brood-pick .flags { max-width: 90px; }
+  .brood-pick .flag { white-space: normal; text-align: right; }
+}
+.node-card .row { margin-top: 10px; }
+.node-card .row button.grow1 { flex: 1; margin-top: 0; }
+.node-card h3.sub { margin-top: 14px; }
+.brood-events { margin: 10px 0; padding: 0; list-style: none; font-size: 14px; line-height: 1.6; color: #c6cceb; }
+.packs { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 4px; }
+.pack { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 12px 14px; }
+.pack .glyphs { color: var(--accent); font-size: 14px; }
+.pack small { color: var(--muted); font-size: 13px; }
+.card .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+
+/* Campaign rewards (#64) */
+.reward-card { max-width: 560px; }
+.rewards { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 6px; }
+.reward { display: flex; flex-direction: column; justify-content: flex-start; gap: 3px; text-align: left; padding: 12px 14px; border-left-width: 4px; }
+.reward .tag { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.reward b { font-size: 16px; }
+.reward small { color: var(--muted); font-size: 12px; }
+.reward.common { border-left-color: #8fa0c8; }
+.reward.uncommon { border-left-color: #2de2e6; }
+.reward.rare { border-left-color: #ffd166; background: rgba(255, 209, 102, 0.06); }
+.reward.rare .tag { color: #ffd166; }
+/* #109: the family frames the card (and marks its corner); the tier keeps the edge and the tag. */
+.reward .head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.reward .emblem {
+  flex: none; min-width: 30px; display: flex; flex-direction: column; align-items: center;
+  font-size: 26px; line-height: 1; color: var(--fam, var(--muted)); text-shadow: 0 0 10px var(--fam, transparent);
+}
+.reward .emblem i { font-style: normal; font-size: 10px; letter-spacing: 0.04em; margin-top: 3px; text-shadow: none; }
+.reward small { margin-left: 0; }
+.reward.fam-strain { --fam: #b4ff39; --fam-line: rgba(180, 255, 57, 0.45); background: rgba(180, 255, 57, 0.05); }
+.reward.fam-power { --fam: #c9b4ff; --fam-line: rgba(201, 180, 255, 0.45); background: rgba(160, 123, 255, 0.07); }
+.reward.fam-pact { --fam: #e07ac0; --fam-line: rgba(192, 74, 154, 0.55); background: rgba(192, 74, 154, 0.09); }
+/* The family tints three sides; the left edge stays the tier's. */
+.reward[class*='fam-'] { border-top-color: var(--fam-line, var(--line-strong)); border-right-color: var(--fam-line, var(--line-strong)); border-bottom-color: var(--fam-line, var(--line-strong)); }
+.reward:disabled { opacity: 0.55; }
+.reward.fam-pact .tag { color: #e07ac0; }
+.reward .for { font-size: 13px; color: #b4ff39; }
+.reward .for b { font-size: 13px; }
+.reward .pact-cost { font-size: 13px; color: #f29ad4; }
+.reward .pact-cost b { font-size: 13px; }
+@media (min-width: 640px) {
+  .rewards { flex-direction: row; }
+  .reward { flex: 1; min-width: 0; }
+}
+.reward-card .row button.grow1 { flex: 1; }
+.run-difficulty { margin: 10px 0 2px; }
+.run-difficulty .seg { display: flex; }
+.run-difficulty .seg button { flex: 1; }
+.run-difficulty .hint { margin: 6px 0 0; min-height: 2.6em; }
+
+/* The playtest menu (?playtest). */
+.playtests { max-height: calc(100% - 32px); overflow-y: auto; }
+.playtest-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.playtest { display: block; text-align: left; padding: 10px 12px; }
+.playtest b { display: block; }
+.playtest small { display: block; margin-top: 3px; font-size: 12px; line-height: 1.35; color: #aab0c8; white-space: normal; }
+
+/* Dev: the fortress grid (?fortress, #67). */
+.fortress-grid .grid { display: flex; flex-wrap: wrap; gap: 12px; grid-template-columns: none; }
+.fortress-grid figure { margin: 0; }
+.fortress-grid figcaption { font-size: 12px; color: #aab0c8; margin-top: 3px; }

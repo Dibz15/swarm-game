@@ -1,10 +1,11 @@
-import { BALANCE, DOMINATION, DT, ENERGY, ESCALATION, POWER, TERRAIN, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
+import { siegeVictory } from './siege';
+import { BALANCE, DOMINATION, DT, KEYS, ENERGY, ESCALATION, POWER, TERRAIN, VARIANTS, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
 import { applyCommand, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
 import { updateNests } from './nests';
 import { updateEvents } from './events';
-import { pushFx, type World } from './world';
+import { pushFx, removeUnit, type World } from './world';
 import { queryRadius } from './spatial';
 
 /**
@@ -26,10 +27,13 @@ export function step(w: World, commands: readonly Command[]): void {
 
   updateNests(w);
   resolveBarrages(w);
+  updateBurns(w);
   updateCombat(w);
   resolveDamage(w);
   updateMovement(w);
   updateCrystals(w);
+  expireGhosts(w);
+  siphon(w);
 
   // Energy: factions behind the biggest army charge faster.
   let leader = 1;
@@ -39,7 +43,7 @@ export function step(w: World, commands: readonly Command[]): void {
     if (!fa.active || fa.eliminated) continue;
     const behind = 1 - w.unitCount[f] / leader;
     const rate = ENERGY.passive * (1 + BALANCE.underdogEnergy * behind * (1 - escalation(w.tick)));
-    fa.energy = Math.min(ENERGY.max, fa.energy + rate * DT);
+    fa.energy = Math.min(ENERGY.max, fa.energy + rate * fa.mods.energyRate * DT);
   }
 
   if (w.tick % TICK_HZ === 0) {
@@ -64,7 +68,7 @@ function updateCrystals(w: World): void {
       let lead = -1, team = -1, mixed = false;
       for (const s of blast) {
         const o = w.owner[s];
-        if (o === NEUTRAL) continue;
+        if (o === NEUTRAL || w.ghost[s]) continue;
         if (team < 0) {
           team = w.teamOf[o];
           lead = o;
@@ -84,7 +88,7 @@ function updateCrystals(w: World): void {
   for (const c of w.crystals) {
     if (c.holder < 0) continue;
     const f = w.factions[c.holder];
-    if (!f.eliminated) f.energy = Math.min(ENERGY.max, f.energy + TERRAIN.crystalEnergy * DT);
+    if (!f.eliminated) f.energy = Math.min(ENERGY.max, f.energy + TERRAIN.crystalEnergy * c.value * f.mods.crystalRate * DT);
   }
 }
 
@@ -106,7 +110,8 @@ function resolveBarrages(w: World): void {
       hits.push({ j, d: Math.sqrt((w.x[j] - b.x) ** 2 + (w.y[j] - b.y) ** 2) });
     }
     hits.sort((p, q) => p.d - q.d || p.j - q.j);
-    let budget = POWER.barrageBudget * (b.r / POWER.barrageRadius);
+    const fm = w.factions[b.owner].mods;
+    let budget = POWER.barrageBudget * (b.r / POWER.barrageRadius) * fm.barrageBudget * (b.budget ?? 1) * (fm.scorch ? VARIANTS.scorch.budget : 1);
     for (const { j, d } of hits) {
       if (budget <= 0) break;
       const dmg = Math.min(budget, POWER.barrageDamage * (1 - 0.4 * (d / b.r)));
@@ -115,8 +120,42 @@ function resolveBarrages(w: World): void {
       budget -= dmg;
     }
     pushFx(w, 'barrageHit', b.x, b.y, b.owner, b.r);
+    if (fm.scorch) w.burns.push({ x: b.x, y: b.y, r: b.r, owner: b.owner, until: w.tick + VARIANTS.scorch.ticks });
   }
   w.barrages = keep;
+}
+
+/** Scorch (#60): burning ground hurts every hostile standing in it. */
+function updateBurns(w: World): void {
+  if (w.burns.length === 0) return;
+  w.burns = w.burns.filter((b) => b.until > w.tick);
+  for (const b of w.burns) {
+    queryRadius(w, b.x, b.y, b.r, blast);
+    for (const j of blast) {
+      if (!w.hostile(w.owner[j], b.owner)) continue;
+      w.dmg[j] += VARIANTS.scorch.dps * DT;
+      w.lastHit[j] = b.owner;
+    }
+  }
+}
+
+/** Echo (#60): ghosts fade when their time is up. */
+function expireGhosts(w: World): void {
+  if (w.ghosts === 0) return;
+  for (let i = 0; i < w.n; i++) if (w.alive[i] && w.ghost[i] && w.ghost[i] <= w.tick) removeUnit(w, i);
+}
+
+/** Lockdown Siphon (#60): a locked nest's owner bleeds energy to whoever locked it. */
+function siphon(w: World): void {
+  for (const n of w.nests) {
+    // Only while an enemy holds it: a nest that changed hands to the caster's side stops paying.
+    if (n.lockedUntil <= w.tick || n.lockedBy === undefined || n.lockedBy < 0 || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, n.lockedBy)) continue;
+    const to = w.factions[n.lockedBy], from = w.factions[n.owner];
+    if (!to.mods.siphon) continue;
+    const take = Math.min(from.energy, to.mods.siphon * DT);
+    from.energy -= take;
+    to.energy = Math.min(ENERGY.max, to.energy + take);
+  }
 }
 
 const nestsByTeam = new Int32Array(NEUTRAL_TEAM + 1);
@@ -145,10 +184,44 @@ function checkVictory(w: World): void {
   }
 
   if (w.endless) return;
+  // Hold the line (#67): only the siege decides it.
+  if (w.siege && siegeVictory(w)) return;
+  // A stronghold (#100): a human taking the citadel wins, whoever else is left.
+  if (w.citadel >= 0) {
+    const c = w.nests[w.citadel];
+    if (c.owner >= 0 && c.owner !== NEUTRAL && c.control >= 1 && w.factions[c.owner].human) {
+      w.over = true;
+      w.winnerTeam = w.teamOf[c.owner];
+      w.winReason = 'citadel';
+      return;
+    }
+  }
+  // While the Bloom's heart lives it is the goal: only losing every human
+  // (or, with no human in the match, every player) ends the match.
+  if (w.heart && !w.heart.slain) {
+    let humans = 0, alive = 0;
+    for (let f = 0; f < NEUTRAL; f++) {
+      const fa = w.factions[f];
+      if (!fa.human || !fa.active) continue;
+      humans++;
+      if (!fa.eliminated) alive++;
+    }
+    if (humans > 0 ? alive === 0 : aliveTeams.size === 0) {
+      w.over = true;
+      w.winnerTeam = -1;
+      w.winReason = 'elimination';
+    }
+    return;
+  }
   if (aliveTeams.size <= 1) {
     w.over = true;
     w.winnerTeam = aliveTeams.size === 1 ? [...aliveTeams][0] : -1;
     w.winReason = 'elimination';
+    return;
+  }
+
+  if (w.keys.length) {
+    keyVictory(w, aliveTeams);
     return;
   }
 
@@ -186,6 +259,53 @@ function teamFace(w: World, team: number): number {
   return best;
 }
 
+/** The key-nest score that wins (#87). */
+export function keyTarget(w: World): number {
+  return KEYS.points * w.keys.length;
+}
+
+/** Key nests team `t` holds fully and uncontested: what it scores per tick. */
+function keyRate(w: World, t: number): number {
+  let rate = 0;
+  for (const k of w.keys) {
+    const n = w.nests[k];
+    if (n.owner >= 0 && n.owner !== NEUTRAL && n.control >= 1 && !n.contested && w.teamOf[n.owner] === t) rate++;
+  }
+  return rate;
+}
+
+/** The team with the highest key-nest score among the living, or -1 if nobody has scored. */
+function keyLeader(w: World, alive: (t: number) => boolean): number {
+  let best = -1;
+  for (let t = 0; t < w.keyScore.length; t++) if (w.keyScore[t] > 0 && alive(t) && (best < 0 || w.keyScore[t] > w.keyScore[best])) best = t;
+  return best;
+}
+
+/**
+ * Key nests (#87), king of the hill: each team scores for every key nest it
+ * holds uncontested, and the first to keyTarget wins (the higher score, if two
+ * get there in the same check). The leader past KEYS.threat is marked in
+ * domTicks, so bots and the HUD treat it as dominating.
+ */
+function keyVictory(w: World, aliveTeams: Set<number>): void {
+  const target = keyTarget(w);
+  for (const t of aliveTeams) w.keyScore[t] += 15 * keyRate(w, t);
+  const lead = keyLeader(w, (t) => aliveTeams.has(t));
+  if (lead >= 0 && w.keyScore[lead] >= target) {
+    w.over = true;
+    w.winnerTeam = lead;
+    w.winReason = 'domination';
+    return;
+  }
+  const threat = lead >= 0 && w.keyScore[lead] >= KEYS.threat * target ? lead : -1;
+  for (let t = 0; t < w.domTicks.length; t++) {
+    if (t === threat) {
+      if (w.domTicks[t] === 0) pushFx(w, 'domStart', 0, 0, teamFace(w, t));
+      w.domTicks[t] = w.keyScore[t];
+    } else w.domTicks[t] = 0;
+  }
+}
+
 export interface DominationStatus {
   team: number;
   /** faction to show for the team */
@@ -197,16 +317,35 @@ export interface DominationStatus {
   need: number;
   /** nests rivals must take back to break it */
   toBreak: number;
+  /** how much of the countdown is left, 0–1 */
+  frac: number;
+  /**
+   * key nests (#87): `held` is the key nests the team scores on now, `need` all
+   * of them, and `left` the time to win at that rate (at one key nest when it
+   * scores on none, which is `paused`)
+   */
+  keys?: boolean;
+  paused?: boolean;
 }
 
 /** The team currently dominating, or null. */
 export function dominationStatus(w: World): DominationStatus | null {
+  if (w.keys.length) {
+    // Key nests: the leading scorer, once anyone has scored.
+    const lead = keyLeader(w, (t) => teamFace(w, t) >= 0);
+    if (lead < 0) return null;
+    const target = keyTarget(w);
+    const rate = keyRate(w, lead);
+    const togo = Math.max(0, target - w.keyScore[lead]);
+    return { team: lead, face: teamFace(w, lead), left: Math.ceil(togo / Math.max(1, rate)), frac: togo / target, held: rate, need: w.keys.length, toBreak: rate, keys: true, paused: rate === 0 };
+  }
   for (let t = 0; t < w.domTicks.length; t++) {
     if (w.domTicks[t] <= 0) continue;
     let held = 0;
     for (const n of w.nests) if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === t) held++;
     const need = Math.ceil(w.nests.length * w.domShare);
-    return { team: t, face: teamFace(w, t), left: Math.max(0, DOMINATION.ticks - w.domTicks[t]), held, need, toBreak: Math.max(1, held - need + 1) };
+    const left = Math.max(0, DOMINATION.ticks - w.domTicks[t]);
+    return { team: t, face: teamFace(w, t), left, frac: left / DOMINATION.ticks, held, need, toBreak: Math.max(1, held - need + 1) };
   }
   return null;
 }

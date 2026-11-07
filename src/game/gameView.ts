@@ -1,17 +1,21 @@
+import type { TraitId } from '../campaign/warlords';
+import { BOONS, WAVE_KINDS, waveSize } from '../sim/siege';
 import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
 import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
 import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
+import { BLOOM_GLOW, BLOOM_RGB, bloomNestMask, growthTarget, type BloomView } from '../render/bloom';
+import { isAlly, possessive, teamName, verb } from '../ui/teams';
 import type { AudioEngine } from '../audio/engine';
-import { DAMAGE_VS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, UNIT_FEEDING, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
-import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost } from '../sim/commands';
-import type { Nest, World } from '../sim/world';
+import { DAMAGE_VS, KEYS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
+import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, surgeCost } from '../sim/commands';
+import { inArmy, type Nest, type World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
 import { LocalSession } from './session';
-import type { Lock, MissionRun } from './tutorial';
+import type { Hint, Lock, MissionRun } from './tutorial';
 
 export interface Services {
   renderer: Renderer;
@@ -37,6 +41,10 @@ export class GameView {
   hoverNest = -1;
   /** a targeted power waiting for a click (touch / HUD buttons) */
   aim: NestPower | null = null;
+  /** a clamped Blink's reach, flashed after the cast so the limit is learned (#97) */
+  private blinkFlash: { x: number; y: number; r: number; tx: number; ty: number; at: number } | null = null;
+  /** the last render time (s), for the flash */
+  private now = 0;
   /** world position under the cursor, for previews and key casts */
   cursor: [number, number] | null = null;
   /** world units per ~1 css px, for HUD pick radii */
@@ -53,21 +61,43 @@ export class GameView {
   mission: MissionRun | null = null;
   /** actions this mission hides */
   locked = new Set<Lock>();
+  /** why a locked action is locked, when it isn't the tutorial's "not in this lesson" */
+  private lockReason = new Map<Lock, string>();
   private highlightAt = 0;
   /** reading pause: the step it is for, and when it ends (seconds); see READ_PAUSE */
   private readStep = -1;
   readUntil = 0;
   readFrom = 0;
+  /** orders issued when the reading pause began: one more ends it (#115) */
+  private readIssued = 0;
+  /** orders you gave while the game was held, still waiting when the pause began */
+  private readHeld = false;
+  /** the coach's waiting line this frame (#115), read by the HUD and the demo */
+  waitHint: Hint | null = null;
   /** 0..1 of the reading pause left, for the coach's bar */
   readLeft = 0;
   private mask = new Uint8Array(MAX_UNITS);
   private spawnSeen: number[] = [];
   private domSecs = -1;
+  private siegeSecs = -1;
   private frame = 0;
   /** supply state last frame, to announce hitting the cap once */
   private supplyBlocked = false;
   private supplyNests = 0;
   private supplyToastTick = -1e9;
+  private bloomToasted = false;
+  /** the Bloom's nests (#94): which they are, and their client-side growth and swell */
+  private bloomMask: Uint8Array | null = null;
+  private bloom: BloomView | null = null;
+  private shedAt = 0;
+  /** factions on your team, in a team match (#74); null in free-for-all */
+  private allies: Uint8Array | null | undefined;
+  /** the tick of the last Bloom surge wave toasted (-1: none yet) */
+  private surgeWave = -1;
+  /** a campaign warlord in this battle (#66, #100): its units' look, its citadel's marker */
+  warlord: { faction: number; trait: TraitId } | null = null;
+  /** the citadel's walls were breached (sounded once) */
+  private breached = false;
 
   constructor(
     readonly setup: MatchSetup,
@@ -83,7 +113,8 @@ export class GameView {
       const rec = this.rec;
       this.session.onIssue = (c) => rec.order(this.world, c);
     }
-    s.camera.setMap(this.world.width, this.world.height);
+    // The camera turns the map so your start is bottom or left (#98).
+    s.camera.setMap(this.world.width, this.world.height, this.human >= 0 ? this.homePoint() : null);
     s.camera.fit();
     s.particles.clear();
     s.rings.list = [];
@@ -96,6 +127,7 @@ export class GameView {
   update(dt: number, time: number): void {
     this.session.update(dt);
     this.drainEvents();
+    this.updateBloom(dt, time);
     this.selection.prune(this.world, this.human);
     const w = this.world;
     this.rec?.frame(w, this.s.camera);
@@ -114,6 +146,13 @@ export class GameView {
       if (ds && secs <= 10 && secs > 0) this.s.sfx.domTick(1 - secs / 10, ds.team === w.teamOf[this.human]);
       this.domSecs = secs;
     }
+    // Holding the line (#67): the clock ticks through its last ten seconds.
+    const sg = this.result ? null : w.siege;
+    const left = sg ? Math.ceil((sg.until - w.tick) / TICK_HZ) : -1;
+    if (left !== this.siegeSecs) {
+      if (sg && left <= 10 && left > 0) this.s.sfx.domTick(1 - left / 10, true);
+      this.siegeSecs = left;
+    }
     // Soft ticks for your own nests spawning, if they are on screen.
     for (const n of w.nests) {
       if (n.owner === this.human && n.lastSpawn !== this.spawnSeen[n.id]) {
@@ -126,14 +165,26 @@ export class GameView {
   /** Advance the tutorial steps, pulse the nests the current step is about, end on success. */
   private updateMission(time: number): void {
     const m = this.mission!;
-    const ctx = { w: this.world, human: this.human, log: this.session.log };
-    for (const c of m.take(ctx)) this.session.issue(c);
-    if (m.update(ctx)) {
+    const base = { w: this.world, human: this.human, log: this.session.log };
+    let entered = 0;
+    const enter = () => {
+      for (const c of m.take(m.ctx(base))) {
+        this.session.issue(c);
+        entered++;
+      }
+    };
+    enter();
+    if (m.update(base)) {
       const c = this.s.camera;
       this.s.sfx.levelUp(c.cx, c.cy, true);
+      // The new step's own commands (a summoned swarm) go out now, before its reading pause starts.
+      entered = 0;
+      enter();
     }
+    const ctx = m.ctx(base);
     if (m.complete) {
       this.session.held = false;
+      this.waitHint = null;
       return this.finish('victory', time);
     }
     // Hold the game briefly on each new instruction, so it can be read before things move.
@@ -141,15 +192,32 @@ export class GameView {
       this.readStep = m.step;
       this.readFrom = time;
       this.readUntil = time + READ_PAUSE;
+      // The step's own commands don't count; orders you gave while held already do.
+      this.readIssued = this.session.issued;
+      this.readHeld = this.session.queued > entered;
     }
-    this.session.held = time < this.readUntil;
+    // Your first order ends the pause and goes through (#115): no hint asks for what you can't do yet.
+    if (this.readUntil > time && this.pendingOrders()) this.skipRead();
+    // A tour step holds the game until Next.
+    this.session.held = time < this.readUntil || !!m.current?.next;
     this.readLeft = this.session.held ? (this.readUntil - time) / READ_PAUSE : 0;
+    this.waitHint = m.waitText(base);
     if (time - this.highlightAt < 1.1) return;
     this.highlightAt = time;
     for (const id of m.current?.highlight?.(ctx) ?? []) {
       const n = this.world.nests[id];
       if (n) this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.3, r1: n.r * 2.6, dur: 0.9, c: WHITE, thick: 3 });
     }
+  }
+
+  /** Has the player given an order during the reading pause (still queued, or logged)? */
+  private pendingOrders(): boolean {
+    return this.readHeld || this.session.issued > this.readIssued;
+  }
+
+  /** Next, on a tour step (#115). */
+  nextStep(): void {
+    this.mission?.ack();
   }
 
   /** End the reading pause now (the coach's Go button). */
@@ -162,19 +230,27 @@ export class GameView {
   /** A mission hides this action: say so instead of doing it. */
   private blocked(a: Lock): boolean {
     if (!this.locked.has(a)) return false;
-    this.s.toast('Not in this lesson: it comes later', '#9aa4c7');
+    this.s.toast(this.lockReason.get(a) ?? 'Not in this lesson: it comes later', '#9aa4c7');
     return true;
+  }
+
+  /** Lock an action for this match (campaign unlocks), with the toast that explains it. */
+  lock(a: Lock, reason: string): void {
+    this.locked.add(a);
+    this.lockReason.set(a, reason);
   }
 
   private finish(r: MatchResult, time: number): void {
     this.result = r;
     this.resultTime = time;
+    if (r === 'victory' && this.world.winReason === 'held') this.s.sfx.lineHeld();
     if (r === 'victory') this.s.sfx.victory();
     else this.s.sfx.defeat();
   }
 
   render(time: number): void {
     this.frame++;
+    this.now = time;
     this.hitSparks();
     drawWorld(this.s.renderer, this.world, {
       alpha: this.session.alpha,
@@ -184,8 +260,12 @@ export class GameView {
       selectedNests: this.selection.nests,
       hoverNest: this.hoverNest,
       human: this.human,
+      warlord: this.warlord,
+      bloom: this.bloom,
+      allies: this.allyMask(),
     });
-    this.drawAim();
+    this.drawAim(time);
+    this.drawBlinkFlash(time);
     this.drawEdgeMarkers(time);
     if (this.brush) {
       const b = this.brush;
@@ -213,18 +293,77 @@ export class GameView {
     }
   }
 
+  /** Factions on your team (#74), once per match; null when nobody is (free-for-all). */
+  private allyMask(): Uint8Array | null {
+    if (this.allies !== undefined) return this.allies;
+    const w = this.world;
+    const m = new Uint8Array(w.factions.length);
+    let any = false;
+    for (const f of w.factions) {
+      if (f.active && isAlly(w, this.human, f.id)) {
+        m[f.id] = 1;
+        any = true;
+      }
+    }
+    return (this.allies = any ? m : null);
+  }
+
+  /** The Bloom's nests (#94): growth eases toward who holds them; the heart sheds spores in its last phase. */
+  private updateBloom(dt: number, time: number): void {
+    const w = this.world;
+    if (!this.bloomMask) {
+      const m = (this.bloomMask = bloomNestMask(w));
+      if (m.some((v) => v)) {
+        this.bloom = { growth: new Float32Array(m.length), swell: new Float32Array(m.length).fill(-1) };
+        for (let id = 0; id < m.length; id++) this.bloom.growth[id] = growthTarget(w, id, m);
+      }
+    }
+    const v = this.bloom;
+    if (v) {
+      for (let id = 0; id < v.growth.length; id++) {
+        const t = growthTarget(w, id, this.bloomMask);
+        const g = v.growth[id];
+        // It withers fast when taken, and creeps back slowly.
+        v.growth[id] = g + (t - g) * Math.min(1, dt * (t > g ? 0.5 : 1.6));
+      }
+    }
+    const h = w.heart;
+    if (h && !h.slain && h.phase >= 2 && time - this.shedAt > 0.12) {
+      this.shedAt = time;
+      const a = Math.random() * Math.PI * 2;
+      this.s.particles.burst(h.x + Math.cos(a) * 30, h.y + Math.sin(a) * 30, BLOOM_GLOW, 1, 30, 2.6, 2.4, 0.5);
+    }
+  }
+
+  /** A wave born at a Bloom nest: it swells and puffs spores. */
+  private bloomSwell(x: number, y: number): void {
+    const v = this.bloom;
+    if (!v) return;
+    const w = this.world;
+    for (let id = 0; id < v.growth.length; id++) {
+      const n = w.nests[id];
+      if (!this.bloomMask![id] || (n.x - x) ** 2 + (n.y - y) ** 2 > (n.r * 3) ** 2) continue;
+      v.swell[id] = this.now;
+      this.s.particles.burst(n.x, n.y, BLOOM_GLOW, 14, 70, 2.6, 1.4, 1.2);
+    }
+  }
+
   /** Arrows at the screen edge pointing to off-screen drops, Colossi and swarms. */
   private drawEdgeMarkers(time: number): void {
     const ev = this.world.events;
-    if (!ev) return;
     const w = this.world;
     const marks: [number, number, readonly number[]][] = [];
-    for (const d of ev.drops) marks.push([d.x, d.y, DROP_MARK]);
-    for (const c of ev.colossi) {
+    // A stronghold's citadel (#100), while it's still the goal.
+    if (w.citadel >= 0 && w.nests[w.citadel].owner !== this.human) {
+      const c = w.nests[w.citadel];
+      marks.push([c.x, c.y, FACTION_RGB[this.warlord?.faction ?? c.owner] ?? WHITE]);
+    }
+    for (const d of ev?.drops ?? []) marks.push([d.x, d.y, DROP_MARK]);
+    for (const c of ev?.colossi ?? []) {
       const s = w.uidToSlot.get(c.uid);
       if (s !== undefined) marks.push([w.x[s], w.y[s], FERAL]);
     }
-    for (const sw of ev.swarms) {
+    for (const sw of ev?.swarms ?? []) {
       let x = 0, y = 0, n = 0;
       for (const u of sw.uids) {
         const s = w.uidToSlot.get(u);
@@ -251,12 +390,49 @@ export class GameView {
     }
   }
 
-  private drawAim(): void {
+  /** How far Blink carries your dots: the same reach the sim clamps to (commands.ts). */
+  blinkRange(): number {
+    return POWER.blinkRange * powerBoost(this.world, this.human, 'blink') * this.world.factions[this.human].mods.blinkRange;
+  }
+
+  /** A ring of short dashes, turning slowly: the edge of a power's reach. */
+  private dashedRing(x: number, y: number, R: number, c: readonly number[], a: number, time: number): void {
+    const r = this.s.renderer;
+    const n = 40, spin = time * 0.25;
+    for (let k = 0; k < n; k++) {
+      const a0 = spin + (k / n) * Math.PI * 2, a1 = a0 + (Math.PI * 2) / n / 2;
+      r.beam(x + Math.cos(a0) * R, y + Math.sin(a0) * R, x + Math.cos(a1) * R, y + Math.sin(a1) * R, c[0], c[1], c[2], a, 1.6);
+    }
+  }
+
+  private drawAim(time: number): void {
     const power = this.aim;
     const cur = this.cursor;
-    if (!power || !cur) return;
     const r = this.s.renderer;
     const c = FACTION_RGB[this.human];
+    if (power === 'blink') {
+      // Blink's reach shows as soon as it's armed, cursor or not (#97): touch has no hover.
+      const from = this.selectionCenter();
+      if (!from) return;
+      const range = this.blinkRange();
+      r.shape(true, from[0], from[1], range, 7, 1, 0, 0, c, 28);
+      r.shape(true, from[0], from[1], range, 0, 1, 0, 0.012, c, 170);
+      this.dashedRing(from[0], from[1], range * 1.03, c, 120, time);
+      if (!cur) return;
+      let dx = cur[0] - from[0], dy = cur[1] - from[1];
+      const d = Math.hypot(dx, dy);
+      if (d > range) {
+        dx *= range / d;
+        dy *= range / d;
+        // The part you won't reach, dimmed.
+        r.beam(from[0] + dx, from[1] + dy, cur[0], cur[1], c[0], c[1], c[2], 45, 1.2);
+        r.shape(true, cur[0], cur[1], 10, 0, 1, 0, 0.12, OUT_OF_RANGE, 120);
+      }
+      r.beam(from[0], from[1], from[0] + dx, from[1] + dy, c[0], c[1], c[2], 200, 1.8);
+      r.shape(true, from[0] + dx, from[1] + dy, 16, 0, 1, 0, 0.14, WHITE, 240);
+      return;
+    }
+    if (!power || !cur) return;
     const boost = powerBoost(this.world, this.human, power);
     if (power === 'barrage') {
       const R = POWER.barrageRadius * boost;
@@ -272,19 +448,6 @@ export class GameView {
       r.beam(from.x, from.y, cur[0], cur[1], c[0], c[1], c[2], 60, 1.2);
       r.shape(true, cur[0], cur[1], R, 0, 1, 0, 0.03, c, 200);
       r.shape(true, cur[0], cur[1], R, 7, 1, 0, 0, c, 40);
-    } else if (power === 'blink') {
-      const from = this.selectionCenter();
-      if (!from) return;
-      let dx = cur[0] - from[0], dy = cur[1] - from[1];
-      const d = Math.hypot(dx, dy);
-      const range = POWER.blinkRange * boost;
-      if (d > range) {
-        dx *= range / d;
-        dy *= range / d;
-      }
-      r.shape(true, from[0], from[1], range, 0, 1, 0, 0.01, c, 90);
-      r.beam(from[0], from[1], from[0] + dx, from[1] + dy, c[0], c[1], c[2], 160, 1.5);
-      r.shape(true, from[0] + dx, from[1] + dy, 16, 0, 1, 0, 0.12, WHITE, 220);
     } else if (power === 'lockdown') {
       const n = this.nestAt(cur[0], cur[1], 1.6);
       const ok = n && n.owner >= 0 && n.owner !== NEUTRAL && this.world.hostile(n.owner, this.human);
@@ -325,17 +488,26 @@ export class GameView {
     const w = this.world;
     const { particles, rings, sfx, camera, toast } = this.s;
     const d = w.deaths;
-    for (let k = 0; k < d.length; k += 3) {
-      particles.burst(d[k], d[k + 1], FACTION_RGB[d[k + 2]], 4, 55, 2, 0.5);
+    for (let k = 0; k < d.length; k += 4) {
+      // The Bloom's units burst into slow, drifting spores (#94).
+      if (d[k + 3]) particles.burst(d[k], d[k + 1], BLOOM_GLOW, 4, 35, 2.2, 1.4, 1.2);
+      else particles.burst(d[k], d[k + 1], FACTION_RGB[d[k + 2]], 4, 55, 2, 0.5);
       sfx.death(d[k], d[k + 1], d[k + 2]);
     }
     w.deaths = [];
+    // A stronghold's walls breached: the first time you contest the citadel.
+    if (!this.breached && w.citadel >= 0 && w.nests[w.citadel].contested && w.nests[w.citadel].owner !== this.human) {
+      this.breached = true;
+      sfx.citadelBreach();
+      toast('At the citadel: take it to win', hex(this.warlord?.faction ?? w.nests[w.citadel].owner));
+    }
 
     for (const e of w.fx) {
       const c = FACTION_RGB[e.f] ?? WHITE;
       const nest = w.nests[e.nest];
       switch (e.type) {
         case 'capture':
+          if (e.nest === w.citadel && e.f === this.human) sfx.citadelFall();
           rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3.2, dur: 0.7, c, thick: 2.5 });
           particles.burst(e.x, e.y, c, 26, 120, 2.6, 0.8);
           sfx.capture(e.x, e.y, e.f === this.human);
@@ -368,6 +540,9 @@ export class GameView {
           sfx.nova(e.x, e.y, e.f === this.human);
           break;
         }
+        case 'swarmCall':
+          rings.add({ x: e.x, y: e.y, r0: 4, r1: e.r, dur: 0.35, c, thick: 1.5 });
+          break;
         case 'surge':
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 1.4, dur: 0.5, c, thick: 2 });
           sfx.surge(e.x, e.y, e.f === this.human);
@@ -423,6 +598,85 @@ export class GameView {
           sfx.swarmHorn();
           toast('A wild swarm is coming! It hunts the biggest army', '#d65c4e');
           break;
+        case 'bloomSwarm':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 2.5, r1: e.r * 0.5, dur: 0.9, c: FERAL, thick: 3 });
+          this.bloomSwell(e.x, e.y);
+          sfx.bloomSwarm();
+          if (!this.bloomToasted) toast('The Bloom sends its swarms. They hunt every army alike', '#d65c4e');
+          this.bloomToasted = true;
+          break;
+        case 'surgeWarn':
+          sfx.escalation();
+          camera.shake = Math.min(1, camera.shake + 0.4);
+          toast(`The Bloom is coming for this field: it surges in ${e.r}s, and every wave grows`, '#d65c4e');
+          break;
+        case 'bloomSurge':
+          rings.add({ x: e.x, y: e.y, r0: 40 + e.r * 3, r1: 20, dur: 1.1, c: FERAL, thick: 4 });
+          sfx.swarmHorn();
+          if (this.surgeWave !== w.tick) toast(this.surgeWave < 0 ? 'The Bloom surges! End this battle before it ends you' : `The Bloom surges again, ${e.r} strong`, '#d65c4e');
+          this.surgeWave = w.tick;
+          break;
+        case 'heartWindup':
+          rings.add({ x: e.x, y: e.y, r0: e.r * 1.6, r1: e.r, dur: 0.9, c: FERAL, thick: 2 });
+          sfx.heartWindup(e.x, e.y);
+          break;
+        case 'siegeWave': {
+          // e.prev: the wave's index in the schedule; e.x0: which side (a pincer fires one per side).
+          const wave = w.siege?.waves[e.prev];
+          rings.add({ x: e.x, y: e.y, r0: 20, r1: 140, dur: 0.9, c: FERAL, thick: 3 });
+          if (wave && e.x0 === 0) {
+            sfx.siegeWave();
+            toast(`Wave ${e.prev + 1}: ${WAVE_KINDS[wave.kind].name}, ${waveSize(w, wave)} strong`, '#e3707a');
+          }
+          break;
+        }
+        case 'capitalLost':
+          sfx.capitalAlarm();
+          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.6, c: [255, 93, 115], thick: 3 });
+          toast('Your capital has fallen: retake it within 20 seconds!', '#ff5d73');
+          break;
+        case 'boonOffer':
+          sfx.boonOffer();
+          break;
+        case 'boonTaken': {
+          const id = (Object.keys(BOONS) as (keyof typeof BOONS)[])[e.prev];
+          if (id) toast(`${BOONS[id].name}: ${BOONS[id].text.toLowerCase()}`, hex(this.human));
+          rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3, dur: 0.6, c: FACTION_RGB[this.human], thick: 3 });
+          sfx.levelUp(e.x, e.y, true);
+          break;
+        }
+        case 'capitalRetaken':
+          toast('Capital retaken', hex(this.human));
+          break;
+        case 'heartPulse': {
+          rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r, dur: 0.4, c: FERAL, thick: 5 });
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.4, r1: e.r, dur: 0.35, c: FERAL, thick: 0, disc: true });
+          const [sx, sy] = camera.toScreen(e.x, e.y);
+          if (sx > -100 && sy > -100 && sx < camera.viewW + 100 && sy < camera.viewH + 100) camera.shake = Math.min(1, camera.shake + 0.3);
+          sfx.heartPulse(e.x, e.y);
+          break;
+        }
+        case 'heartPhase':
+          rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r * 2.2, dur: 1, c: WHITE, thick: 4 });
+          particles.burst(e.x, e.y, FERAL, 60, 160, 3, 1);
+          particles.burst(e.x, e.y, BLOOM_GLOW, 50, 90, 3, 2.4, 0.8);
+          camera.shake = Math.min(1, camera.shake + 0.5);
+          sfx.heartPhase();
+          toast('The heart rages! Its swarms rally to defend it', '#d65c4e');
+          break;
+        case 'heartDown': {
+          const kc = e.f >= 0 && e.f < NEUTRAL ? c : FERAL;
+          rings.add({ x: e.x, y: e.y, r0: 10, r1: e.r * 3, dur: 1.4, c: WHITE, thick: 6 });
+          rings.add({ x: e.x, y: e.y, r0: e.r * 0.3, r1: e.r * 2, dur: 0.8, c: kc, thick: 0, disc: true });
+          // It collapses into a cloud of spores that drifts and fades (#94).
+          particles.burst(e.x, e.y, BLOOM_RGB, 70, 240, 3.4, 1.6);
+          particles.burst(e.x, e.y, BLOOM_GLOW, 140, 130, 3.4, 3.4, 0.6);
+          camera.shake = 1;
+          sfx.heartDown(e.x, e.y, e.f === this.human);
+          if (e.f === this.human) toast('You destroyed the heart of the Bloom!', hex(e.f));
+          else if (e.f >= 0 && e.f < NEUTRAL) toast(`${FACTION_NAMES[e.f]} destroyed the heart. Now beat them`, hex(e.f));
+          break;
+        }
         case 'dropIncoming':
           sfx.dropIncoming();
           toast('Supply drop incoming: hold it alone for energy and a free upgrade', '#ffe28c');
@@ -460,8 +714,12 @@ export class GameView {
         case 'domStart': {
           const mine = w.teamOf[e.f] === w.teamOf[this.human];
           sfx.domStart(mine);
-          if (mine) toast(`You are dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
-          else toast(`${FACTION_NAMES[e.f]} is dominating! Take back a nest to stop them`, '#ff5d73');
+          const keys = w.keys.length;
+          // In a team match, name the team (#74).
+          const who = teamName(w, this.human, e.f);
+          const are = verb(who, 'is', 'are');
+          if (mine) toast(keys ? `Halfway to a key-nest win! Keep scoring on the ${keys} key nests` : `${who.name} ${are} dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
+          else toast(keys ? `${who.name} ${are} halfway to a key-nest win! Take or contest their key nests` : `${who.name} ${are} dominating! Take back a nest to stop them`, '#ff5d73');
           for (const n of w.nests) {
             if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === w.teamOf[e.f]) {
               rings.add({ x: n.x, y: n.y, r0: n.r, r1: n.r * 3, dur: 0.8, c: FACTION_RGB[n.owner], thick: 3 });
@@ -472,7 +730,7 @@ export class GameView {
         case 'domBreak': {
           const mine = w.teamOf[e.f] === w.teamOf[this.human];
           sfx.domBreak(mine);
-          toast(mine ? 'Your domination was broken' : `${FACTION_NAMES[e.f]}'s domination is broken`, mine ? '#ff5d73' : '#9aa4c7');
+          toast(`${possessive(teamName(w, this.human, e.f))} domination ${mine ? 'was' : 'is'} broken`, mine ? '#ff5d73' : '#9aa4c7');
           break;
         }
         case 'crystal':
@@ -504,11 +762,16 @@ export class GameView {
     return best;
   }
 
+  /** Any of your dots within `r` of a point (#115: a tap on them isn't snapped to a nest). */
+  hasOwnUnitsNear(wx: number, wy: number, r: number): boolean {
+    return this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= r * r).length > 0;
+  }
+
   private ownUnitsIn(test: (x: number, y: number) => boolean): number[] {
     const w = this.world;
     const out: number[] = [];
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.owner[i] !== this.human || w.state[i] === UNIT_FEEDING) continue;
+      if (w.owner[i] !== this.human || !inArmy(w, i)) continue;
       if (test(w.x[i], w.y[i])) out.push(w.uid[i]);
     }
     return out;
@@ -630,7 +893,7 @@ export class GameView {
     const w = this.world;
     const units: number[] = [];
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.owner[i] !== this.human || w.kind[i] !== kind || w.state[i] === UNIT_FEEDING) continue;
+      if (w.owner[i] !== this.human || w.kind[i] !== kind || !inArmy(w, i)) continue;
       if (w.x[i] >= x0 && w.x[i] <= x1 && w.y[i] >= y0 && w.y[i] <= y1) units.push(w.uid[i]);
     }
     if (!units.length) return;
@@ -658,9 +921,10 @@ export class GameView {
   /** Every own unit of `kind` currently on screen. */
   selectKindOnScreen(kind: number): void {
     const cam = this.s.camera;
-    const [x0, y0] = cam.toWorld(0, 0);
-    const [x1, y1] = cam.toWorld(cam.viewW, cam.viewH);
-    this.selectKindIn(kind, x0, y0, x1, y1);
+    // On a turned view the corners swap, so sort them.
+    const [ax, ay] = cam.toWorld(0, 0);
+    const [bx, by] = cam.toWorld(cam.viewW, cam.viewH);
+    this.selectKindIn(kind, Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by));
   }
 
   /** Own unit kind under a world point, or -1. */
@@ -734,10 +998,15 @@ export class GameView {
     return this.world.nests[orders[0].nest];
   }
 
+  /** Holding the line (#67): take boon `k` of the offer. */
+  pickBoon(k: number): void {
+    if (this.world.siege?.offer) this.session.issue({ t: 'boon', p: this.human, k });
+  }
+
   surge(): void {
     if (this.blocked('surge')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Surge', '#9aa4c7');
-    if (this.world.factions[this.human].energy < POWER.surgeCost) return this.s.sfx.fail();
+    if (this.short(surgeCost(this.world, this.human))) return this.s.sfx.fail();
     this.session.issue({ t: 'surge', p: this.human, units: [...this.selection.units] });
   }
 
@@ -748,7 +1017,7 @@ export class GameView {
       return this.s.toast('Nova only hits around your selected dots: wait until the enemy reaches them', '#ffd166');
     }
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');
-    if (this.world.factions[this.human].energy < POWER.novaCost) return this.s.sfx.fail();
+    if (this.short(POWER.novaCost)) return this.s.sfx.fail();
     this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
   }
 
@@ -765,7 +1034,7 @@ export class GameView {
     if (!n) return false;
     cx /= n;
     cy /= n;
-    const r = novaRadius(n);
+    const r = novaRadius(n, w.factions[this.human].mods.novaRadius);
     for (let i = 0; i < w.n; i++) {
       if (w.alive[i] && w.hostile(w.owner[i], this.human) && (w.x[i] - cx) ** 2 + (w.y[i] - cy) ** 2 < r * r) return true;
     }
@@ -781,11 +1050,17 @@ export class GameView {
       this.s.toast(`Hold a ${NEST_NAMES[POWER_NEST[power]]} to use this`, '#9aa4c7');
       return false;
     }
-    if (this.world.factions[this.human].energy < cost) {
+    if (this.short(cost)) {
       this.s.sfx.fail();
       return false;
     }
     return true;
+  }
+
+  /** Can't pay for a power? Feral (#60) has none; under Blood price (#60) the sim checks the units it costs instead. */
+  private short(cost: number): boolean {
+    const f = this.world.factions[this.human];
+    return f.mods.noPowers || (!f.mods.bloodPrice && f.energy < cost);
   }
 
   fortify(): void {
@@ -810,6 +1085,13 @@ export class GameView {
     } else if (power === 'blink') {
       if (!this.selection.units.size) return this.s.toast('Select dots first, then Blink', '#9aa4c7');
       if (!this.power('blink', POWER.blinkCost)) return;
+      // A cast past the reach lands short: flash the ring so the limit is learned (#97).
+      const from = this.selectionCenter();
+      const range = this.blinkRange();
+      if (from && Math.hypot(wx - from[0], wy - from[1]) > range) {
+        const k = range / Math.hypot(wx - from[0], wy - from[1]);
+        this.blinkFlash = { x: from[0], y: from[1], r: range, tx: from[0] + (wx - from[0]) * k, ty: from[1] + (wy - from[1]) * k, at: this.now };
+      }
       this.session.issue({ t: 'blink', p: this.human, units: [...this.selection.units], x: wx, y: wy });
     } else {
       const n = this.nestAt(wx, wy, 1.6);
@@ -817,8 +1099,25 @@ export class GameView {
         return this.s.toast('Lockdown needs an enemy nest under the cursor', '#9aa4c7');
       }
       if (!this.power('lockdown', POWER.lockdownCost)) return;
+      const rest = siphonWait(this.world, this.human);
+      if (rest > 0) return this.s.toast(`Siphon: Lockdown is ready again in ${Math.ceil(rest / TICK_HZ)} s`, '#9aa4c7');
       this.session.issue({ t: 'lockdown', p: this.human, nest: n.id });
     }
+  }
+
+  /** After a clamped Blink: its reach and where the dots landed, fading over 0.7 s. */
+  private drawBlinkFlash(time: number): void {
+    const f = this.blinkFlash;
+    if (!f) return;
+    const t = (time - f.at) / 0.7;
+    if (t >= 1 || t < 0) {
+      this.blinkFlash = null;
+      return;
+    }
+    const a = 1 - t;
+    const r = this.s.renderer;
+    r.shape(true, f.x, f.y, f.r, 0, 1, 0, 0.018, WHITE, Math.round(220 * a));
+    r.shape(true, f.tx, f.ty, 16 + 10 * t, 0, 1, 0, 0.14, WHITE, Math.round(240 * a));
   }
 
   /** HUD button: Fortify fires at once; the others wait for a click. */

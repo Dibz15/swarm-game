@@ -13,9 +13,11 @@ export class Particles {
   private max = new Float32Array(CAP);
   private size = new Float32Array(CAP);
   private col = new Uint8Array(CAP * 3);
+  /** how fast each slows (per second): 4 for pops, low for drifting spores */
+  private drag = new Float32Array(CAP);
   private n = 0;
 
-  burst(x: number, y: number, c: RGB, count: number, speed: number, size = 2.2, life = 0.6): void {
+  burst(x: number, y: number, c: RGB, count: number, speed: number, size = 2.2, life = 0.6, drag = 4): void {
     for (let k = 0; k < count; k++) {
       if (this.n >= CAP) return;
       const i = this.n++;
@@ -27,6 +29,7 @@ export class Particles {
       this.vy[i] = Math.sin(a) * s;
       this.max[i] = this.life[i] = life * (0.6 + Math.random() * 0.6);
       this.size[i] = size * (0.6 + Math.random() * 0.6);
+      this.drag[i] = drag;
       this.col[i * 3] = c[0];
       this.col[i * 3 + 1] = c[1];
       this.col[i * 3 + 2] = c[2];
@@ -34,7 +37,6 @@ export class Particles {
   }
 
   update(dt: number): void {
-    const damp = Math.exp(-dt * 4);
     let i = 0;
     while (i < this.n) {
       this.life[i] -= dt;
@@ -48,6 +50,7 @@ export class Particles {
         this.life[i] = this.life[last];
         this.max[i] = this.max[last];
         this.size[i] = this.size[last];
+        this.drag[i] = this.drag[last];
         this.col[i * 3] = this.col[last * 3];
         this.col[i * 3 + 1] = this.col[last * 3 + 1];
         this.col[i * 3 + 2] = this.col[last * 3 + 2];
@@ -55,6 +58,7 @@ export class Particles {
       }
       this.x[i] += this.vx[i] * dt;
       this.y[i] += this.vy[i] * dt;
+      const damp = Math.max(0, 1 - dt * this.drag[i]);
       this.vx[i] *= damp;
       this.vy[i] *= damp;
       i++;

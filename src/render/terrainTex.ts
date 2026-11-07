@@ -5,7 +5,8 @@ export const TEX_SCALE = 4;
 
 // Distance encodings (px), shared with BG_FS.
 const WALL_LO = -24, WALL_SPAN = 64;
-const RIFT_LO = -16, RIFT_SPAN = 32;
+// Rift reaches deeper inside (#98): big rift seas shade by depth.
+const RIFT_LO = -48, RIFT_SPAN = 64;
 
 /**
  * Bake terrain into an RGBA8 texture once per match. R = wall signed
@@ -50,6 +51,11 @@ export function bakeTerrain(spec: TerrainSpec, width: number, height: number): {
     }
   }
 
+  // Rifts are unions of capsules; a rift sea (#98) gets a scalloped rim.
+  // Two small box blurs round it off (a distance field is linear away
+  // from its kinks, so straight edges and thin strips barely move).
+  if (spec.fields.some((f) => f.kind === 'rift')) for (let pass = 0; pass < 2; pass++) boxBlur(rift, tw, th, 2);
+
   const data = new Uint8Array(n * 4);
   const enc = (v: number, lo: number, span: number) => Math.round(Math.min(1, Math.max(0, (v - lo) / span)) * 255);
   for (let k = 0; k < n; k++) {
@@ -59,4 +65,20 @@ export function bakeTerrain(spec: TerrainSpec, width: number, height: number): {
     data[k * 4 + 3] = 255;
   }
   return { data, tw, th };
+}
+
+/** In-place box blur of a tw×th grid, radius `r` cells, horizontal then vertical. */
+function boxBlur(a: Float32Array, tw: number, th: number, r: number): void {
+  const tmp = new Float32Array(Math.max(tw, th));
+  const line = (start: number, stride: number, len: number) => {
+    let sum = 0;
+    for (let k = -r; k <= r; k++) sum += a[start + Math.min(len - 1, Math.max(0, k)) * stride];
+    for (let i = 0; i < len; i++) {
+      tmp[i] = sum / (2 * r + 1);
+      sum += a[start + Math.min(len - 1, i + r + 1) * stride] - a[start + Math.max(0, i - r) * stride];
+    }
+    for (let i = 0; i < len; i++) a[start + i * stride] = tmp[i];
+  };
+  for (let y = 0; y < th; y++) line(y * tw, 1, tw);
+  for (let x = 0; x < tw; x++) line(x, tw, th);
 }

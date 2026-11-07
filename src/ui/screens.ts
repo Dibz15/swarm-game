@@ -1,7 +1,6 @@
 import { FACTION_HEX, FACTION_NAMES } from '../content/factions';
 import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import { CAVE_LEVELS, EVENT_LEVELS, MAP_LAYOUTS, TERRAIN_LEVELS, type CaveLevel, type EventLevel, type MapLayout, type MapSize, type TerrainLevel } from '../sim/mapgen';
-import { hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
 import type { World } from '../sim/world';
 import { NEUTRAL } from '../sim/constants';
@@ -9,8 +8,10 @@ import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
-import { MISSIONS, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
+import { buildSetup, loadPrefs, randomSeed, savePrefs, type SetupPrefs } from '../game/matchSetup';
+import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
+import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
 
 function el(html: string): HTMLDivElement {
   const d = document.createElement('div');
@@ -35,7 +36,7 @@ export const CONTROLS_HTML = `
     <dt>1 / 2 / 3 / 4</dt><dd>Keep only Swarmers / Shields / Spears / Raiders from your group (or grab that type on screen). Shift+number drops the type. The type chips do the same; Tab cycles</dd>
     <dt>Right-click</dt><dd>Send dots / set the rally point of selected nests</dd>
     <dt>Q / E</dt><dd>Surge / Nova on the selected dots</dd>
-    <dt>R / F / G / T</dt><dd>Nest powers: Fortify, Barrage, Blink, Lockdown (at the cursor). They appear when you hold a Forge, Spire, Den or Bastion</dd>
+    <dt>R / F / G / T</dt><dd>Nest powers: Fortify, Barrage, Blink, Lockdown, at the cursor; G aims Blink first, showing its reach (click, or G again). They appear when you hold a Forge, Spire, Den or Bastion</dd>
     <dt>U</dt><dd>Upgrade the selected nest (feeds it nearby dots)</dd>
     <dt>N</dt><dd>Send the selected dots to your nearest nest (double-tap to look there)</dd>
     <dt>Ctrl+5–9, 5–9</dt><dd>Save / recall control groups</dd>
@@ -105,6 +106,8 @@ export const NEXT_STEP_TEXT: Record<NextStep, string> = {
   ffa: '<b>Next step:</b> you beat a Normal bot. Try a 4-player free-for-all, where rivals fight each other too.',
   rematch: '<b>Next step:</b> take on the Normal bot again, or warm up against Easy first.',
 };
+
+export { buildSetup, loadPrefs, quickSetup, randomSeed, type SetupPrefs } from '../game/matchSetup';
 
 // ---- skirmish sub-menu (#43) --------------------------------------------------
 
@@ -187,7 +190,7 @@ export function skirmishMenu(h: { quick: (difficulty: number) => void; custom: (
 }
 
 /** Single-player modes beyond skirmish, so the main menu stays short as they grow. */
-export function campaignMenu(p: TutorialProgress, h: { tutorial: () => void; back: () => void }): HTMLDivElement {
+export function campaignMenu(p: TutorialProgress, active: number, h: { tutorial: () => void; run: () => void; back: () => void }): HTMLDivElement {
   const done = MISSIONS.filter((ms) => p.done.includes(ms.id)).length;
   const m = el(`
     <div class="screen modal">
@@ -195,12 +198,13 @@ export function campaignMenu(p: TutorialProgress, h: { tutorial: () => void; bac
         <h2>Campaign</h2>
         <div class="menu-buttons">
           <button class="primary" data-a="tutorial"><b>Tutorial</b><span>${done === MISSIONS.length ? 'Complete ✓ · replay any mission' : `${done} of ${MISSIONS.length} missions · about 10 minutes`}</span></button>
-          <button data-a="run" disabled><b>Procedural campaign</b><span>coming soon</span></button>
+          <button data-a="run"><b>Procedural campaign</b><span>${active ? `${active} run${active > 1 ? 's' : ''} in progress` : 'Cross the map before the Bloom takes it · preview'}</span></button>
         </div>
         <div class="row end"><button data-a="back">Back</button></div>
       </div>
     </div>`);
   m.querySelector('[data-a=tutorial]')!.addEventListener('click', h.tutorial);
+  m.querySelector('[data-a=run]')!.addEventListener('click', h.run);
   m.querySelector('[data-a=back]')!.addEventListener('click', h.back);
   return m;
 }
@@ -211,9 +215,15 @@ export function tutorialMenu(p: TutorialProgress, h: { play: (i: number) => void
       <div class="card tutorial">
         <h2>Tutorial <small>about 10 minutes</small></h2>
         <ol class="missions">${MISSIONS.map(
-          (ms, i) => `<li class="${p.done.includes(ms.id) ? 'done' : ''}"><button data-i="${i}"><b>${i + 1}. ${ms.title}</b><span>${ms.teaches}</span></button></li>`,
+          (ms, i) => {
+            // Cards you can tap (#115): done ones replay, the next one plays, later ones wait.
+            const done = p.done.includes(ms.id);
+            const open = missionUnlocked(p, i);
+            const tag = !open ? `🔒 Finish mission ${i} first` : done ? 'Replay ↻' : 'Play ▶';
+            return `<li class="${done ? 'done' : ''}${open ? '' : ' locked'}"><button data-i="${i}" ${open ? '' : 'disabled'}><span class="num">${done ? '✓' : i + 1}</span><b>${ms.title}</b><span class="what">${ms.teaches}</span><span class="play">${tag}</span></button></li>`;
+          },
         ).join('')}</ol>
-        <p class="hint">After the last mission you can play a real 1v1 against a Normal bot.</p>
+        <p class="hint">The last mission is a real 1v1 against a Normal bot.</p>
         <div class="row end"><button data-a="back">Back</button></div>
       </div>
     </div>`);
@@ -238,56 +248,45 @@ export function missionBriefing(ms: Mission, i: number, h: { start: () => void; 
   return m;
 }
 
-/** After a mission: what was learned, then onward (or the graduation offer after the last one). */
+/** After a mission: what was learned, then onward (or, after the graduation 1v1, back to the menu). */
 export function missionDebrief(
   ms: Mission,
   i: number,
   won: boolean,
-  h: { next: () => void; retry: () => void; menu: () => void },
+  h: { next: () => void; retry: () => void; menu: () => void; easy?: () => void },
 ): HTMLDivElement {
   const last = i === MISSIONS.length - 1;
+  // The graduation 1v1 (#147): no skipping it, but a warm-up against Easy when it's lost.
+  const real = !!ms.real;
   const body = won
-    ? `<ul class="steps">${ms.learned.map((l) => `<li>${l}</li>`).join('')}</ul>${last ? '<p><b>Tutorial complete!</b> Ready for a real match? A 1v1 against a Normal bot on a small map.</p>' : ''}`
-    : '<p>Your nests and dots are gone. Try again: grow first, and bring more dots than the enemy.</p>';
+    ? `<ul class="steps">${ms.learned.map((l) => `<li>${l}</li>`).join('')}</ul>${real ? '<p><b>Tutorial complete!</b> You’re ready for anything: try a free-for-all next.</p>' : ''}`
+    : real
+      ? '<p>The Normal bot won this time. Try again on a new map, or warm up against an Easy bot first.</p>'
+      : '<p>Your nests and dots are gone. Try again: grow first, and bring more dots than the enemy.</p>';
+  // The primary way on: the next mission, the menu after graduating, a warm-up (only if the
+  // caller offers one) after losing the real match, else skipping this one.
+  const warmUp = real && !won ? h.easy : undefined;
+  const go = won ? (real ? { label: 'Main menu', on: h.menu } : { label: 'Next mission', on: h.next }) : warmUp ? { label: 'Warm up vs Easy', on: warmUp } : real ? null : { label: 'Skip mission', on: h.next };
   const m = el(`
     <div class="screen modal dim">
       <div class="card brief ${won ? 'win' : 'lose'}">
         <small class="eyebrow">Mission ${i + 1} of ${MISSIONS.length}</small>
-        <h2>${won ? (last ? 'Graduated' : 'Mission complete') : 'Defeated'}</h2>
+        <h2>${won ? (real ? 'Graduated' : 'Mission complete') : 'Defeated'}</h2>
         ${body}
         ${!last ? `<p class="hint">Next: ${MISSIONS[i + 1].title}. ${MISSIONS[i + 1].teaches}</p>` : ''}
         <div class="row end">
-          <button data-a="menu">Main menu</button>
-          ${won ? '' : '<button data-a="retry">Retry</button>'}
-          <button class="primary" data-a="next">${won ? (last ? 'Play the 1v1' : 'Next mission') : 'Skip mission'}</button>
+          ${won && real ? '' : '<button data-a="menu">Main menu</button>'}
+          ${won ? '' : `<button data-a="retry"${real ? ' class="primary"' : ''}>Retry</button>`}
+          ${go ? `<button${real && !won ? '' : ' class="primary"'} data-a="next">${go.label}</button>` : ''}
         </div>
       </div>
     </div>`);
-  m.querySelector('[data-a=next]')!.addEventListener('click', h.next);
-  m.querySelector('[data-a=menu]')!.addEventListener('click', h.menu);
+  if (go) m.querySelector('[data-a=next]')!.addEventListener('click', go.on);
+  m.querySelector('[data-a=menu]')?.addEventListener('click', h.menu);
   m.querySelector('[data-a=retry]')?.addEventListener('click', h.retry);
   return m;
 }
 
-/** Ready-made matches the menu suggests: the graduation 1v1 and what comes after. */
-export function quickSetup(kind: 'normal1v1' | 'easy1v1' | 'ffa'): MatchSetup {
-  const p = loadPrefs();
-  const others = [0, 1, 2, 3, 4, 5].filter((c) => c !== p.color);
-  const bots = kind === 'ffa' ? 3 : 1;
-  const difficulty = kind === 'easy1v1' ? 0 : 1;
-  return buildSetup(
-    {
-      ...p,
-      size: kind === 'ffa' ? 'medium' : 'small',
-      terrain: 'standard',
-      caves: 'off',
-      events: 'normal',
-      teams: false,
-      bots: others.slice(0, bots).map((faction, i) => ({ faction, difficulty, personality: 'random', team: i + 1 })),
-    },
-    randomSeed(),
-  );
-}
 
 /** One-time heads-up when mobile mode switched itself on. */
 export function mobileNotice(h: { ok: () => void; desktop: () => void }): HTMLDivElement {
@@ -302,6 +301,7 @@ export function mobileNotice(h: { ok: () => void; desktop: () => void }): HTMLDi
 }
 
 const MODE_LABEL: Record<UiMode, string> = { auto: 'Auto', mobile: 'Mobile', desktop: 'Desktop' };
+const RES_LABEL: Record<Resolution, string> = { sharp: 'Sharp', balanced: 'Balanced', fast: 'Fast' };
 
 /** Interface mode + volume controls, shared by the Settings screen and the pause menu. */
 function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement {
@@ -312,6 +312,9 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
       <h3>Interface</h3>
       <div class="seg" data-a="mode">${UI_MODES.map((v) => `<button data-v="${v}">${MODE_LABEL[v]}</button>`).join('')}</div>
       <p class="hint">Mobile mode uses bigger touch buttons and touch instructions. Auto picks it on phones and tablets.</p>
+      <h3>Resolution</h3>
+      <div class="seg" data-a="res">${RESOLUTIONS.map((v) => `<button data-v="${v}">${RES_LABEL[v]}</button>`).join('')}</div>
+      <p class="hint">On a high-resolution screen, Balanced and Fast draw battles and the campaign map with fewer pixels. Try them if either stutters.</p>
       <h3>Sound</h3>
       <div class="vols">
         ${vol('master', 'Master')}${vol('sfx', 'Effects')}${vol('ambience', 'Ambience')}${vol('music', 'Music')}
@@ -339,6 +342,15 @@ function settingsFields(audio: AudioEngine, onMode: () => void): HTMLDivElement 
     }),
   );
   mark();
+  const res = [...m.querySelectorAll<HTMLButtonElement>('[data-a=res] button')];
+  const markRes = () => res.forEach((b) => b.classList.toggle('on', b.dataset.v === resolution()));
+  res.forEach((b) =>
+    b.addEventListener('click', () => {
+      setResolution(b.dataset.v as Resolution);
+      markRes();
+    }),
+  );
+  markRes();
   m.querySelectorAll<HTMLInputElement>('[data-vol]').forEach((inp) =>
     inp.addEventListener('input', () => audio.setVolume(inp.dataset.vol as VolumeKind, Number(inp.value) / 100)),
   );
@@ -406,7 +418,7 @@ function howToPlayMobile(onBack: () => void): HTMLDivElement {
         <h3>Powers and upgrades</h3>
         <p><b>Surge</b> and <b>Nova</b> fire on your selected dots. Nest powers: tap the button, then tap the target. Tap one of your nests, then <b>Upgrade</b> to feed it dots for faster spawns and a turret.</p>
         <h3>The map</h3>
-        <p>Rock blocks paths (cave maps are mostly rock, with tunnels between chambers), purple nebula slows, red rifts burn. Hold a crystal or a supply drop alone for energy. Wild swarms and the Colossus fight everyone.</p>
+        <p>Rock blocks paths (cave maps are mostly rock, with tunnels between chambers), purple nebula slows, red rifts burn the longer you stand in them. Hold a crystal or a supply drop alone for energy. Wild swarms and the Colossus fight everyone.</p>
         <div class="row end"><button class="primary" data-a="back">Got it</button></div>
       </div>
     </div>`);
@@ -446,7 +458,7 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
             <ul class="terrain">
               <li><i class="t-wall"></i><b>Rock</b> blocks movement and shots. Gaps make chokepoints. On cave layouts, nests sit in chambers joined by tunnels</li>
               <li><i class="t-neb"></i><b>Nebula</b> slows everything inside: ambush ground</li>
-              <li><i class="t-rift"></i><b>Rift</b> burns dots standing in it: a risky shortcut</li>
+              <li><i class="t-rift"></i><b>Rift</b> burns hotter the longer you stay: dash across, don't fight in it</li>
               <li><i class="t-crys"></i><b>Crystal</b> charges energy for whoever holds it alone</li>
             </ul>
             <h3>Map events</h3>
@@ -463,93 +475,8 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
   return m;
 }
 
-interface BotRow {
-  faction: number;
-  difficulty: number;
-  personality: Personality | 'random';
-  team: number;
-}
-
-export interface SetupPrefs {
-  color: number;
-  size: MapSize;
-  terrain: TerrainLevel;
-  caves: CaveLevel;
-  layout: MapLayout | 'random';
-  events: EventLevel;
-  teams: boolean;
-  bots: BotRow[];
-}
-
 const CAVE_LABEL: Record<CaveLevel, string> = { off: 'Open', belt: 'Cave belt', full: 'Caves' };
 const LAYOUT_LABEL: Record<MapLayout | 'random', string> = { random: 'Random', classic: 'Classic', open: 'Open center', core: 'Core', clusters: 'Clusters', lanes: 'Lanes' };
-
-const DEFAULT_PREFS: SetupPrefs = {
-  color: 0,
-  size: 'medium',
-  terrain: 'standard',
-  caves: 'off',
-  layout: 'random',
-  events: 'normal',
-  teams: false,
-  bots: [
-    { faction: 1, difficulty: 1, personality: 'random', team: 1 },
-    { faction: 2, difficulty: 1, personality: 'random', team: 2 },
-    { faction: 3, difficulty: 1, personality: 'random', team: 3 },
-  ],
-};
-
-export function loadPrefs(): SetupPrefs {
-  try {
-    const raw = localStorage.getItem('swarm.setup');
-    if (raw) return { ...DEFAULT_PREFS, ...JSON.parse(raw) };
-  } catch {
-    /* ignore */
-  }
-  return structuredClone(DEFAULT_PREFS);
-}
-
-function savePrefs(p: SetupPrefs): void {
-  try {
-    localStorage.setItem('swarm.setup', JSON.stringify(p));
-  } catch {
-    /* ignore */
-  }
-}
-
-export function randomSeed(): string {
-  const words = ['ember', 'tide', 'nova', 'moss', 'flux', 'drift', 'spark', 'hollow', 'prism', 'vale', 'echo', 'glint', 'rune', 'haze'];
-  const r = () => words[Math.floor(Math.random() * words.length)];
-  return `${r()}-${r()}-${Math.floor(Math.random() * 100)}`;
-}
-
-export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
-  const seed = hashString(seedText.trim() || 'swarm');
-  // Resolve "random" personalities deterministically from the seed.
-  let s = seed;
-  const nextPers = (): Personality => {
-    s = (Math.imul(s ^ (s >>> 13), 0x5bd1e995) + 0x6b43a9b5) >>> 0;
-    return PERSONALITIES[s % PERSONALITIES.length];
-  };
-  return {
-    seed,
-    size: p.size,
-    terrain: p.terrain,
-    caves: p.caves,
-    layout: p.layout,
-    events: p.events,
-    portrait: window.innerHeight > window.innerWidth * 1.15,
-    players: [
-      { faction: p.color, team: 0, human: true },
-      ...p.bots.map((b, i) => ({
-        faction: b.faction,
-        team: p.teams ? b.team : i + 1,
-        human: false,
-        bot: { difficulty: b.difficulty, personality: b.personality === 'random' ? nextPers() : b.personality },
-      })),
-    ],
-  };
-}
 
 /** Fixed scenarios for recording sessions (#29), replayed on the same seeds so games compare. */
 interface Scenario {
@@ -820,7 +747,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
   return m;
 }
 
-export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine }): HTMLDivElement {
+export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine; quitLabel?: string; teams?: string }): HTMLDivElement {
   const m = el(`
     <div class="screen modal dim">
       <div class="card">
@@ -828,8 +755,9 @@ export function pauseMenu(h: { resume: () => void; restart: () => void; quit: ()
         <div class="menu-buttons">
           <button class="primary" data-a="resume">Resume</button>
           <button data-a="restart">Restart match</button>
-          <button data-a="quit">Quit to menu</button>
+          <button data-a="quit">${h.quitLabel ?? 'Quit to menu'}</button>
         </div>
+        ${h.teams ? `<h3>Teams</h3>${h.teams}` : ''}
         <div class="fields"></div>
         <h3>Controls</h3>
         <div class="ctl"></div>
@@ -886,10 +814,14 @@ export function endScreen(
 
 /** "You won by domination", "Magenta won by elimination", ... */
 function how(w: World, human: number): string {
+  if (w.winReason === 'fallen') return 'The line broke: <b>your capital fell</b>';
   if (w.winnerTeam < 0 || !w.winReason) return w.factions[human]?.eliminated ? 'You were eliminated' : 'Match over';
   const mine = w.winnerTeam === w.teamOf[human];
   const face = w.factions.find((f) => f.active && f.id !== NEUTRAL && f.team === w.winnerTeam && !f.eliminated) ?? w.factions.find((f) => f.team === w.winnerTeam);
   const who = mine ? (w.factions.filter((f) => f.active && f.team === w.winnerTeam).length > 1 ? 'Your team' : 'You') : face ? FACTION_NAMES[face.id] : 'A rival';
+  if (w.winReason === 'heart') return `${who} destroyed <b>the Bloom's heart</b>`;
+  if (w.winReason === 'citadel') return `${who} took <b>the citadel</b>`;
+  if (w.winReason === 'held') return `${who} <b>held the line</b>`;
   return `${who} won by <b>${w.winReason}</b>`;
 }
 

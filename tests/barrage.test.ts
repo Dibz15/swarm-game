@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MISSIONS } from '../src/game/tutorial';
 import { Bot } from '../src/sim/ai/bot';
 import { applyCommand, barrageLaunch } from '../src/sim/commands';
-import { Kind, NestType, POWER } from '../src/sim/constants';
+import { Kind, NestType, POWER, VARIANTS } from '../src/sim/constants';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
 import { spawnUnit, World } from '../src/sim/world';
@@ -104,12 +104,29 @@ describe('Barrage (#41)', () => {
     expect(run(3)).toBeLessThan(4);
   });
 
-  it('tutorial mission 4: the Bastion is in reach of the Spire, in both orientations', () => {
-    const m = MISSIONS.find((x) => x.id === 'powers')!;
-    for (const portrait of [false, true]) {
-      const w = createWorld(m.setup(portrait));
-      const bastion = w.nests.find((n) => n.type === NestType.Bastion)!;
-      expect(barrageLaunch(w, 0, bastion.x, bastion.y)).not.toBeNull();
-    }
+  it('tutorial "Nest powers" (#146): the Den is in reach once the Spire is taken', () => {
+    const m = MISSIONS.find((x) => x.id === 'nestpowers')!;
+    const w = createWorld(m.setup());
+    const spire = w.nests.find((n) => n.type === NestType.Spire)!;
+    spire.owner = 0;
+    const den = w.nests.find((n) => n.type === NestType.Swift)!;
+    expect(barrageLaunch(w, 0, den.x, den.y)).not.toBeNull();
+  });
+
+  it('Cluster (#125): each shell lands on a different knot of enemies, the aim point where none is left', () => {
+    const w = arena();
+    nest(w, NestType.Spire, 0, 300, 300);
+    w.factions[0].mods.cluster = true;
+    // Two knots either side of the aim point, nobody on it.
+    const knots = [blob(w, 16, 640, 300), blob(w, 16, 760, 300)];
+    w.factions[0].energy = 100;
+    w.grid.build(w);
+    applyCommand(w, { t: 'barrage', p: 0, x: 700, y: 300 });
+    expect(w.barrages.length).toBe(3);
+    const r = POWER.barrageRadius * VARIANTS.cluster.r;
+    const hits = (b: { x: number; y: number }, k: number[]) => k.filter((j) => (w.x[j] - b.x) ** 2 + (w.y[j] - b.y) ** 2 <= r * r).length;
+    const [a, b, c] = w.barrages;
+    expect(hits(a, knots[0]) * hits(b, knots[1]) + hits(a, knots[1]) * hits(b, knots[0])).toBeGreaterThan(0);
+    expect(c.impact - b.impact).toBe(VARIANTS.cluster.stagger);
   });
 });

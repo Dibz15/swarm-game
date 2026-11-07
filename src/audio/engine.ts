@@ -76,6 +76,7 @@ export class AudioEngine {
   private music: Music | null = null;
   private listener: Listener | null = null;
   private last = new Map<string, number>();
+  private bloom = 0;
   private deathLimit = new RateLimit(16, 6);
   private spawnLimit = new RateLimit(3, 2);
   private nearLevel = 0;
@@ -516,6 +517,65 @@ export class AudioEngine {
     this.noise(this.reverbIn, 1.4, 0.08, 'lowpass', 900, 200);
   }
 
+  /** A warlord's sting (#66): a short brassy motif in its colour's register. */
+  warlordSting(faction: number): void {
+    if (!this.ctx) return;
+    const v = VOICE[faction] ?? VOICE[NEUTRAL];
+    const o = 12 * (v.octave - 2);
+    [0, 3, -2, 0].forEach((s, i) => this.tone(this.ui, this.note(s + o - 12), i === 3 ? 0.9 : 0.28, 'sawtooth', 0.04, { delay: i * 0.17, attack: 0.03 }));
+    this.tone(this.reverbIn, this.note(o - 24), 1.2, v.type, 0.06, { delay: 0.51, attack: 0.05 });
+    this.noise(this.reverbIn, 0.5, 0.05, 'lowpass', 600, 200);
+  }
+
+  /** Holding the line (#67): a wave arrives. A long, rising horn over a rumble. */
+  siegeWave(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(-26), 1.8, 'sawtooth', 0.055, { attack: 0.3, slide: 1.04 });
+    this.tone(this.ui, this.note(-14), 1.2, 'sawtooth', 0.03, { attack: 0.3, delay: 0.3 });
+    this.noise(this.reverbIn, 1.6, 0.08, 'lowpass', 500, 120);
+  }
+
+  /** Holding the line: a boon on offer. Three bright, rising notes. */
+  boonOffer(): void {
+    if (!this.ctx) return;
+    [12, 16, 19].forEach((s, i) => this.tone(this.ui, this.note(s), 0.3, 'triangle', 0.04, { delay: i * 0.08 }));
+  }
+
+  /** Holding the line: your capital has fallen. A fast, urgent alarm. */
+  capitalAlarm(): void {
+    if (!this.ctx) return;
+    for (let k = 0; k < 4; k++) this.tone(this.ui, this.note(k % 2 ? 7 : 12), 0.16, 'square', 0.035, { delay: k * 0.18 });
+  }
+
+  /** Holding the line: the clock ran out and the capital stood. */
+  lineHeld(): void {
+    if (!this.ctx) return;
+    [0, 7, 12, 19].forEach((s, i) => this.tone(this.reverbIn, this.note(s), 1.4, 'triangle', 0.05, { delay: i * 0.14, attack: 0.02 }));
+  }
+
+  /** A stronghold's citadel is under attack: a low two-note horn. */
+  citadelBreach(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(-24), 1.1, 'sawtooth', 0.05, { attack: 0.15, slide: 0.97 });
+    this.tone(this.ui, this.note(-19), 1.3, 'sawtooth', 0.045, { attack: 0.15, delay: 0.55, slide: 0.97 });
+    this.noise(this.reverbIn, 1, 0.05, 'lowpass', 700, 180);
+  }
+
+  /** The citadel falls to you: a bright fanfare. */
+  citadelFall(): void {
+    if (!this.ctx) return;
+    [0, 4, 7, 12, 16].forEach((s, i) => this.tone(this.reverbIn, this.note(s), 0.6 + i * 0.1, 'triangle', 0.05, { delay: i * 0.1 }));
+    this.tone(this.reverbIn, this.note(-12), 1.6, 'sawtooth', 0.04, { delay: 0.5, attack: 0.05 });
+  }
+
+  /** A warlord's stronghold falls: a crash, then a rising chord. */
+  domainBroken(): void {
+    if (!this.ctx) return;
+    this.noise(this.reverbIn, 0.9, 0.09, 'lowpass', 1200, 150);
+    this.tone(this.ui, this.note(-12), 0.6, 'sawtooth', 0.05, { slide: 0.6 });
+    [0, 4, 7, 12].forEach((s, i) => this.tone(this.reverbIn, this.note(s), 1.1, 'triangle', 0.045, { delay: 0.35 + i * 0.08 }));
+  }
+
   /** Supply drop incoming: a bright falling chime. */
   dropIncoming(): void {
     if (!this.ctx) return;
@@ -551,6 +611,53 @@ export class AudioEngine {
     this.tone(out, this.note(-17), 2.2, 'sawtooth', 0.12, { slide: 0.5 });
     this.noise(out, 1.8, 0.2, 'lowpass', 1800, 60);
     if (mine) [0, 7, 12, 19, 24].forEach((s, i) => this.tone(this.ui, this.note(s + 12), 0.7, 'triangle', 0.05, { delay: 0.4 + i * 0.08 }));
+  }
+
+  // ---- the Bloom (campaign) ------------------------------------------------------
+
+  /** A Bloom swarm arrives: the wild-swarm horn, lower and wetter, a tritone apart. */
+  bloomSwarm(): void {
+    if (!this.ctx || !this.throttle('bloomSwarm', 4000)) return;
+    this.tone(this.ui, this.note(-29), 1.8, 'sawtooth', 0.05, { attack: 0.35, slide: 0.9 });
+    this.tone(this.ui, this.note(-23), 1.6, 'sawtooth', 0.035, { attack: 0.35, delay: 0.55, slide: 0.88 });
+    this.noise(this.reverbIn, 1.8, 0.09, 'lowpass', 500, 120);
+  }
+
+  /** The heart draws breath before a pulse: a rising, swelling hum. */
+  heartWindup(x: number, y: number): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, 1, 1.2, 0.08);
+    if (!out) return;
+    this.tone(out, this.note(-31), 1.4, 'sawtooth', 0.05, { attack: 1.1, slide: 1.25 });
+    this.noise(out, 1.4, 0.05, 'bandpass', 200, 900);
+  }
+
+  /** The heart's pulse lands: a deep double thump, like a heartbeat. */
+  heartPulse(x: number, y: number): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, 1.3, 1.6, 0.1);
+    if (!out) return;
+    this.tone(out, this.note(-33), 0.45, 'sine', 0.3, { slide: 0.55 });
+    this.tone(out, this.note(-31), 0.4, 'sine', 0.22, { slide: 0.55, delay: 0.22 });
+    this.noise(out, 0.4, 0.07, 'lowpass', 500, 60);
+  }
+
+  /** The heart weakens and rages: a falling roar with a growl under it. */
+  heartPhase(): void {
+    if (!this.ctx) return;
+    this.tone(this.reverbIn, this.note(-12), 1.8, 'sawtooth', 0.09, { attack: 0.08, slide: 0.6 });
+    this.tone(this.reverbIn, this.note(-18), 1.8, 'sawtooth', 0.07, { attack: 0.08, slide: 0.6 });
+    this.noise(this.reverbIn, 1.6, 0.16, 'lowpass', 2400, 120);
+  }
+
+  /** The heart dies: a long collapse, then (if it was you) a bright release. */
+  heartDown(x: number, y: number, mine: boolean): void {
+    if (!this.ctx) return;
+    const out = this.at(x, y, 1.6, 3, 0.0) ?? this.ui;
+    this.tone(this.reverbIn, this.note(-24), 3.2, 'sawtooth', 0.14, { slide: 0.35 });
+    this.tone(out, this.note(-36), 2.6, 'sine', 0.3, { slide: 0.5 });
+    this.noise(this.reverbIn, 2.8, 0.22, 'lowpass', 2200, 40);
+    if (mine) [0, 4, 7, 12, 16, 19, 24].forEach((s, i) => this.tone(this.ui, this.note(s + 12), 0.9, 'triangle', 0.05, { delay: 0.9 + i * 0.1 }));
   }
 
   // ---- domination -------------------------------------------------------------
@@ -607,6 +714,146 @@ export class AudioEngine {
     this.tone(this.reverbIn, this.note(-29), 3.5, 'sawtooth', 0.08, { attack: 0.4 });
   }
 
+  // ---- campaign run map --------------------------------------------------------
+
+  /** Pointer over a node. */
+  mapHover(): void {
+    if (!this.ctx || !this.throttle('mapHover', 90)) return;
+    this.tone(this.ui, this.note(24), 0.05, 'sine', 0.018);
+  }
+
+  /** A node picked for its preview. */
+  mapSelect(): void {
+    if (!this.ctx || !this.throttle('mapSelect', 80)) return;
+    this.tone(this.ui, this.note(12), 0.12, 'triangle', 0.045);
+    this.tone(this.ui, this.note(19), 0.14, 'triangle', 0.035, { delay: 0.05 });
+  }
+
+  /** The swarm sets off along a link: a few soft, quick steps rising. */
+  march(): void {
+    if (!this.ctx) return;
+    [0, 3, 7].forEach((s, i) => this.tone(this.ui, this.note(s - 12), 0.12, 'triangle', 0.06, { delay: i * 0.09 }));
+    this.noise(this.ui, 0.3, 0.03, 'bandpass', 900, 400);
+  }
+
+  /** The Bloom advances at the end of a turn: a low, slow swell. */
+  bloomAdvance(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(-24), 1.6, 'sawtooth', 0.05, { attack: 0.6, slide: 1.06 });
+    this.tone(this.ui, this.note(-23), 1.6, 'sawtooth', 0.035, { attack: 0.7 });
+    this.noise(this.reverbIn, 1.6, 0.06, 'lowpass', 200, 700);
+  }
+
+  /** A node falls to the Bloom: a wet, low crunch. `i` staggers several. */
+  swallow(i = 0): void {
+    if (!this.ctx) return;
+    const d = 0.25 + i * 0.16;
+    this.noise(this.ui, 0.35, 0.09, 'lowpass', 1400, 120, d);
+    this.tone(this.ui, this.note(-17), 0.4, 'sine', 0.12, { slide: 0.6, delay: d });
+  }
+
+  /** A brood wounded: a dull falling pair. */
+  broodWounded(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(3), 0.3, 'triangle', 0.05, { slide: 0.85 });
+    this.tone(this.ui, this.note(-2), 0.4, 'triangle', 0.045, { slide: 0.85, delay: 0.14 });
+  }
+
+  /** A brood lost: a low toll with a long tail. */
+  broodLost(): void {
+    if (!this.ctx) return;
+    this.tone(this.reverbIn, this.note(-12), 2.4, 'sine', 0.16, { attack: 0.01 });
+    this.tone(this.reverbIn, this.note(-5), 2.0, 'sine', 0.06, { attack: 0.01 });
+    this.tone(this.ui, this.note(-24), 1.6, 'sine', 0.12, { slide: 0.9 });
+  }
+
+  /** A brood rescued: a short rising fanfare. */
+  broodRescued(): void {
+    if (!this.ctx) return;
+    [0, 3, 7, 12, 15].forEach((s, i) => this.tone(this.ui, this.note(s), 0.35, 'triangle', 0.05, { delay: 0.25 + i * 0.07 }));
+  }
+
+  /** Camp: biomass spent on an unlock. */
+  biomassSpent(): void {
+    if (!this.ctx) return;
+    this.noise(this.ui, 0.2, 0.05, 'bandpass', 1800, 600);
+    this.tone(this.ui, this.note(7), 0.18, 'sine', 0.05, { slide: 0.7 });
+    this.tone(this.ui, this.note(19), 0.3, 'triangle', 0.04, { delay: 0.1 });
+  }
+
+  /** Camp: a brood healed. */
+  broodHealed(): void {
+    if (!this.ctx) return;
+    [7, 12, 19].forEach((s, i) => this.tone(this.ui, this.note(s), 0.4, 'sine', 0.04, { delay: i * 0.06, attack: 0.03 }));
+  }
+
+  /** Camp: a brood's cap grown. */
+  broodGrown(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(0), 0.35, 'triangle', 0.05, { slide: 1.5 });
+    this.tone(this.ui, this.note(12), 0.3, 'triangle', 0.035, { delay: 0.12 });
+  }
+
+  /** The checkpoint reached: a bright two-chord chime. */
+  checkpointReached(): void {
+    if (!this.ctx) return;
+    [0, 7, 12].forEach((s) => this.tone(this.reverbIn, this.note(s), 1.2, 'sine', 0.05, { attack: 0.02 }));
+    [3, 10, 15].forEach((s) => this.tone(this.reverbIn, this.note(s), 1.4, 'sine', 0.04, { attack: 0.02, delay: 0.35 }));
+  }
+
+  /** The checkpoint saves the run: time rewinding, then the chime. */
+  checkpointRestart(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(24), 0.8, 'sine', 0.05, { slide: 0.25 });
+    this.noise(this.reverbIn, 0.8, 0.06, 'bandpass', 3000, 300);
+    [0, 7, 12].forEach((s, i) => this.tone(this.reverbIn, this.note(s), 1.2, 'sine', 0.05, { delay: 0.8 + i * 0.08 }));
+  }
+
+  /** Rewards: three cards dealt, one soft flick each. */
+  cardsRevealed(): void {
+    if (!this.ctx) return;
+    [0, 1, 2].forEach((i) => {
+      this.noise(this.ui, 0.06, 0.03, 'highpass', 4000, 2000, i * 0.09);
+      this.tone(this.ui, this.note(12 + i * 4), 0.12, 'triangle', 0.03, { delay: i * 0.09 + 0.01 });
+    });
+  }
+
+  /** Rewards: a pick. Rarer picks ring higher and longer. */
+  rewardPick(tier: 'common' | 'uncommon' | 'rare'): void {
+    if (!this.ctx) return;
+    const notes = tier === 'rare' ? [0, 7, 12, 16, 19, 24] : tier === 'uncommon' ? [0, 7, 12, 16] : [0, 7, 12];
+    notes.forEach((s, i) => this.tone(this.ui, this.note(s + 12), 0.45, 'triangle', 0.045, { delay: i * 0.06 }));
+    if (tier === 'rare') this.tone(this.reverbIn, this.note(24), 1.6, 'sine', 0.06, { attack: 0.05, delay: 0.3 });
+  }
+
+  /** Rewards: a reroll, cards swept away and dealt again. */
+  rerollOffer(): void {
+    if (!this.ctx) return;
+    this.noise(this.ui, 0.25, 0.05, 'bandpass', 1200, 4000);
+    this.tone(this.ui, this.note(7), 0.2, 'sine', 0.035, { slide: 1.6, delay: 0.05 });
+  }
+
+  /** Rewards: a pact taken. Power with a shadow: a low minor stab under the chime. */
+  pactTaken(): void {
+    if (!this.ctx) return;
+    this.tone(this.reverbIn, this.note(-24), 1.8, 'sawtooth', 0.07, { attack: 0.02, slide: 0.97 });
+    [0, 3, 6].forEach((s) => this.tone(this.ui, this.note(s - 12), 1.0, 'triangle', 0.045, { attack: 0.01 }));
+    [12, 15, 18].forEach((s, i) => this.tone(this.ui, this.note(s), 0.6, 'sine', 0.03, { delay: 0.25 + i * 0.07 }));
+  }
+
+  /** Hub: a new run begins. */
+  runStart(): void {
+    if (!this.ctx) return;
+    [0, 7, 12].forEach((s, i) => this.tone(this.ui, this.note(s), 0.3, 'triangle', 0.05, { delay: i * 0.07 }));
+  }
+
+  /** Hub: a run deleted. */
+  runDelete(): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(-5), 0.4, 'sine', 0.06, { slide: 0.5 });
+    this.noise(this.ui, 0.3, 0.04, 'lowpass', 800, 100);
+  }
+
   // ---- per frame -------------------------------------------------------------
 
   /**
@@ -647,6 +894,13 @@ export class AudioEngine {
     const musicOn = mode === 'ended' || this.muted ? 0 : Math.min(1, this.volumes.music * 1.5);
     this.ambience?.setRoot(this.theme.root);
     this.ambience?.update(dt, { tension: this.tension, danger, escalation: escal, inGame: human >= 0, music: musicOn, paused: mode === 'paused' });
-    this.music?.update(dt, { mode, tension: this.tension, danger, escalation: escal, domination: dom });
+    // The Bloom: set by the run map, or read from a campaign battle (its swarms, its heart).
+    const bloom = w && mode !== 'menu' ? (w.heart ? 1 : w.events?.spec.params.bloom ? 0.6 : 0) : this.bloom;
+    this.music?.update(dt, { mode, tension: this.tension, danger, escalation: escal, domination: dom, bloom });
+  }
+
+  /** How close the Bloom is on the run map (0..1); the menu score darkens with it. */
+  setBloom(v: number): void {
+    this.bloom = Math.max(0, Math.min(1, v));
   }
 }

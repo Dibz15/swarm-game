@@ -19,10 +19,24 @@
  * plays any setup: 1v1, FFA, domination, and campaign battles.
  */
 
-import { barrageLaunch, feedNeed, hasPower, type Command } from '../sim/commands';
+import { barrageLaunch, feedNeed, hasPower, surgeCost, type Command } from '../sim/commands';
 import { LEVEL, MAX_LEVEL, NEUTRAL, NestType, POWER, TICK_HZ, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, bastionTurret } from '../sim/constants';
+import { heartSlot, standingNests } from '../sim/heart';
 import { queryRadius } from '../sim/spatial';
-import { UNIT_FEEDING, type Nest, type World } from '../sim/world';
+import { inArmy, type Nest, type World } from '../sim/world';
+
+/** `goal` while assaulting the Bloom's heart (not a nest id) */
+const HEART_GOAL = -2;
+/** blob size at which the proxy goes for a stronghold's citadel... */
+const CITADEL_BLOB = 60;
+/** ...once it outnumbers the hostile units within CITADEL_R of it this many times over */
+const CITADEL_EDGE = 1.5;
+const CITADEL_R = 300;
+/** Key nests (#87): worth this much more as a goal once open; while sealed, a little less (nobody can take them yet). */
+const KEY_VALUE = 3;
+const KEY_SEALED = 0.5;
+/** hostile units this close to its capital send a sieged proxy home (#67) */
+const SIEGE_ALARM = 380;
 
 export interface ProxyKnobs {
   /** seconds between strategic decisions */
@@ -111,6 +125,8 @@ export interface ProxyOptions {
   skill?: number;
   /** Nova is locked (campaign: a client-side lock the sim doesn't know about) */
   novaLocked?: boolean;
+  /** blob size at which it goes for a stronghold's citadel (default CITADEL_BLOB; low = a rush) */
+  citadelBlob?: number;
 }
 
 type Mode = 'expand' | 'hold' | 'punish' | 'counter';
@@ -130,6 +146,15 @@ export class Proxy {
   /** army weight when the current push started */
   private pushFrom = 0;
   private readonly novaLocked: boolean;
+  private readonly citadelBlob: number;
+
+  /** Hostile units within r of (x, y); neutral garrisons (which never move) don't count. */
+  private near(w: World, x: number, y: number, r: number): number {
+    queryRadius(w, x, y, r, scratch);
+    let n = 0;
+    for (const s of scratch) if (w.hostile(w.owner[s], this.f) && (w.owner[s] !== NEUTRAL || w.wild[s] !== 0)) n++;
+    return n;
+  }
 
   constructor(
     readonly f: number,
@@ -137,6 +162,7 @@ export class Proxy {
   ) {
     this.k = { ...knobsFor(opts.skill ?? 1), ...opts.knobs };
     this.novaLocked = !!opts.novaLocked;
+    this.citadelBlob = opts.citadelBlob ?? CITADEL_BLOB;
   }
 
   private hostile(w: World, o: number): boolean {
@@ -195,7 +221,7 @@ export class Proxy {
     const weight = new Float64Array(w.factions.length);
     let cx = 0, cy = 0;
     for (let i = 0; i < w.n; i++) {
-      if (!w.alive[i] || w.state[i] === UNIT_FEEDING) continue;
+      if (!inArmy(w, i)) continue;
       const o = w.owner[i];
       weight[o] += UNIT_STATS[w.kind[i]].weight;
       if (o !== me) continue;
@@ -259,6 +285,54 @@ export class Proxy {
       for (const s of blob) (bx += w.x[s]), (by += w.y[s]);
       bx /= blob.length;
       by /= blob.length;
+      // Hold the line (#67): the capital is everything. While anything hostile
+      // is near it, or once it has fallen, the whole blob goes home for it.
+      const sg = w.siege;
+      if (sg && sg.human === me) {
+        const cap = w.nests[sg.capital];
+        if (cap.owner !== me || this.near(w, cap.x, cap.y, SIEGE_ALARM) > 0) {
+          if (this.goal !== cap.id || w.tick - this.lastOrder >= this.k.refresh * TICK_HZ) {
+            out.push({ t: 'move', p: me, units: blob.map((s) => w.uid[s]), x: cap.x, y: cap.y, nest: cap.id });
+            this.goal = cap.id;
+            this.lastOrder = w.tick;
+          }
+          this.mode = 'hold';
+          this.upgrade(w, mine, army, out);
+          return out;
+        }
+      }
+      // The Bloom's heart (campaign finale): once its nests are taken, or the
+      // blob is big enough to grind through the ward, go for it.
+      const heart = heartSlot(w);
+      if (heart >= 0 && blob.length >= 45 && (standingNests(w) === 0 || blob.length >= 90)) {
+        const hx = w.x[heart], hy = w.y[heart];
+        if (this.goal !== HEART_GOAL || w.tick - this.lastOrder >= this.k.refresh * TICK_HZ) {
+          const units = this.straggle(w, blob, bx, by);
+          out.push({ t: 'move', p: me, units: units.map((s) => w.uid[s]), x: hx, y: hy, nest: -1 });
+          if (mine.length && this.goal !== HEART_GOAL) out.push({ t: 'rally', p: me, nests: mine.map((n) => n.id), x: hx, y: hy });
+          this.goal = HEART_GOAL;
+          this.lastOrder = w.tick;
+        }
+        this.mode = 'counter';
+        this.upgrade(w, mine, army, out);
+        return out;
+      }
+      // A stronghold (#100): taking the citadel wins, so once the blob is big
+      // enough it marches through the gates for it, like a human would.
+      // Only with the upper hand there, though: like a human, it expands until then.
+      const cit = w.citadel >= 0 ? w.nests[w.citadel] : null;
+      if (cit && cit.owner !== me && blob.length >= this.citadelBlob && blob.length >= CITADEL_EDGE * this.near(w, cit.x, cit.y, CITADEL_R)) {
+        if (this.goal !== cit.id || w.tick - this.lastOrder >= this.k.refresh * TICK_HZ) {
+          const units = this.straggle(w, blob, bx, by);
+          out.push({ t: 'move', p: me, units: units.map((s) => w.uid[s]), x: cit.x, y: cit.y, nest: cit.id });
+          if (mine.length && this.goal !== cit.id) out.push({ t: 'rally', p: me, nests: mine.map((n) => n.id), x: cit.x, y: cit.y });
+          this.goal = cit.id;
+          this.lastOrder = w.tick;
+        }
+        this.mode = 'counter';
+        this.upgrade(w, mine, army, out);
+        return out;
+      }
       const pushing = this.mode === 'counter' && this.pushFrom > 0;
       const bled = pushing && mySize < this.pushFrom * this.k.bleed;
       if (bled) this.pushFrom = 0;
@@ -269,8 +343,15 @@ export class Proxy {
       // recorded human, raid its nests to keep it under the line.
       const leaders = new Set<number>();
       let racing = false;
+      // Key nests (#87): the team past half the winning score is the one to stop.
+      const keyed = w.keys.length > 0;
       for (const [team, k] of held) {
-        if (team === w.teamOf[me] || k < need - this.k.domWatch) continue;
+        if (team === w.teamOf[me]) continue;
+        if (keyed) {
+          if (w.domTicks[team] > 0) leaders.add(team), (racing = true);
+          continue;
+        }
+        if (k < need - this.k.domWatch) continue;
         leaders.add(team);
         if (k >= need) racing = true;
       }
@@ -285,7 +366,9 @@ export class Proxy {
       for (const n of w.nests) {
         if (n.owner === me || (n.owner >= 0 && w.teamOf[n.owner] === w.teamOf[me])) continue;
         const enemy = this.hostile(w, n.owner);
-        const leader = enemy && leaders.has(w.teamOf[n.owner]);
+        const key = keyed && w.keys.includes(n.id);
+        // With key nests, only a key nest slows the leader.
+        const leader = enemy && leaders.has(w.teamOf[n.owner]) && (!keyed || key);
         // Without the upper hand overall, a push must beat the enemy army nearby too.
         let scout = this.k.scout;
         if (enemy) {
@@ -306,6 +389,7 @@ export class Proxy {
         if (leader) score *= racing ? 8 : 3;
         else if (racing) score *= 0.3;
         if (enemy && rivals > 1) score *= ((held.get(w.teamOf[n.owner]) ?? 0) / Math.max(1, most)) ** this.k.buffer;
+        if (key) score *= w.keySealUntil > w.tick ? KEY_SEALED : KEY_VALUE;
         if (n.id === this.goal) score *= 1.4;
         if (score > best) {
           best = score;
@@ -408,7 +492,7 @@ export class Proxy {
     const flush = e >= this.k.dumpAt;
     if (center < 0 || most < (flush ? 3 : 6)) return;
     queryRadius(w, w.x[center], w.y[center], 90, scratch);
-    const own = scratch.filter((s) => w.owner[s] === me && w.state[s] !== UNIT_FEEDING).map((s) => w.uid[s]);
+    const own = scratch.filter((s) => w.owner[s] === me && inArmy(w, s)).map((s) => w.uid[s]);
     let ex = 0, ey = 0, ne = 0;
     for (const s of scratch) {
       if (!w.hostile(w.owner[s], me)) continue;
@@ -423,6 +507,6 @@ export class Proxy {
     if (!this.novaLocked && most >= 20 && own.length >= 15 && e >= POWER.novaCost && this.ready(w, 'nova')) cast({ t: 'nova', p: me, units: own });
     else if (ne >= 12 && e >= POWER.barrageCost && this.ready(w, 'barrage') && hasPower(w, me, 'barrage') && barrageLaunch(w, me, ex / ne, ey / ne)) cast({ t: 'barrage', p: me, x: ex / ne, y: ey / ne });
     else if (this.mode === 'punish' && own.length >= 10 && e >= POWER.fortifyCost && this.ready(w, 'fortify') && hasPower(w, me, 'fortify')) cast({ t: 'fortify', p: me, units: own });
-    else if (own.length >= (flush ? 3 : 6) && e >= POWER.surgeCost && (flush || this.ready(w, 'surge'))) cast({ t: 'surge', p: me, units: own });
+    else if (own.length >= (flush ? 3 : 6) && e >= surgeCost(w, me) && (flush || this.ready(w, 'surge'))) cast({ t: 'surge', p: me, units: own });
   }
 }

@@ -63,6 +63,8 @@ export interface CameraView {
   viewW: number;
   viewH: number;
   zoom: number;
+  /** quarter turns of the view (#98), none if absent */
+  turn?: number;
 }
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
@@ -92,7 +94,9 @@ export class Recorder {
     const t = w.tick;
     if (cam && t - this.lastCam >= CAM_EVERY) {
       this.lastCam = t;
-      this.trace.cam.push([t, r1(cam.cx), r1(cam.cy), r1(cam.viewW / cam.zoom / 2), r1(cam.viewH / cam.zoom / 2)]);
+      // Half-extents in world axes: swapped on a turned view (#98).
+      const [hw, hh] = (cam.turn ?? 0) % 2 ? [cam.viewH, cam.viewW] : [cam.viewW, cam.viewH];
+      this.trace.cam.push([t, r1(cam.cx), r1(cam.cy), r1(hw / cam.zoom / 2), r1(hh / cam.zoom / 2)]);
       for (const n of w.nests) {
         const c = n.owner === this.human && n.contested;
         if (c && !this.contested[n.id]) this.trace.alerts.push([t, n.id, r1(n.x), r1(n.y)]);

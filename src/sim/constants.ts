@@ -68,6 +68,44 @@ export const TRAITS = {
   stomp: { radius: 46, damage: 14, every: 2 * 30 },
 };
 
+/**
+ * Behaviour strains (#60): campaign rewards that add a rule, not just a
+ * number. Each is off unless the faction's KindMods turn it on. PROVISIONAL
+ * numbers (#68).
+ */
+export const STRAINS = {
+  /** Swarm-call: a dying Swarmer rouses Swarmers this close for `ticks` (damage +call, speed ×speed) */
+  call: { radius: 70, ticks: 2 * 30, speed: 1.2 },
+  /** Phalanx: Shields count other Shields this close, up to `max` */
+  phalanx: { radius: 26, max: 3 },
+  /** Piercing: Spear shots carry this far past the target, hitting up to `extra` within `width` of the line */
+  line: { reach: 90, width: 10, extra: 3, damage: 0.45 },
+  /** Skirmish: Raiders below `flee` of their HP fall back to a nest, heal there at `heal` hp/s and return at `back` */
+  skirmish: { flee: 0.35, back: 0.9, heal: 6 },
+};
+
+/** Pacts with a rule of their own (#60). PROVISIONAL numbers (#68). */
+export const PACTS = {
+  /** Blood price: a power costs one unit per this much energy it would have cost */
+  bloodPerUnit: 6,
+};
+
+/** Power variants with a rule of their own (#60). Cluster's budget raised from 0.75 on measured impact (#68), its shells aimed at knots of enemies (#125); the rest PROVISIONAL. */
+export const VARIANTS = {
+  /** Cluster: three shells on the knots of enemies within `reach` of the aim point, each this much of the radius and budget, landing `stagger` ticks apart */
+  cluster: { reach: 90, r: 0.6, budget: 0.9, stagger: 5 },
+  /** Scorch: the impact's budget share, and a burn of `dps` that lasts `ticks` */
+  scorch: { budget: 0.6, dps: 5, ticks: 6 * 30 },
+  /** Implode: damage share (the knockback pulls in instead) */
+  implode: { damage: 0.75 },
+  /** Mend: share of full HP healed over the Surge */
+  mend: { heal: 0.35 },
+  /** Echo: ghosts per unit blinked (at most `max`), their HP and how long they last */
+  echo: { per: 0.25, max: 6, hp: 20, ticks: 4 * 30 },
+  /** Siphon: how long Lockdown rests after a siphoning lock ends, so it can't be chained */
+  siphon: { rest: 5 * 30 },
+};
+
 /** units notice enemies this far beyond their attack range */
 export const AGGRO_EXTRA = 26;
 /** a unit shot from beyond its notice range turns on its attacker if it's within this much extra */
@@ -84,6 +122,8 @@ export const RETARGET = 6;
 
 export const NestType = { Hive: 0, Forge: 1, Spire: 2, Swift: 3, Bastion: 4 } as const;
 export const NEST_NAMES = ['Hive', 'Forge', 'Spire', 'Den', 'Bastion'] as const;
+/** every nest type unlocked (Faction.nestTypes default) */
+export const ALL_NEST_TYPES = 0b11111;
 /** unit kind spawned by each nest type; -1 = spawns nothing */
 export const NEST_KIND: readonly number[] = [Kind.Dot, Kind.Tank, Kind.Lancer, Kind.Swift, Kind.Dot];
 /** per-type spawn speed multiplier (Bastion trades production for defense) */
@@ -240,6 +280,42 @@ export const DOMINATION = {
   ticks: 30 * TICK_HZ,
 };
 
+/**
+ * Key nests (#87): a campaign Domination battle is scored on its key nests,
+ * king of the hill. Each team scores a point a tick for each key nest it holds
+ * uncontested, and wins at `points` per key nest (all of them held: `points`
+ * ticks; half of them: twice that). Nothing pauses or resets, so a split map
+ * still ends. Past `threat` of the target a team is the one everyone stops.
+ * Key nests sit away from every start, are sealed for the first `seal` ticks
+ * (no one can take them), and start with `garrison` times the guards, so a
+ * rusher can't grab them early.
+ */
+export const KEYS = {
+  points: 45 * TICK_HZ,
+  threat: 0.5,
+  seal: 60 * TICK_HZ,
+  garrison: 1.5,
+  /** key nests are at least this far apart (px) */
+  apart: 220,
+};
+
+/**
+ * Conquest's late Bloom surge (#87): past `after` seconds, a warning, then a
+ * wave of Bloom swarms every `every` seconds from the map's edges, each `grow`
+ * times the last (up to `max` a swarm), so turtles can't stall a Conquest to the end.
+ */
+export const SURGE = {
+  after: 360,
+  warn: 20,
+  every: 30,
+  size: 18,
+  grow: 1.25,
+  /** swarms per wave, from spawns spread round the edge */
+  swarms: 2,
+  /** no swarm bigger than this, so a long battle's waves can't fill the unit pool */
+  max: 60,
+};
+
 /** Terrain: walls block movement and line of fire; fields change movement and fights. */
 export const TERRAIN = {
   /** pathing keeps tile centers this far from walls */
@@ -250,12 +326,26 @@ export const TERRAIN = {
   losGrace: 3,
   /** flow-field cost multipliers: units route around slow or dangerous ground when it pays */
   nebulaCost: 1.6,
-  riftCost: 3,
+  /** low enough that a thin rift line is worth cutting across; long seams and pools still add up */
+  riftCost: 1.8,
+  /**
+   * ...but heat builds with time inside (#58), so the core of a wide rift (a
+   * pool or a rift sea, wider than `riftWide`) costs far more, from `riftDeep` in.
+   * Rift lines are thinner, so crossing one stays cheap.
+   */
+  riftWide: 20,
+  riftDeep: 8,
+  riftDeepCost: 6,
   maxFields: 96,
   /** Nebula: movement speed multiplier */
   nebulaSlow: 0.55,
-  /** Rift: damage per second to anything standing in it */
-  riftDps: 2.4,
+  /**
+   * Rift (#58): heat builds while a unit stands in it (one tick per tick, up to
+   * `heatTicks`) and drains `cool` ticks per tick outside. Damage per second
+   * climbs from `minDps` to `maxDps` with heat squared: a dash costs a scratch,
+   * staying or fighting inside kills.
+   */
+  rift: { minDps: 1, maxDps: 12, heatTicks: 3 * TICK_HZ, cool: 2 },
   /** Crystal: energy per second for the only team standing on it */
   crystalEnergy: 1.1,
 };

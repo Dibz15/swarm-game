@@ -1,7 +1,10 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
-import { BASTION, DAMAGE_VS, DOMINATION, EVENTS, Kind, NEUTRAL, NestType, POWER, UNIT_FEEDING, UNIT_STATS, UPGRADE_COST } from '../sim/index';
-import type { World } from '../sim/world';
+import { bastionRange, keyTarget, DAMAGE_VS, DOMINATION, EVENTS, KEYS, Kind, NEUTRAL, NestType, POWER, TERRAIN, UNIT_FEEDING, UNIT_RETREAT, UNIT_STATS, UPGRADE_COST, VARIANTS } from '../sim/index';
+import { HEART, heartSlot, standingNests } from '../sim/heart';
+import { WILD_HEART, type World } from '../sim/world';
 import type { Renderer } from './renderer';
+import type { TraitId } from '../campaign/warlords';
+import { BLOOM_GLOW, BLOOM_RGB, bloomBreath, drawBloomNests, drawHeartBody, type BloomView } from './bloom';
 
 export interface SceneOpts {
   alpha: number;
@@ -12,14 +15,22 @@ export interface SceneOpts {
   selectedNests: ReadonlySet<number>;
   hoverNest: number;
   human: number;
+  /** a campaign warlord in this battle (#66, #100): its units wear its trait's look */
+  warlord?: { faction: number; trait: TraitId } | null;
+  /** the Bloom's nests, client-side (#94): how overgrown each is, and when a wave last swelled out */
+  bloom?: BloomView | null;
+  /** factions on your team (1), in a team match; null otherwise (#74) */
+  allies?: Uint8Array | null;
 }
 
 /** Nest outline echoes its unit: Hive hex, Forge block, Spire needle, Den arrowhead, Bastion octagon. */
 const NEST_SHAPE = [1, 2, 4, 3, 5];
 const NEST_SPIN = [0.22, 0.1, -0.28, 0.7, 0.12];
 const UNOWNED: RGB = [70, 76, 96];
-/** wild event units: ash red, so they don't read as gray garrisons */
-export const FERAL: RGB = [214, 92, 78];
+/** wild event units: the Bloom's colour (#94), wherever they come from */
+export const FERAL: RGB = BLOOM_RGB;
+/** Key nests (#87): gold, until someone holds one */
+export const KEY_RGB: RGB = [242, 196, 92];
 export const DROP_RGB: RGB = [255, 226, 140];
 const SELECT_MIX = 0.5;
 
@@ -27,8 +38,11 @@ export function drawWorld(r: Renderer, w: World, o: SceneOpts): void {
   r.useTerrain(w.terrain);
   drawCrystals(r, w, o);
   drawNests(r, w, o);
+  if (o.bloom) drawBloomNests(r, w, o.bloom, o.time);
   drawBeams(r, w, o);
+  r.setGooColors(BLOOM_RGB, BLOOM_GLOW);
   drawUnits(r, w, o);
+  drawBurns(r, w, o);
   drawBarrages(r, w, o);
   drawEvents(r, w, o);
 }
@@ -45,10 +59,11 @@ function drawCrystals(r: Renderer, w: World, o: SceneOpts): void {
     // Zone ring: dim when free, the holder's color while charging.
     r.shape(false, c.x, c.y, c.r, 0, 1, 0, 0.025, col, held ? Math.round(110 + 70 * pulse) : 55);
     r.shape(false, c.x, c.y, c.r, 7, 1, 0, 0, col, held ? 22 : 10);
-    // Core: a slow hex with shards orbiting it.
+    // Core: a slow hex with shards orbiting it, more of them the more it pays (#114).
     r.shape(false, c.x, c.y, 9, 1, 0, o.time * 0.6 + k, 0.6, col, 230);
-    for (let s = 0; s < 3; s++) {
-      const a = o.time * (held ? 1.6 : 0.5) + (s * Math.PI * 2) / 3 + k;
+    const shards = c.value > 1 ? 4 : c.value < 1 ? 2 : 3;
+    for (let s = 0; s < shards; s++) {
+      const a = o.time * (held ? 1.6 : 0.5) + (s * Math.PI * 2) / shards + k;
       const d = 14 + 2 * Math.sin(o.time * 2 + s);
       r.unit(c.x + Math.cos(a) * d, c.y + Math.sin(a) * d, 4.2, col[0], col[1], col[2], 235, 2, a + Math.PI / 2);
     }
@@ -97,15 +112,48 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
 
     // Nests of a dominating team throb, faster as the clock runs down.
     if (n.owner >= 0 && n.owner !== NEUTRAL && w.domTicks[w.teamOf[n.owner]] > 0) {
-      const k = w.domTicks[w.teamOf[n.owner]] / DOMINATION.ticks;
+      const k = w.domTicks[w.teamOf[n.owner]] / (w.keys.length ? keyTarget(w) : DOMINATION.ticks);
       const beat = 0.5 + 0.5 * Math.sin(o.time * (4 + 10 * k));
       r.shape(true, n.x, n.y, R * (1.6 + 0.25 * beat), 0, 1, 0, 0.05, c, Math.round(90 + 140 * beat));
       r.shape(false, n.x, n.y, R * 1.9, 7, 1, 0, 0, c, Math.round(18 + 30 * beat));
     }
 
+    // An ally's nest (#74): a chevron above it, so it reads as friendly by shape, not just colour.
+    if (o.allies && n.owner >= 0 && o.allies[n.owner]) {
+      // Above the outermost ring (key nests reach R×2 with their seal arc, domination R×1.85).
+      const h = R * 2.35, s = R * 0.48;
+      const tx = n.x, ty = n.y - h;
+      r.beam(tx - s, ty + s * 0.6, tx, ty, 255, 255, 255, 230, 3.4);
+      r.beam(tx, ty, tx + s, ty + s * 0.6, 255, 255, 255, 230, 3.4);
+      r.beam(tx - s, ty + s * 0.6, tx, ty, c[0], c[1], c[2], 255, 1.6);
+      r.beam(tx, ty, tx + s, ty + s * 0.6, c[0], c[1], c[2], 255, 1.6);
+    }
+
     // Capitals wear a second, slowly counter-rotating ring.
     if (n.capital && n.owner >= 0 && n.owner !== NEUTRAL) {
       r.shape(false, n.x, n.y, n.r * 1.2, 0, 0.92, 0, 0.035, c, 120);
+    }
+    // Key nests (#87): a pulsing gold ring (the holder's color once taken), faint while still sealed.
+    if (w.keys.includes(n.id)) {
+      const sealed = w.keySealUntil > w.tick;
+      const kc = n.owner >= 0 && n.owner !== NEUTRAL ? c : KEY_RGB;
+      const pulse = 0.5 + 0.5 * Math.sin(o.time * 2.4);
+      r.shape(false, n.x, n.y, R * 1.7, 0, 1, 0, 0.07, kc, Math.round((sealed ? 70 : 140) + 80 * pulse));
+      // While sealed, an outer arc runs down to the moment it opens.
+      if (sealed) r.shape(false, n.x, n.y, R * 2, 0, (w.keySealUntil - w.tick) / KEYS.seal, 0, 0.03, KEY_RGB, 110);
+    }
+    // A warlord's capital wears a crown (#66); a stronghold's citadel a bigger one,
+    // and a slow ring of battlements while it stands (#100).
+    const citadel = n.id === w.citadel;
+    const lordCap = !!o.warlord && n.capital && n.owner === o.warlord.faction;
+    if (citadel || lordCap) {
+      const lc = FACTION_RGB[o.warlord?.faction ?? n.owner] ?? c;
+      if (lordCap && o.warlord!.trait === 'broodmother') {
+        const beat = Math.pow(0.5 + 0.5 * Math.sin(o.time * 2.2), 2);
+        r.shape(true, n.x, n.y, R * (1.35 + 0.12 * beat), 0, 1, 0, 0.06, lc, Math.round(60 + 100 * beat));
+      }
+      if (citadel && n.owner !== o.human) r.shape(false, n.x, n.y, R * 1.55, 0, 0.9, o.time * 0.15, 0.05, lc, 150);
+      crownAt(r, n.x, n.y - R * (citadel ? 1.9 : 1.6), citadel ? 1.6 : 1.1, lc);
     }
 
     // Level pips under the nest.
@@ -125,7 +173,7 @@ function drawNests(r: Renderer, w: World, o: SceneOpts): void {
     }
 
     if (n.type === NestType.Bastion && n.owner >= 0) {
-      const range = BASTION.range + BASTION.rangePerLevel * (n.level - 1);
+      const range = bastionRange(w, n);
       const a = selected || hover ? 90 : n.owner === NEUTRAL ? 28 : 18;
       r.shape(false, n.x, n.y, range, 0, 1, 0, 1.2 / range, c, a);
     }
@@ -205,20 +253,46 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
   const sel = o.selected;
   const surgeGlow = 0.5 + 0.5 * Math.sin(o.time * 18);
   const lit: RGB[] = FACTION_RGB.map((c) => mixRgb(c, WHITE, SELECT_MIX));
+  // The warlord's units (#100): a pale halo on all of them, and their trait's look.
+  const lord = o.warlord?.faction ?? -1;
+  const trait = o.warlord?.trait;
+  const halo = lord >= 0 ? mixRgb(FACTION_RGB[lord], WHITE, 0.55) : WHITE;
+  const swarmBeat = 1 + 0.18 * Math.sin(o.time * 6);
+  // The Bloom's wild units breathe together, with the heart while it lives (#94).
+  const breath = bloomBreath(w, o.time);
+  const wildC = mixRgb(BLOOM_RGB, BLOOM_GLOW, 0.3 * breath);
   for (let i = 0; i < w.n; i++) {
     if (!w.alive[i]) continue;
     const x = w.px[i] + (w.x[i] - w.px[i]) * a;
     const y = w.py[i] + (w.y[i] - w.py[i]) * a;
     const owner = w.owner[i];
     const kind = w.kind[i];
-    let c = sel && sel[i] ? lit[owner] : w.wild[i] ? FERAL : FACTION_RGB[owner];
+    const wild = w.wild[i];
+    // The Bloom's heart: its own body (#94), not a recoloured Colossus.
+    if (wild === WILD_HEART) {
+      drawHeartBody(r, w, x, y, HEART.size, o.time);
+      continue;
+    }
+    let c = sel && sel[i] ? lit[owner] : wild ? wildC : FACTION_RGB[owner];
     let size = UNIT_STATS[kind].size;
+    if (wild && kind !== Kind.Colossus) size *= 1 + 0.06 * breath;
     let alpha = owner === NEUTRAL ? 200 : 255;
     if (w.surge[i] > w.tick) {
-      c = mixRgb(c, WHITE, 0.25 * surgeGlow);
+      // Mend's Surge glows green.
+      c = mixRgb(c, w.factions[owner]?.mods.mend ? MEND_RGB : WHITE, 0.25 * surgeGlow);
       size *= 1.15;
     }
+    // Rift heat (#58): an ember glow that builds the longer they stand in it.
+    if (w.heat[i]) {
+      const f = w.heat[i] / TERRAIN.rift.heatTicks;
+      c = mixRgb(c, EMBER_RGB, 0.6 * f);
+      size *= 1 + 0.08 * f;
+    }
     if (w.state[i] === UNIT_FEEDING) alpha = 190;
+    // Skirmish: falling back, faded.
+    else if (w.state[i] === UNIT_RETREAT) alpha = 150;
+    // Echo's ghosts: see-through.
+    if (w.ghost[i]) alpha = 90;
     // Veterans from level-3 nests: a touch bigger and brighter.
     if (w.vet[i]) {
       size *= 1.15;
@@ -233,14 +307,47 @@ function drawUnits(r: Renderer, w: World, o: SceneOpts): void {
       if (w.engaged[i] && t >= 0) angle = Math.atan2(w.y[t] - w.y[i], w.x[t] - w.x[i]);
       else angle = Math.atan2(w.vy[i], w.vx[i]);
     }
-    // Swifts leave a faint streak behind them.
+    // Swifts leave a faint streak behind them (a Raider-king's, long and bright).
+    const lords = owner === lord;
     if (kind === Kind.Swift) {
       const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
-      if (sp2 > 400) r.beam(x - w.vx[i] * 0.16, y - w.vy[i] * 0.16, x, y, c[0], c[1], c[2], 70, 1.4);
+      const king = lords && trait === 'raider-king';
+      if (sp2 > 400) r.beam(x - w.vx[i] * (king ? 0.4 : 0.16), y - w.vy[i] * (king ? 0.4 : 0.16), x, y, c[0], c[1], c[2], king ? 150 : 70, king ? 2.2 : 1.4);
     }
-    const shape = kind + (w.fortify[i] > w.tick ? 10 : 0);
+    // Bloom dots are lumpy blobs that churn, and leave a faint smear of spores as they move.
+    const blob = wild !== 0 && kind === Kind.Dot;
+    if (blob) {
+      angle = o.time * 0.9 + i * 1.7;
+      const sp2 = w.vx[i] * w.vx[i] + w.vy[i] * w.vy[i];
+      if (sp2 > 100) r.beam(x - w.vx[i] * 0.14, y - w.vy[i] * 0.14, x, y, BLOOM_GLOW[0], BLOOM_GLOW[1], BLOOM_GLOW[2], 45, 1.3);
+    }
+    // Every Bloom unit but the Colossus adds its share of the swarm's liquid body (#94),
+    // sized by how far apart its kind keeps, so Shields, Spears and Raiders merge too.
+    if (wild !== 0 && kind !== Kind.Colossus) r.gooBlob(x, y, UNIT_STATS[kind].sep * 2.05);
+    const shape = (blob ? 5 : kind) + (w.fortify[i] > w.tick ? 10 : 0);
+    if (lords) {
+      if (trait === 'swarmlord' && kind === Kind.Dot) size *= swarmBeat;
+      r.unit(x, y, size * 1.7, halo[0], halo[1], halo[2], 70, shape, angle);
+      if (trait === 'ironhide' && kind === Kind.Tank) r.shape(false, x, y, size * 1.15, 5, 1, angle, 0.2, mixRgb(c, WHITE, 0.35), 170);
+      if (trait === 'longspine' && kind === Kind.Lancer) {
+        const sx = Math.cos(angle), sy = Math.sin(angle);
+        r.beam(x, y, x + sx * size * 2.6, y + sy * size * 2.6, c[0], c[1], c[2], 200, 1.3);
+      }
+      if (trait === 'stormcaller' && (i * 7 + o.frame) % 41 === 0) {
+        const k = (i * 13 + o.frame) % 8;
+        r.unit(x + Math.cos(k) * size * 1.6, y + Math.sin(k) * size * 1.6, 2.2, 220, 235, 255, 240);
+      }
+    }
     r.unit(x, y, size, c[0], c[1], c[2], alpha, shape, angle);
   }
+}
+
+/** A crown above a warlord's capital: three points over a band. */
+function crownAt(r: Renderer, x: number, y: number, s: number, c: RGB): void {
+  r.beam(x - 8 * s, y + 3 * s, x + 8 * s, y + 3 * s, c[0], c[1], c[2], 240, 3 * s);
+  r.shape(true, x - 6 * s, y, 4.5 * s, 3, 0, 0, 0.6, c, 240);
+  r.shape(true, x, y - 1.5 * s, 6 * s, 3, 0, 0, 0.6, c, 240);
+  r.shape(true, x + 6 * s, y, 4.5 * s, 3, 0, 0, 0.6, c, 240);
 }
 
 /** Supply drops (falling beacon, then a capture ring) and Colossus health rings. */
@@ -264,6 +371,17 @@ function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
     r.shape(true, d.x, d.y, R, 0, 1, 0, 0.02, DROP_RGB, Math.round(70 + 60 * pulse));
     if (d.progress > 0) r.shape(true, d.x, d.y, R + 6, 0, d.progress, 0, 0.07, hc, 235);
   }
+  drawHeart(r, w, o);
+  // Holding the line (#67): the Bloom's nests in the field, each feeding the waves
+  // (overgrown instead, when the view tracks their growth: #94).
+  if (w.siege && !o.bloom) {
+    const beat = 0.5 + 0.5 * Math.sin(o.time * 2.4);
+    for (const id of w.siege.bloomNests) {
+      const n = w.nests[id];
+      if (n.owner !== NEUTRAL) continue;
+      r.shape(false, n.x, n.y, n.r * 1.7, 0, 1, o.time * 0.3, 0.05, HEART_RGB, Math.round(110 + 80 * beat));
+    }
+  }
   for (const c of ev.colossi) {
     const s = w.uidToSlot.get(c.uid);
     if (s === undefined) continue;
@@ -273,7 +391,56 @@ function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
   }
 }
 
+/** The Bloom's heart rings and lobs: its body colour (#94). */
+const HEART_RGB: RGB = BLOOM_RGB;
+
+/**
+ * The heart's rings: health, a ward band (one notch per standing Bloom nest,
+ * each of which also wears a ring), and the pulse: a glow that swells through
+ * the wind-up toward the ring it will hit.
+ */
+function drawHeart(r: Renderer, w: World, o: SceneOpts): void {
+  const h = w.heart;
+  if (!h || h.slain) return;
+  const s = heartSlot(w);
+  if (s < 0) return;
+  const R = HEART.size + 16;
+  r.shape(true, h.x, h.y, R, 0, w.hp[s] / h.maxHp, 0, 0.07, HEART_RGB, 230);
+  r.shape(true, h.x, h.y, R, 0, 1, 0, 0.035, HEART_RGB, 50);
+  const ward = standingNests(w);
+  for (let k = 0; k < ward; k++) {
+    r.shape(true, h.x, h.y, R + 9 + k * 6, 0, 1, o.time * 0.3 + k, 0.02, FERAL, 120);
+  }
+  if (!o.bloom) for (const id of h.nests) {
+    const n = w.nests[id];
+    if (n.owner !== NEUTRAL) continue;
+    const pulse = 0.5 + 0.5 * Math.sin(o.time * 2 + id);
+    r.shape(true, n.x, n.y, n.r + 10, 0, 1, o.time * 0.4, 0.04, FERAL, Math.round(90 + 80 * pulse));
+  }
+  if (h.pulseAt >= 0) {
+    const k = 1 - Math.max(0, (h.pulseAt - w.tick - o.alpha) / HEART.pulseWindup);
+    const pr = HEART.pulseR + HEART.pulseRPerPhase * h.phase;
+    r.shape(true, h.x, h.y, pr, 7, 1, 0, 0, HEART_RGB, Math.round(70 * k));
+    r.shape(true, h.x, h.y, pr, 0, 1, 0, 0.02, HEART_RGB, Math.round(120 + 120 * k));
+    r.shape(true, h.x, h.y, pr * k, 0, 1, 0, 0.05, WHITE, Math.round(160 * k));
+  }
+}
+
 const SHADOW: RGB = [0, 0, 0];
+const MEND_RGB: RGB = [120, 255, 150];
+const EMBER_RGB: RGB = [255, 110, 40];
+const EMBER: RGB = [255, 120, 40];
+
+/** Scorch (#60): smouldering ground left by a Barrage, flickering and fading as it burns out. */
+function drawBurns(r: Renderer, w: World, o: SceneOpts): void {
+  for (const b of w.burns) {
+    const left = Math.max(0, (b.until - w.tick - o.alpha) / VARIANTS.scorch.ticks);
+    const flick = 0.85 + 0.15 * Math.sin(o.time * 9 + b.x);
+    const c = mixRgb(EMBER, FACTION_RGB[b.owner] ?? WHITE, 0.3);
+    r.shape(true, b.x, b.y, b.r, 0, 1, 0, 0, c, Math.round(55 * left * flick));
+    r.shape(true, b.x, b.y, b.r, 0, 1, 0, 0.05, EMBER, Math.round(170 * left * flick));
+  }
+}
 
 /**
  * Pending Barrage strikes: a shell arcs from the nest that launched it, its
@@ -281,7 +448,7 @@ const SHADOW: RGB = [0, 0, 0];
  */
 function drawBarrages(r: Renderer, w: World, o: SceneOpts): void {
   for (const b of w.barrages) {
-    const c = FACTION_RGB[b.owner] ?? WHITE;
+    const c = b.owner === NEUTRAL ? HEART_RGB : FACTION_RGB[b.owner] ?? WHITE;
     const left = Math.max(0, (b.impact - w.tick - o.alpha) / Math.max(1, b.impact - b.t0));
     const R = b.r;
     const k = 1 - left;

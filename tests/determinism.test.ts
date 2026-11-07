@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dexp, dlog, dpow } from '../src/sim/mathx';
+import { datan2, dexp, dlog, dpow } from '../src/sim/mathx';
 
 /** Math functions whose results may differ in the last bit between JS engines. */
 const INEXACT = /Math\.(hypot|pow|exp|expm1|log|log1p|log2|log10|sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|cbrt)\b/;
@@ -36,5 +36,17 @@ describe('determinism (#26)', () => {
         expect(Math.abs(dpow(k, e) / Math.pow(k, e) - 1)).toBeLessThan(1e-13);
       }
     }
+  });
+
+  it('datan2 matches Math.atan2 to ~1e-13 in every quadrant (#114)', () => {
+    for (let k = 0; k < 360; k++) {
+      const a = (k / 360) * 2 * Math.PI - Math.PI + 0.001;
+      for (const r of [0.01, 1, 250]) {
+        const x = r * Math.cos(a), y = r * Math.sin(a);
+        expect(Math.abs(datan2(y, x) - Math.atan2(y, x))).toBeLessThan(1e-13);
+      }
+    }
+    expect(datan2(0, 0)).toBe(0);
+    expect(datan2(0, -1)).toBeCloseTo(Math.PI, 13);
   });
 });

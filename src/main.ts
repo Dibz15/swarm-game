@@ -1,24 +1,36 @@
 import './style.css';
+import { teamLayout, teamsList } from './ui/teams';
 import { AudioEngine } from './audio/engine';
-import { FACTION_RGB } from './content/factions';
+import { FACTION_HEX, FACTION_RGB } from './content/factions';
 import { GameView, type Services } from './game/gameView';
 import type { EndReason } from './game/recording';
 import { recordingEnabled, saveRecording } from './game/recordStore';
 import { LocalSession } from './game/session';
-import { loadProgress, MISSIONS, MissionRun, nextMission, saveProgress, type NextStep } from './game/tutorial';
+import { loadProgress, MISSIONS, MissionRun, nextMission, saveProgress } from './game/tutorial';
 import { InputController } from './input/controller';
 import { Camera } from './render/camera';
 import { Particles, Rings } from './render/particles';
 import { Renderer } from './render/renderer';
 import { drawWorld } from './render/scene';
 import { PERSONALITIES } from './sim/ai/bot';
-import { Kind, MAX_UNITS, TICK_HZ } from './sim/constants';
+import { Kind, MAX_UNITS, NEUTRAL, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
+import { mapBloom, needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
+import type { BattleReport } from './campaign/broods';
+import { battleReport, nodeSetup, warlordOf } from './campaign/battle';
+import { PLAYTEST, type Playtest } from './campaign/playtest';
+import { playtestMenu } from './ui/playtest';
+import { fortressGrid } from './ui/fortressGrid';
+import { mapGrid } from './ui/mapGrid';
+import { FORTIFY } from './sim/fortify';
+import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
+import { recruitPick, rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
 import { buildSetup, campaignMenu, randomSetup, skirmishMenu, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
+import { creatureGrid } from './ui/creatures';
 
 class App {
   private canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -38,13 +50,15 @@ class App {
   private demo: LocalSession | null = null;
   private screen: HTMLElement | null = null;
   private modal: HTMLElement | null = null;
+  /** a full-screen modal (the run map) hides the menu and the demo: both pause under it (#130) */
+  private covered = false;
   private endShown = false;
   /** the current match's recording was saved at its end */
   private recSaved = false;
-  /** the current match is the tutorial's graduation 1v1 */
-  private graduation = false;
   /** difficulty of the current quick match, so "New map" rolls another one */
   private quick: number | null = null;
+  /** the campaign run and node the current battle belongs to */
+  private run: { state: RunState; node: number; fielded: number[] } | null = null;
   /** ghost cursor acting out the current tutorial step */
   private demoOverlay: DemoOverlay | null = null;
   private demoKey = '';
@@ -102,6 +116,11 @@ class App {
     const bench = Number(q.get('bench'));
     if (bench > 0) this.startBench(bench);
     else if (q.has('eventdemo')) this.startEventDemo();
+    else if (q.has('creatures')) this.setScreen(creatureGrid());
+    else if (q.has('fortress')) this.setScreen(fortressGrid());
+    else if (q.has('maps')) this.setScreen(mapGrid((setup) => this.startGame(setup, { scenario: 'maps (dev)' })));
+    else if (q.has('heart')) this.startHeartDemo(Number(q.get('heart')) || 0);
+    else if (q.has('playtest')) this.showPlaytests();
     else this.showMenu();
     requestAnimationFrame((t) => this.loop(t));
   }
@@ -115,9 +134,13 @@ class App {
   }
 
   private setModal(m: HTMLElement | null): void {
+    // Only the run map darkens the score (showRunMap sets it again).
+    this.sfx.setBloom(0);
     this.modal?.remove();
     this.modal = m;
     if (m) this.ui.appendChild(m);
+    this.covered = !!m?.classList.contains('runmap');
+    this.ui.classList.toggle('covered', this.covered);
   }
 
   private showMenu(): void {
@@ -187,24 +210,221 @@ class App {
           ? [{ label: 'Play a 4-player FFA', primary: true, on: () => this.playSuggested('ffa') }]
           : p.next === 'rematch'
             ? [
-                { label: 'Rematch Normal', primary: true, on: () => this.playSuggested('normal1v1') },
+                // The Normal 1v1 is the tutorial's last mission (#147): replay it there, tracked.
+                { label: 'Rematch Normal', primary: true, on: () => this.briefMission(MISSIONS.length - 1) },
                 { label: '1v1 vs Easy', on: () => this.playSuggested('easy1v1') },
               ]
-            : [{ label: 'Play the 1v1', primary: true, on: () => this.playSuggested('normal1v1', true) }];
+            : [{ label: 'Play the 1v1', primary: true, on: () => this.briefMission(MISSIONS.length - 1) }];
       buttons.push({ label: 'Dismiss', on: dismiss({ next: undefined }) });
       return menuCard(NEXT_STEP_TEXT[p.next], buttons);
     }
     return null;
   }
 
-  private playSuggested(kind: 'normal1v1' | 'easy1v1' | 'ffa', graduation = false): void {
-    if (!graduation) saveProgress({ ...loadProgress(), next: undefined });
+  private playSuggested(kind: 'normal1v1' | 'easy1v1' | 'ffa'): void {
+    saveProgress({ ...loadProgress(), next: undefined });
     this.startGame(quickSetup(kind));
-    this.graduation = graduation;
   }
 
   private showCampaign(): void {
-    this.setModal(campaignMenu(loadProgress(), { tutorial: () => this.showTutorial(), back: () => this.setModal(null) }));
+    this.setModal(
+      campaignMenu(loadProgress(), listRuns().length, {
+        tutorial: () => this.showTutorial(),
+        run: () => this.showRunHub(),
+        back: () => this.setModal(null),
+      }),
+    );
+  }
+
+  // ---- procedural campaign (#18) --------------------------------------------
+
+  private showRunHub(): void {
+    if (this.game) this.showMenu();
+    this.setModal(
+      runHub(listRuns(), loadHistory(), randomSeed(), this.sfx, {
+        resume: (run) => this.showRunMap(run),
+        start: (seed) =>
+          this.setModal(
+            starterPick(seed, {
+              pick: (pack, difficulty) => {
+                const run = newRun(seed, loadPrefs().color, pack, Date.now(), difficulty);
+                saveRun(run);
+                this.sfx.runStart();
+                this.showRunMap(run);
+              },
+              back: () => this.showRunHub(),
+            }),
+          ),
+        remove: (run) => {
+          deleteRun(run.id);
+          this.showRunHub();
+        },
+        back: () => this.showCampaign(),
+      }),
+    );
+  }
+
+  private showRunMap(run: RunState, intro: MapIntro | null = null): void {
+    if (this.game) this.showMenu();
+    // A rescued brood waiting for a place, then a reward waiting to be picked, come first (also when resuming a run).
+    if (run.recruit && run.status === 'active') {
+      this.setModal(recruitPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro) }));
+      return;
+    }
+    if (run.offer && run.status === 'active') {
+      this.setModal(rewardPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro) }));
+      return;
+    }
+    this.setModal(
+      runMap(run, this.sfx, { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.leaveRun(run), save: () => saveRun(run) }, intro),
+    );
+    this.sfx.setBloom(mapBloom(run));
+  }
+
+  /** Out of a run: back to the run list, or to the playtests a playtest run came from. */
+  private leaveRun(run: RunState): void {
+    if (run.id.startsWith(PLAYTEST)) this.showPlaytests();
+    else this.showRunHub();
+  }
+
+  /** Playtests (?playtest): throwaway runs that open on one feature. Nothing is saved. */
+  private showPlaytests(): void {
+    if (this.game) this.showMenu();
+    this.setModal(playtestMenu({ play: (p) => this.startPlaytest(p), back: () => this.showMenu() }));
+  }
+
+  private startPlaytest(p: Playtest): void {
+    const scene = p.make(loadPrefs().color);
+    if (scene.kind === 'map') return this.showRunMap(scene.run);
+    const run = scene.run;
+    this.runMove(run, scene.node, run.broods.map((b) => b.id));
+    const w = this.game?.world;
+    if (!w) return;
+    if (w.siege && scene.extra === 'ending') {
+      // The clock nearly out, and no waves left to come.
+      w.siege.until = w.tick + 15 * TICK_HZ;
+      w.siege.next = w.siege.waves.length;
+      return;
+    }
+    if (w.siege && scene.extra === 'capital') {
+      const sg = w.siege, game = this.game;
+      setTimeout(() => {
+        if (this.game !== game || w.over) return;
+        const cap = w.nests[sg.capital];
+        cap.owner = -1;
+        cap.controller = NEUTRAL;
+        cap.control = 0;
+      }, 4000);
+      return;
+    }
+    if (w.citadel < 0) return;
+    const c = w.nests[w.citadel];
+    const human = this.game!.human;
+    if (scene.extra === 'gates') {
+      // Your army, just outside the gate that faces the middle.
+      const dx = w.width / 2 - c.x, dy = w.height / 2 - c.y, d = Math.hypot(dx, dy) || 1;
+      const R = FORTIFY.ringR[run.nodes[scene.node].size] + 70;
+      const gx = c.x + (dx / d) * R, gy = c.y + (dy / d) * R;
+      let k = 0;
+      for (let i = 0; i < w.n; i++) {
+        if (!w.alive[i] || w.owner[i] !== human) continue;
+        const x = gx + ((k % 8) - 3.5) * 9, y = gy + (Math.floor(k / 8) - 2) * 9;
+        w.x[i] = w.px[i] = w.ox[i] = x;
+        w.y[i] = w.py[i] = w.oy[i] = y;
+        k++;
+      }
+      this.camera.open(gx, gy, this.renderer.dpr);
+    } else if (scene.extra === 'fall') {
+      // A few seconds in, its guards fall and the citadel is yours.
+      this.camera.open(c.x, c.y, this.renderer.dpr);
+      const game = this.game;
+      setTimeout(() => {
+        if (this.game !== game || w.over) return;
+        for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === c.owner && Math.hypot(w.x[i] - c.x, w.y[i] - c.y) < 260) w.dmg[i] = 1e9;
+        c.owner = c.controller = human;
+        c.control = 1;
+        this.sfx.citadelFall();
+      }, 4000);
+    }
+  }
+
+  /** Dev (?heart=N): a throwaway run's finale, the Bloom fed by N nodes. Nothing is saved. */
+  private startHeartDemo(strength: number): void {
+    const run = newRun(`heart-${strength}`, loadPrefs().color, 'swarm', Date.now());
+    run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, strength).map((n) => n.id);
+    for (const b of run.broods) b.size = 20;
+    this.startGame(nodeSetup(run, run.heart, run.broods.map((b) => b.id)), { scenario: 'campaign: finale (dev)' });
+  }
+
+  /** Move to a node: fight for it, or march through a node already taken. */
+  private runMove(run: RunState, id: number, fielded: number[]): void {
+    if (!needsBattle(run, id)) {
+      const from = run.bloom.time;
+      const res = resolveTurn(run, id, null);
+      this.saveRunState(run);
+      this.runSounds(res);
+      this.showRunMap(run, this.runIntro(from, res));
+      return;
+    }
+    const node = run.nodes[id];
+    this.startGame(nodeSetup(run, id, fielded), { scenario: `campaign: ${node.kind}` });
+    this.run = { state: run, node: id, fielded };
+    if (!run.unlocks.nova) this.game!.lock('nova', 'Unlock Nova at the camp');
+    // A warlord's ground (#66): its sting, and its trait announced and kept on screen.
+    const lord = warlordOf(run, id);
+    if (lord) {
+      this.game!.warlord = { faction: lord.faction, trait: lord.traitId };
+      this.hud?.setWarlord(lord);
+      this.hud?.toast(lord.citadel ? `♛ ${lord.name}'s stronghold: take the citadel to win` : `♛ ${lord.name}: ${lord.text}`, FACTION_HEX[lord.faction]);
+      this.sfx.warlordSting(lord.faction);
+    }
+  }
+
+  /** How the battle ended for the run: survivors by kind, nests held, time. */
+  private battleReport(won: boolean): BattleReport {
+    const g = this.game;
+    return g ? battleReport(g.world, g.human, won) : { won, survivors: [0, 0, 0, 0], nests: 0, seconds: 0 };
+  }
+
+  /** The map's Bloom animation for a turn; none after a checkpoint restore, which rewinds the Bloom. */
+  private runIntro(from: number, res: TurnResult): MapIntro | null {
+    return res.checkpoint === 'restored' ? null : { from, fresh: res.fresh };
+  }
+
+  private runSounds(res: TurnResult): void {
+    const s = this.sfx;
+    for (const e of res.events) {
+      if (e.what === 'died') s.broodLost();
+      else if (e.what === 'wounded') s.broodWounded();
+      else if (e.what === 'rescued') s.broodRescued();
+    }
+    if (res.warlords.some((w) => w.what === 'broken')) s.domainBroken();
+    if (res.checkpoint === 'reached') s.checkpointReached();
+    if (res.checkpoint === 'restored') s.checkpointRestart();
+  }
+
+  /** The battle is over (or abandoned): update the run and show the debrief. */
+  private finishRunBattle(report: BattleReport): void {
+    const r = this.run;
+    if (!r) return;
+    this.run = null;
+    const from = r.state.bloom.time;
+    const res = resolveTurn(r.state, r.node, report, r.fielded);
+    this.saveRunState(r.state);
+    this.runSounds(res);
+    if (r.state.status === 'won') this.sfx.victory();
+    else if (r.state.status === 'lost') this.sfx.defeat();
+    this.setModal(
+      runDebrief(r.state, r.state.nodes[r.node], report.won, res, {
+        next: () => this.showRunMap(r.state, this.runIntro(from, res)),
+        hub: () => this.leaveRun(r.state),
+      }),
+    );
+  }
+
+  private saveRunState(run: RunState): void {
+    if (run.status === 'active') saveRun(run);
+    else finishRun(run);
   }
 
   private showTutorial(): void {
@@ -219,7 +439,7 @@ class App {
 
   private playMission(i: number, prevEnd: EndReason = 'quit'): void {
     const m = MISSIONS[i];
-    this.startGame(m.setup(window.innerHeight > window.innerWidth * 1.15), { scenario: `tutorial: ${m.title}` }, prevEnd);
+    this.startGame(m.setup(), { scenario: `tutorial: ${m.title}` }, prevEnd);
     const g = this.game!;
     g.mission = new MissionRun(m, i);
     g.locked = new Set(m.locked);
@@ -233,11 +453,14 @@ class App {
     const d = this.demoOverlay;
     const m = g.mission;
     if (!d || !m) return;
-    const key = `${m.step}`;
+    // Once you've done your part and the step waits on the world, the demo stops (#115):
+    // replaying the action then reads as the next thing to do.
+    const waiting = !!g.waitHint;
+    const key = `${m.step}:${waiting}`;
     if (key !== this.demoKey) {
       this.demoKey = key;
       const step = m.current;
-      d.play(step?.demo ? () => step.demo!({ w: g.world, human: g.human, log: g.session.log }) : null);
+      d.play(step?.demo && !waiting ? () => step.demo!(m.ctx({ w: g.world, human: g.human, log: g.session.log })) : null);
     }
     // The demo is decoration: if it ever breaks, drop it rather than the game loop.
     try {
@@ -252,10 +475,13 @@ class App {
   /** Record a finished (or skipped) mission and move on. */
   private completeMission(i: number): void {
     const p = loadProgress();
-    if (!p.done.includes(MISSIONS[i].id)) p.done.push(MISSIONS[i].id);
-    if (i === MISSIONS.length - 1) {
+    const first = !p.done.includes(MISSIONS[i].id);
+    if (first) p.done.push(MISSIONS[i].id);
+    // Winning the graduation 1v1 (#147) the first time: graduated, and the menu suggests a
+    // free-for-all. A replay later doesn't bring that suggestion back.
+    if (MISSIONS[i].real && first) {
       p.graduated = true;
-      p.next = 'graduate';
+      p.next = 'ffa';
     }
     saveProgress(p);
   }
@@ -263,12 +489,12 @@ class App {
   /** Straight into the next mission: the debrief already said what's next, and the coach names it. */
   private afterMission(i: number): void {
     if (i < MISSIONS.length - 1) this.playMission(i + 1);
-    else this.playSuggested('normal1v1', true);
   }
 
   private skipMission(): void {
     const m = this.game?.mission;
-    if (!m) return;
+    // The graduation match can't be skipped (#147).
+    if (!m || m.mission.real) return;
     this.completeMission(m.index);
     this.afterMission(m.index);
   }
@@ -298,7 +524,6 @@ class App {
       size: 'medium',
       terrain: 'standard',
       events: 'normal',
-      portrait: window.innerHeight > window.innerWidth * 1.15,
       players: Array.from({ length: n }, (_, i) => ({
         faction: [0, 1, 2, 3, 4, 5][(i + seed) % 6],
         team: i,
@@ -327,8 +552,8 @@ class App {
     this.setScreen(null);
     this.endShown = false;
     this.recSaved = false;
-    this.graduation = false;
     this.quick = null;
+    this.run = null;
     const record = opts.record !== false && recordingEnabled();
     this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null);
     this.sfx.useTheme(setup.seed);
@@ -350,6 +575,7 @@ class App {
       lockdown: () => this.game?.startAim('lockdown'),
       skip: () => this.skipMission(),
       go: () => this.game?.skipRead(),
+      next: () => this.game?.nextStep(),
     });
     this.hud.setMuted(this.sfx.muted);
     this.applyInsets();
@@ -392,9 +618,23 @@ class App {
       this.setModal(
         pauseMenu({
           resume: () => this.togglePause(),
-          restart: () => (g.mission ? this.playMission(g.mission.index, 'restart') : this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart')),
-          quit: () => this.showMenu(),
+          restart: () => {
+            const run = this.run;
+            if (g.mission) this.playMission(g.mission.index, 'restart');
+            else this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart');
+            this.run = run;
+          },
+          // Leaving a campaign battle is a retreat: it counts as a loss.
+          quit: () => {
+            if (!this.run) return this.showMenu();
+            const report = this.battleReport(false);
+            this.showMenu();
+            this.finishRunBattle(report);
+          },
+          quitLabel: this.run ? 'Retreat (counts as a loss)' : undefined,
           audio: this.sfx,
+          // Who's on your team (#74), in a team match.
+          teams: teamLayout(g.world, g.human).team ? teamsList(g.world, g.human) : undefined,
         }),
       );
     }
@@ -411,21 +651,27 @@ class App {
     this.input.enabled = false;
     this.input.reset();
     const won = g.result === 'victory';
+    if (this.run) {
+      const report = this.battleReport(won);
+      this.showMenu();
+      this.finishRunBattle(report);
+      return;
+    }
     if (g.mission) {
       const i = g.mission.index;
+      const real = !!g.mission.mission.real;
       if (won) this.completeMission(i);
+      // Lost the graduation 1v1 before ever winning it: the menu suggests a rematch, or a warm-up.
+      else if (real && !loadProgress().done.includes(g.mission.mission.id)) saveProgress({ ...loadProgress(), next: 'rematch' });
       this.setModal(
         missionDebrief(g.mission.mission, i, won, {
           next: () => (won ? this.afterMission(i) : this.skipMission()),
           retry: () => this.playMission(i, 'restart'),
           menu: () => this.showMenu(),
+          easy: () => this.playSuggested('easy1v1'),
         }),
       );
       return;
-    }
-    if (this.graduation) {
-      const next: NextStep = won ? 'ffa' : 'rematch';
-      saveProgress({ ...loadProgress(), next });
     }
     this.setModal(
       endScreen(g.world, g.human, g.result === 'victory', {
@@ -529,11 +775,14 @@ class App {
       this.updateDemo(g, dt);
       g.render(this.time);
       if (g.result && !this.endShown && this.time - g.resultTime > 1.6) this.showEnd();
+    } else if (this.demo && this.covered) {
+      // Hidden under the run map: keep the score going, but don't step or draw the battle.
+      this.sfx.update(dt, this.demo.world, -1, 'menu');
     } else if (this.demo) {
       const d = this.demo;
       d.update(dt);
       const w = d.world;
-      for (let k = 0; k < w.deaths.length; k += 3) {
+      for (let k = 0; k < w.deaths.length; k += 4) {
         this.particles.burst(w.deaths[k], w.deaths[k + 1], FACTION_RGB[w.deaths[k + 2]], 3, 45, 2, 0.45);
         this.sfx.death(w.deaths[k], w.deaths[k + 1], w.deaths[k + 2]);
       }
@@ -556,12 +805,15 @@ class App {
       });
     }
 
-    this.particles.update(dt);
-    this.rings.update(dt);
-    this.particles.draw(r);
-    this.rings.draw(r);
-    this.camera.update(dt, this.time);
-    r.draw(this.camera, this.time);
+    // Under the run map the canvas keeps its last frame: nothing new to show.
+    if (!this.covered) {
+      this.particles.update(dt);
+      this.rings.update(dt);
+      this.particles.draw(r);
+      this.rings.draw(r);
+      this.camera.update(dt, this.time);
+      r.draw(this.camera, this.time);
+    }
 
     if (this.showPerf) {
       const w = this.game?.world ?? this.demo?.world;

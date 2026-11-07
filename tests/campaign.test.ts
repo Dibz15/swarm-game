@@ -1,0 +1,694 @@
+import { describe, expect, it } from 'vitest';
+import { CONQUEST_SHARE, LONE_WOLF, armyFor, bloomEvents, bloomLabel, nodeSetup, swarmScale } from '../src/campaign/battle';
+import { COST, MAX_ROSTER, MILITIA, MIN_SIZE, SURVIVOR_CAP, UNLOCKS, WIN_GROWTH, settleBroods, type BattleReport, type Brood } from '../src/campaign/broods';
+import { DIFFICULTIES, RUN_DIFFICULTY, MAP_H, MAP_W, ahead, bloomGap, difficultyOf, inBloom, seedRadius, speedBloom, grow, heal, canStep, hops, maxFielded, moves, newRun, reachable, rerollCost, rerollOffer, resolveTurn, skipRecruit, skipReward, strainHomes, takeRecruit, takeReward, unlock, unlockCost, unlocked, type RunState } from '../src/campaign/run';
+import { REWARD, modsFor, offerable, rewardText, rollOffer } from '../src/campaign/rewards';
+import { Kind, NestType } from '../src/sim/constants';
+import { DIFFICULTY } from '../src/sim/ai/bot';
+import { heartSlot } from '../src/sim/heart';
+import { createWorld } from '../src/sim/setup';
+
+const SEEDS = Array.from({ length: 60 }, (_, i) => `seed-${i}`);
+const WIN: BattleReport = { won: true, survivors: [30, 12, 12, 12], nests: 6, seconds: 200 };
+const LOSS: BattleReport = { won: false, survivors: [0, 0, 0, 0], nests: 0, seconds: 300 };
+
+/** Walk the shortest open route to the heart, winning every battle. */
+function rush(run: RunState): RunState {
+  for (let guard = 0; guard < 60 && run.status === 'active'; guard++) {
+    const back = hops(run.nodes, run.heart, (id) => run.swallowed.includes(id));
+    const options = moves(run).filter((n) => back[n] >= 0);
+    if (!options.length) break;
+    const next = options.reduce((a, b) => (back[b] < back[a] ? b : a));
+    resolveTurn(run, next, run.visited.includes(next) ? null : WIN, run.broods.map((b) => b.id), 0);
+  }
+  return run;
+}
+
+const brood = (o: Partial<Brood>): Brood => ({ id: 0, name: 'Test', kind: Kind.Dot, size: 12, cap: 16, wins: 0, wounded: 0, grows: 0, strains: [], ...o });
+
+describe('the following Bloom (#88)', () => {
+  it('fuses into one body: the band swells near your trail and fades with distance', () => {
+    const run = newRun('swell', 0, 'swarm', 0);
+    const seed = { x: run.bloom.front + 150, y: 300, born: 0 };
+    run.bloom.time = 3;
+    // How far right the Bloom reaches at height y.
+    const reach = (y: number) => {
+      let x = -200;
+      while (bloomGap(run.bloom, x, y) < 0) x += 2;
+      return x;
+    };
+    // How much the seed pushes the band out at height y, over the front's own wobble there.
+    const swell = (y: number) => {
+      run.bloom.seeds = [];
+      const plain = reach(y);
+      run.bloom.seeds = [seed];
+      return reach(y) - plain;
+    };
+    expect(swell(300)).toBeGreaterThan(swell(300 + 500) + 50);
+    // Far from the trail, the band barely moves.
+    run.bloom.time = 6;
+    const far = reach(300 + 900);
+    run.bloom.time = 3;
+    expect(Math.abs(far - reach(300 + 900))).toBeLessThan(20);
+  });
+
+  it('starts with nothing swallowed, and grows from each node you leave after a turn', () => {
+    for (const seed of SEEDS.slice(0, 10)) {
+      const run = newRun(seed, 0, 'swarm', 0);
+      expect(run.nodes.every((n) => !inBloom(run.bloom, n.x, n.y))).toBe(true);
+      const from = run.nodes[run.at];
+      resolveTurn(run, moves(run)[0], WIN, run.fielded, 0);
+      expect(run.bloom.seeds).toEqual([{ x: from.x, y: from.y, born: 0 }]);
+      expect(seedRadius(run.bloom, run.bloom.seeds[0])).toBe(0); // the lag
+      run.bloom.time++;
+      expect(seedRadius(run.bloom, run.bloom.seeds[0])).toBeCloseTo(run.bloom.step);
+      expect(inBloom(run.bloom, from.x, from.y)).toBe(true);
+    }
+  });
+
+  it('treats every direction alike: the gap depends on distance from where you came, not on x', () => {
+    const run = newRun('direction', 0, 'swarm', 0);
+    run.bloom.front = -1e6; // no band
+    run.bloom.seeds = [{ x: 500, y: 310, born: 0 }];
+    run.bloom.time = 3;
+    const r = seedRadius(run.bloom, run.bloom.seeds[0]);
+    const gaps = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => bloomGap(run.bloom, 500 + dx * (r + 80), 310 + dy * (r + 80)));
+    for (const g of gaps) expect(g).toBeCloseTo(gaps[0]);
+    // The edge swells past the circle itself, less the further out.
+    expect(gaps[0]).toBeLessThan(80);
+    expect(gaps[0]).toBeGreaterThan(0);
+  });
+
+  it('a lost battle lets it close in; Hunger speeds it up without jumping', () => {
+    const run = newRun('chase', 0, 'swarm', 0);
+    resolveTurn(run, moves(run)[0], WIN, run.fielded, 0);
+    const here = run.nodes[run.at];
+    const gaps = [bloomGap(run.bloom, here.x, here.y)];
+    for (let k = 0; k < 2 && run.status === 'active'; k++) {
+      resolveTurn(run, moves(run).find((n) => n !== run.start) ?? moves(run)[0], LOSS, run.fielded, 0);
+      gaps.push(bloomGap(run.bloom, here.x, here.y));
+    }
+    expect(gaps[1]).toBeLessThan(gaps[0]);
+    const before = run.bloom.seeds.map((s) => seedRadius(run.bloom, s));
+    speedBloom(run.bloom, 1.25);
+    run.bloom.seeds.forEach((s, i) => expect(seedRadius(run.bloom, s)).toBeCloseTo(before[i]));
+  });
+});
+
+describe('campaign run generation', () => {
+  it('is deterministic per seed text', () => {
+    const a = newRun('ember-tide-7', 0, 'swarm', 1);
+    const b = newRun('ember-tide-7', 0, 'swarm', 1);
+    expect(b).toEqual(a);
+    expect(newRun('ember-tide-8', 0, 'swarm', 1).nodes).not.toEqual(a.nodes);
+  });
+
+  it.each(SEEDS)('%s: 24-31 connected nodes in the map, start left and heart right', (seed) => {
+    const run = newRun(seed, 0, 'swarm', 0);
+    expect(run.nodes.length).toBeGreaterThanOrEqual(24);
+    expect(run.nodes.length).toBeLessThanOrEqual(31);
+    expect(hops(run.nodes, run.start).every((d) => d >= 0)).toBe(true);
+    for (const n of run.nodes) {
+      expect(n.x).toBeGreaterThan(0);
+      expect(n.x).toBeLessThan(MAP_W);
+      expect(n.y).toBeGreaterThan(0);
+      expect(n.y).toBeLessThan(MAP_H);
+      for (const l of n.links) expect(run.nodes[l].links).toContain(n.id);
+    }
+    expect(run.nodes[run.start].kind).toBe('start');
+    expect(run.nodes[run.heart].kind).toBe('finale');
+    expect(run.nodes.filter((n) => n.checkpoint).length).toBeLessThanOrEqual(1);
+  });
+
+  it.each(SEEDS)('%s: the shortest route reaches the heart before the Bloom closes it', (seed) => {
+    const run = rush(newRun(seed, 0, 'swarm', 0));
+    expect(run.status).toBe('won');
+    expect(run.turn).toBeGreaterThanOrEqual(3);
+    expect(run.turn).toBeLessThanOrEqual(14);
+  });
+
+  it.each(SEEDS)('%s: every node has a link ahead of it and closer to the heart (#128)', (seed) => {
+    const run = newRun(seed, 0, 'swarm', 0);
+    const h = run.nodes[run.heart];
+    const d = (n: { x: number; y: number }) => Math.hypot(n.x - h.x, n.y - h.y);
+    for (const n of run.nodes) {
+      if (n.id === run.heart) continue;
+      expect(n.links.some((l) => ahead(run.nodes, run.heart, n.id, l) && d(run.nodes[l]) < d(n))).toBe(true);
+    }
+  });
+
+  it.each(SEEDS)('%s: a new battle is only ever offered ahead of you (#128)', (seed) => {
+    const run = newRun(seed, 0, 'swarm', 0);
+    for (let guard = 0; guard < 60 && run.status === 'active'; guard++) {
+      const options = moves(run);
+      for (const n of options) if (!run.visited.includes(n)) expect(ahead(run.nodes, run.heart, run.at, n)).toBe(true);
+      const fresh = options.filter((n) => !run.visited.includes(n));
+      if (!fresh.length) break;
+      // Wander: take the battle furthest off the line to the heart, to visit odd corners.
+      const h = run.nodes[run.heart], at = run.nodes[run.at];
+      const off = (n: number) => Math.abs((run.nodes[n].x - at.x) * (h.y - at.y) - (run.nodes[n].y - at.y) * (h.x - at.x));
+      resolveTurn(run, fresh.reduce((a, b) => (off(b) > off(a) ? b : a)), WIN, run.broods.map((b) => b.id), 0);
+    }
+  });
+
+  it('you can still march back onto a node you took, but not into a new battle behind you (#128)', () => {
+    for (const seed of SEEDS) {
+      const run = newRun(seed, 0, 'swarm', 0);
+      const behind = run.nodes[run.start].links.find((l) => run.nodes[l].links.some((m) => m !== run.start && !ahead(run.nodes, run.heart, l, m)));
+      if (behind === undefined || !moves(run).includes(behind)) continue;
+      resolveTurn(run, behind, WIN, run.broods.map((b) => b.id), 0);
+      if (run.swallowed.includes(run.start)) continue;
+      const options = moves(run);
+      expect(options).toContain(run.start);
+      const back = run.nodes[behind].links.filter((m) => m !== run.start && !ahead(run.nodes, run.heart, behind, m));
+      for (const m of back) expect(options).not.toContain(m);
+      return;
+    }
+    throw new Error('no seed has a node behind the second step');
+  });
+
+  it('places a checkpoint on most maps and rescues on some nodes', () => {
+    const runs = SEEDS.map((s) => newRun(s, 0, 'swarm', 0));
+    expect(runs.filter((r) => r.nodes.some((n) => n.checkpoint)).length).toBeGreaterThan(SEEDS.length * 0.8);
+    const rescues = runs.flatMap((r) => r.nodes.filter((n) => n.rescue !== undefined));
+    expect(rescues.length / runs.length).toBeGreaterThan(2);
+  });
+});
+
+describe('battle settings', () => {
+  it('conquest can also be won by holding most nests, so two rivals cannot stall it', () => {
+    const run = newRun('settings', 0, 'swarm', 0);
+    const conquest = run.nodes.find((n) => n.kind === 'conquest')!;
+    expect(nodeSetup(run, conquest.id).domShare).toBe(CONQUEST_SHARE);
+  });
+
+  it('difficulty and rival count never step up at the same depth', () => {
+    for (const seed of SEEDS) {
+      const run = newRun(seed, 0, 'swarm', 0);
+      for (const n of run.nodes) if (n.depth === 1 && n.kind !== 'start') expect(n.difficulty).toBe(0);
+      // A Normal or Hard node always has company the player has already met at Easy.
+      for (const n of run.nodes) if (n.kind === 'conquest' && n.difficulty >= 1) expect(n.rivals).toBeGreaterThanOrEqual(2);
+    }
+  });
+});
+
+describe('run difficulty', () => {
+  it.each(DIFFICULTIES)('%s: the shortest route still reaches the heart before the Bloom closes it', (d) => {
+    for (const seed of SEEDS.slice(0, 20)) {
+      const run = newRun(seed, 0, 'swarm', 0, d);
+      expect(run.difficulty).toBe(d);
+      expect(rush(run).status).toBe('won');
+    }
+  });
+
+  it('the Bloom is no faster on easier runs (Standard keeps Gentle\'s pace, Brutal Hard\'s), and Gentle holds it still after a loss', () => {
+    const [gentleStep, standardStep, hardStep, brutalStep] = DIFFICULTIES.map((d) => newRun('pace', 0, 'swarm', 0, d).bloom.step);
+    expect(standardStep).toBe(gentleStep);
+    expect(hardStep).toBeGreaterThan(standardStep);
+    expect(brutalStep).toBe(hardStep);
+    const gentle = newRun('pace', 0, 'swarm', 0, 'gentle');
+    resolveTurn(gentle, moves(gentle)[0], LOSS, gentle.fielded, 0);
+    expect(gentle.bloom.time).toBe(0);
+    const standard = newRun('pace', 0, 'swarm', 0, 'standard');
+    resolveTurn(standard, moves(standard)[0], LOSS, standard.fielded, 0);
+    expect(standard.bloom.time).toBe(1);
+  });
+
+
+  it('Gentle has no Normal nodes; Brutal puts two Brutal bots at most on the late nodes; the finale is per difficulty', () => {
+    for (const seed of SEEDS.slice(0, 20)) {
+      expect(newRun(seed, 0, 'swarm', 0, 'gentle').nodes.some((n) => n.difficulty === 1)).toBe(false);
+      const brutal = newRun(seed, 0, 'swarm', 0, 'brutal');
+      const late = brutal.nodes.filter((n) => n.kind !== 'finale' && n.kind !== 'start' && n.kind !== 'hold');
+      expect(late.some((n) => n.difficulty === 2)).toBe(false);
+      expect(late.filter((n) => n.difficulty === 3).every((n) => n.rivals <= 2)).toBe(true);
+      for (const d of DIFFICULTIES) {
+        const run = newRun(seed, 0, 'swarm', 0, d);
+        expect(run.nodes[run.heart]).toMatchObject(RUN_DIFFICULTY[d].finale);
+      }
+    }
+  });
+
+  it('the Bloom near a node makes its swarms come sooner and more often; what it ate makes them bigger', () => {
+    const far = bloomEvents(0, 0), near = bloomEvents(1, 0), fed = bloomEvents(1, 10);
+    expect(near.swarm!.first).toBeLessThan(far.swarm!.first);
+    expect(near.swarm!.every).toBeLessThan(far.swarm!.every);
+    expect(near.swarm!.size).toBeGreaterThan(far.swarm!.size);
+    expect(fed.swarm!.size).toBeGreaterThan(near.swarm!.size);
+    expect(swarmScale(100)).toBe(2);
+    // Far from the front: the calm preset's swarms, not the Bloom's.
+    expect(far).toMatchObject({ swarm: { first: 200, every: 240, size: 22 }, colossus: [], bloom: false });
+    expect(near.bloom).toBe(true);
+  });
+
+  it('rivals produce by the run difficulty\'s dial, on top of their bot level', () => {
+    for (const d of DIFFICULTIES) {
+      const run = newRun('dial', 0, 'swarm', 0, d);
+      const node = run.nodes.find((n) => n.kind === 'conquest' && n.domain === undefined)!;
+      const bot = nodeSetup(run, node.id).players[1];
+      expect(bot.prod).toBeCloseTo((DIFFICULTY[node.difficulty].prod ?? 1) * RUN_DIFFICULTY[d].rivalProd);
+    }
+  });
+
+  it('a lost finale leaves the heart wounded by heartCarry of the damage, and the next finale starts it there', () => {
+    for (const d of DIFFICULTIES) {
+      const run = newRun('wound', 0, 'swarm', 0, d);
+      run.at = run.nodes[run.heart].links[0];
+      resolveTurn(run, run.heart, { ...LOSS, heart: 0.6 }, run.fielded, 0);
+      expect(run.heartWound).toBeCloseTo(0.6 * RUN_DIFFICULTY[d].heartCarry);
+      expect(nodeSetup(run, run.heart).heart!.wound).toBeCloseTo(0.6 * RUN_DIFFICULTY[d].heartCarry);
+    }
+    const run = newRun('wound', 0, 'swarm', 0);
+    const w = createWorld({ ...nodeSetup(run, run.heart), heart: { strength: 0, rule: 'heart', wound: 0.5 } });
+    const s = heartSlot(w);
+    expect(w.hp[s] / w.heart!.maxHp).toBeCloseTo(0.5);
+    expect(w.heart!.phase).toBe(1);
+  });
+
+  it('a lost battle pays salvage: a share of the node reward', () => {
+    for (const d of DIFFICULTIES) {
+      const run = newRun('salvage', 0, 'swarm', 0, d);
+      const target = moves(run)[0];
+      const res = resolveTurn(run, target, LOSS, run.fielded, 0);
+      expect(res.biomass).toBe(Math.round(run.nodes[target].reward * RUN_DIFFICULTY[d].salvage));
+    }
+  });
+
+  it('the finale has the heart, fed by the swallowed nodes; only Brutal adds the rivals to beat', () => {
+    for (const difficulty of DIFFICULTIES) {
+      const run = newRun('heart', 0, 'swarm', 0, difficulty);
+      run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, 5).map((n) => n.id);
+      const setup = nodeSetup(run, run.heart);
+      expect(setup.heart).toEqual({ strength: 5, rule: difficulty === 'brutal' ? 'heart+rivals' : 'heart', wound: 0 });
+      expect(bloomLabel(run, run.heart)).toBe('The heart, fed by 5 nodes');
+      const other = run.nodes.find((n) => n.kind === 'conquest')!;
+      expect(nodeSetup(run, other.id).heart).toBeUndefined();
+    }
+  });
+
+  it('runs saved before difficulty count as Standard', () => {
+    const run = newRun('old', 0, 'swarm', 0);
+    delete run.difficulty;
+    expect(difficultyOf(run)).toBe('standard');
+  });
+});
+
+describe('broods', () => {
+  it('starter packs give two broods and their unlock', () => {
+    const swarm = newRun('p', 0, 'swarm', 0);
+    expect(swarm.broods.map((b) => b.kind)).toEqual([Kind.Dot, Kind.Dot]);
+    expect(swarm.unlocks).toEqual({ nests: 1 << NestType.Hive, nova: true });
+    const wall = newRun('p', 0, 'wall', 0);
+    expect(wall.broods.map((b) => b.kind)).toEqual([Kind.Dot, Kind.Tank]);
+    expect(unlocked(wall, NestType.Forge)).toBe(true);
+    expect(unlocked(wall, 'nova')).toBe(false);
+    expect(new Set(wall.broods.map((b) => b.name)).size).toBe(2);
+  });
+
+  it('a win sizes broods from their share of survivors plus WIN_GROWTH, clamped to the cap, and counts toward veteran', () => {
+    const a = brood({ id: 0, kind: Kind.Dot, wins: 1 });
+    const b = brood({ id: 1, kind: Kind.Dot, cap: 30 });
+    const c = brood({ id: 2, kind: Kind.Tank });
+    // No per-brood counts: a kind's survivors are shared.
+    const roster = [a, b, c];
+    const ev = settleBroods(roster, [0, 1, 2], { ...WIN, survivors: [50, 1, 0, 0] });
+    expect(a.size).toBe(16); // 25 + 2 each, a's cap is 16
+    expect(b.size).toBe(25 + WIN_GROWTH);
+    expect(c.size).toBe(MIN_SIZE + WIN_GROWTH); // one survivor: the minimum, plus the growth
+    expect(roster).toHaveLength(3);
+    expect(ev.some((e) => e.what === 'veteran' && e.name === a.name)).toBe(true);
+  });
+
+  it('a win credits each brood with its own survivors and an even share of new units of its kind (#134)', () => {
+    const a = brood({ id: 0, kind: Kind.Dot, cap: 40 });
+    const b = brood({ id: 1, kind: Kind.Dot, cap: 40 });
+    const c = brood({ id: 2, kind: Kind.Tank, size: 4 });
+    // a kept 10 of its own, b only 1; 8 Swarmers came from nests. c's own 3 lived.
+    settleBroods([a, b, c], [0, 1, 2], { ...WIN, survivors: [19, 3, 0, 0], own: { 0: 10, 1: 1, 2: 3 } });
+    expect(a.size).toBe(10 + 4 + WIN_GROWTH);
+    expect(b.size).toBe(1 + 4 + WIN_GROWTH);
+    // Three of its own lived: floored to the minimum, then it grows.
+    expect(c.size).toBe(MIN_SIZE + WIN_GROWTH);
+  });
+
+  it('a win still wipes out a brood with none of its units left, its own or new ones of its kind (#134)', () => {
+    const a = brood({ id: 0, kind: Kind.Dot });
+    const b = brood({ id: 1, kind: Kind.Tank });
+    const s = brood({ id: 3, kind: Kind.Tank });
+    const roster = [a, b, s];
+    // a's own starting units all fell, but nests made 12 Swarmers: they're its now. b's Shields are all gone.
+    const ev = settleBroods(roster, [0, 1], { ...WIN, survivors: [12, 0, 0, 0], own: {} });
+    expect(roster).toEqual([a, s]);
+    expect(a.size).toBe(12 + WIN_GROWTH);
+    expect(ev).toContainEqual({ name: b.name, kind: Kind.Tank, what: 'died', size: 0 });
+    // Without per-brood counts, it goes by the kind's survivors.
+    const c = brood({ id: 2, kind: Kind.Swift });
+    const rest = [c];
+    settleBroods(rest, [2], { ...WIN, survivors: [12, 0, 0, 0] });
+    expect(rest).toHaveLength(0);
+  });
+
+  it("a loss costs less on Gentle: a brood keeps RUN_DIFFICULTY's lossKeep of its size", () => {
+    const b = brood({ id: 0, size: 12 });
+    settleBroods([b], [0], LOSS, RUN_DIFFICULTY.gentle.lossKeep);
+    expect(b).toMatchObject({ size: 9, wounded: 1 });
+  });
+
+  it('a loss wounds and halves fielded broods and kills small ones; wounds heal by sitting out', () => {
+    const big = brood({ id: 0, size: 12 });
+    const small = brood({ id: 1, size: 6 });
+    const rest = brood({ id: 2, wounded: 1 });
+    const roster = [big, small, rest];
+    const ev = settleBroods(roster, [0, 1], LOSS);
+    expect(big).toMatchObject({ size: 6, wounded: 1 });
+    expect(roster).not.toContain(small);
+    expect(ev.map((e) => e.what).sort()).toEqual(['died', 'recovered', 'wounded']);
+    expect(rest.wounded).toBe(0);
+    // Fighting doesn't heal a wound.
+    settleBroods(roster, [0], WIN);
+    expect(big.wounded).toBe(1);
+  });
+
+  it('fields up to three fit broods, or the militia when none are fit', () => {
+    const run = newRun('army', 0, 'wall', 0);
+    expect(armyFor(run, run.fielded)).toEqual(run.broods.map((b) => ({ kind: b.kind, count: b.size, vet: false, brood: b.id })));
+    for (const b of run.broods) b.wounded = 1;
+    expect(armyFor(run, run.fielded)).toEqual([MILITIA]);
+    const s = nodeSetup(run, run.nodes[run.start].links[0], run.fielded);
+    expect(s.players[0]).toMatchObject({ human: true, nestTypes: run.unlocks.nests, army: [MILITIA] });
+  });
+
+  it('only broods that actually fought are settled: wounded ones in the pick sit out', () => {
+    const run = newRun('settle', 0, 'swarm', 0);
+    const [a, b] = run.broods;
+    b.wounded = 2;
+    resolveTurn(run, moves(run)[0], LOSS, [a.id, b.id], 0);
+    expect(b).toMatchObject({ size: 12, wounded: 1 });
+    expect(a.wounded).toBe(1);
+    expect(run.fielded).toEqual([a.id]);
+  });
+
+  it('grows and nest unlocks cost more as you buy them (#96)', () => {
+    const run = newRun('prices', 0, 'swarm', 0);
+    run.biomass = 1000;
+    const b = run.broods[0];
+    expect(COST.grow(b)).toBe(15);
+    grow(run, b.id);
+    expect(COST.grow(b)).toBe(25);
+    const nests = UNLOCKS.filter((u) => u !== 'nova' && !unlocked(run, u));
+    const first = unlockCost(run, nests[0]);
+    unlock(run, nests[0]);
+    expect(unlockCost(run, nests[1])).toBe(Math.round(first * COST.nestRise));
+    expect(unlockCost(run, 'nova')).toBe(COST.nova);
+  });
+
+  it('with the roster full, a rescued brood waits for a swap or to be let go (#134)', () => {
+    const run = newRun('recruit', 0, 'swarm', 0);
+    while (run.broods.length < MAX_ROSTER) run.broods.push(brood({ id: run.nextBrood++, name: `B${run.broods.length}` }));
+    const target = moves(run)[0];
+    run.nodes[target].rescue = Kind.Lancer;
+    const res = resolveTurn(run, target, WIN, run.fielded, 0);
+    expect(run.broods.length).toBe(MAX_ROSTER);
+    expect(res.events.some((e) => e.what === 'rescued')).toBe(false);
+    expect(run.recruit?.kind).toBe(Kind.Lancer);
+    const out = run.broods[1];
+    expect(takeRecruit(run, out.id)).toBe(true);
+    expect(run.broods.length).toBe(MAX_ROSTER);
+    expect(run.broods[1].kind).toBe(Kind.Lancer);
+    expect(run.broods.some((b) => b.id === out.id)).toBe(false);
+    expect(run.fielded).not.toContain(out.id);
+    expect(run.recruit).toBeUndefined();
+    // Letting one go leaves the roster as it was.
+    run.recruit = { ...run.broods[0], id: run.nextBrood++ };
+    const before = run.broods.map((b) => b.id);
+    skipRecruit(run);
+    expect(run.recruit).toBeUndefined();
+    expect(run.broods.map((b) => b.id)).toEqual(before);
+  });
+
+  it('winning a rescue node adds a brood, and biomass rewards nests, survivors and speed', () => {
+    const run = newRun('rescue', 0, 'swarm', 0);
+    const target = moves(run)[0];
+    run.nodes[target].rescue = Kind.Lancer;
+    const res = resolveTurn(run, target, WIN, run.fielded, 0);
+    expect(run.broods.some((b) => b.kind === Kind.Lancer)).toBe(true);
+    expect(res.events.some((e) => e.what === 'rescued')).toBe(true);
+    expect(res.biomass).toBe(run.nodes[target].reward + 6 + Math.min(SURVIVOR_CAP, Math.floor(66 / 5)) + 2);
+    expect(run.biomass).toBe(res.biomass);
+  });
+
+  it('losing every brood ends the run, after the checkpoint saves it once', () => {
+    const run = newRun('checkpoint', 0, 'swarm', 0);
+    const next = moves(run)[0];
+    run.nodes[next].checkpoint = true;
+    expect(resolveTurn(run, next, WIN, run.fielded, 0).checkpoint).toBe('reached');
+    const saved = { at: run.at, broods: run.broods.length };
+    // Two losses with small broods wipe the roster.
+    for (const b of run.broods) b.size = 5;
+    const res = resolveTurn(run, moves(run)[0], LOSS, run.broods.map((b) => b.id), 0);
+    expect(res.checkpoint).toBe('restored');
+    expect(run).toMatchObject({ status: 'active', at: saved.at, checkpointUsed: true });
+    expect(run.broods.length).toBe(saved.broods);
+    for (const b of run.broods) b.size = 5;
+    resolveTurn(run, moves(run)[0], LOSS, run.broods.map((b) => b.id), 0);
+    expect(run).toMatchObject({ status: 'lost', lostTo: 'broods' });
+  });
+});
+
+describe('camp', () => {
+  it('heals, grows and unlocks for biomass, and never overspends', () => {
+    const run = newRun('camp', 0, 'swarm', 0);
+    const b = run.broods[0];
+    b.wounded = 1;
+    expect(heal(run, b.id)).toBe(false);
+    run.biomass = 100;
+    expect(heal(run, b.id)).toBe(true);
+    expect(b.wounded).toBe(0);
+    expect(heal(run, b.id)).toBe(false); // not wounded any more
+    expect(grow(run, b.id)).toBe(true);
+    expect(b.cap).toBe(16 + COST.growBy);
+    expect(unlock(run, NestType.Spire)).toBe(true);
+    expect(unlocked(run, NestType.Spire)).toBe(true);
+    expect(unlock(run, NestType.Spire)).toBe(false);
+    expect(run.biomass).toBe(100 - COST.heal - 15 - COST.nest);
+    run.biomass = 5;
+    expect(unlock(run, NestType.Forge)).toBe(false);
+    expect(run.biomass).toBe(5);
+  });
+});
+
+describe('rewards', () => {
+  /** A fresh run that has just won its first battle, so an offer is waiting. */
+  const afterWin = (seed = 'reward', pack: 'swarm' | 'wall' | 'raid' = 'swarm') => {
+    const run = newRun(seed, 0, pack, 0);
+    resolveTurn(run, moves(run)[0], WIN, run.fielded, 0);
+    return run;
+  };
+  const offerOf = (run: RunState, ids: string[]) => (run.offer = { ids, rerolls: 0 });
+
+  it('a win brings a seeded offer of three different, usable rewards', () => {
+    const a = afterWin();
+    const b = afterWin();
+    expect(a.offer!.ids).toHaveLength(3);
+    expect(new Set(a.offer!.ids).size).toBe(3);
+    expect(b.offer).toEqual(a.offer);
+    // Only Swarmer broods and only Hive + Nova: no other kind's strains, no locked powers' variants.
+    for (let t = 0; t < 40; t++) {
+      for (const id of rollOffer({ ...a, turn: t }, 0)) {
+        const r = REWARD[id];
+        if (r.kind !== undefined) expect(r.kind).toBe(Kind.Dot);
+        if (r.power) expect(['surge', 'nova']).toContain(r.power);
+      }
+    }
+    // A loss or a march brings none.
+    const lost = newRun('reward', 0, 'swarm', 0);
+    resolveTurn(lost, moves(lost)[0], LOSS, lost.fielded, 0);
+    expect(lost.offer).toBeUndefined();
+  });
+
+  it('strains fill two slots per brood, then replace one', () => {
+    const run = afterWin();
+    const b = run.broods[0];
+    offerOf(run, ['frenzy', 'lean', 'plated']);
+    expect(takeReward(run, 'plated', b.id)).toBe(false); // a Shield strain on a Swarmer brood
+    expect(takeReward(run, 'frenzy')).toBe(false); // a strain needs a brood
+    expect(takeReward(run, 'frenzy', b.id)).toBe(true);
+    expect(run.offer).toBeUndefined();
+    offerOf(run, ['lean']);
+    takeReward(run, 'lean', b.id);
+    offerOf(run, ['thick-hide']);
+    expect(takeReward(run, 'thick-hide', b.id)).toBe(false); // full: must name one to replace
+    expect(takeReward(run, 'thick-hide', b.id, 'frenzy')).toBe(true);
+    expect(b.strains).toEqual(['lean', 'thick-hide']);
+  });
+
+  it('a power variant replaces the one held for that power', () => {
+    const run = afterWin();
+    offerOf(run, ['wide']);
+    takeReward(run, 'wide');
+    offerOf(run, ['overdrive', 'energy']);
+    takeReward(run, 'overdrive');
+    expect(run.perks).toEqual(['wide', 'overdrive']);
+    expect(modsFor(run.perks, []).novaRadius).toBeGreaterThan(1);
+    // Another Nova variant takes Wide's place.
+    offerOf(run, ['implode']);
+    expect(takeReward(run, 'implode')).toBe(true);
+    expect(run.perks).toEqual(['overdrive', 'implode']);
+    offerOf(run, ['implode']);
+    expect(takeReward(run, 'implode')).toBe(false); // already held
+  });
+
+  it('rerolls cost 10, then 5 more each time, and never overspend', () => {
+    const run = afterWin();
+    run.biomass = 24;
+    const first = run.offer!.ids;
+    expect(rerollCost(run)).toBe(10);
+    expect(rerollOffer(run)).toBe(true);
+    expect(run.offer!.ids).not.toEqual(first);
+    expect(rerollCost(run)).toBe(15);
+    expect(rerollOffer(run)).toBe(false);
+    expect(run.biomass).toBe(14);
+    skipReward(run);
+    expect(run.offer).toBeUndefined();
+  });
+
+  it('strains apply by the broods that fight; perks always', () => {
+    const run = newRun('mods', 0, 'wall', 0);
+    const [dots, tanks] = run.broods;
+    dots.strains = ['lean'];
+    tanks.strains = ['plated'];
+    run.perks = ['energy'];
+    const both = modsFor(run.perks, [dots, tanks]);
+    expect(both.kind[Kind.Dot].speed).toBeCloseTo(1.2);
+    expect(both.kind[Kind.Tank].hp).toBeCloseTo(1.3);
+    expect(both.energyRate).toBeCloseTo(1.15);
+    const onlyDots = modsFor(run.perks, [dots]);
+    expect(onlyDots.kind[Kind.Tank].hp).toBe(1);
+    // The same strain on two broods of one kind doesn't stack.
+    expect(modsFor([], [dots, { ...dots, id: 9 }]).kind[Kind.Dot].speed).toBeCloseTo(1.2);
+    const s = nodeSetup(run, run.nodes[run.start].links[0], [dots.id]);
+    expect(s.players[0].mods!.kind[Kind.Dot].speed).toBeCloseTo(1.2);
+  });
+
+  it('Feral shuts out power variants and Blood price, and Blood price shuts out Feral', () => {
+    const run = afterWin();
+    run.unlocks.nova = true;
+    expect(offerable(run, REWARD['implode'])).toBe(true);
+    expect(offerable(run, REWARD['blood-price'])).toBe(true);
+    run.perks = ['feral'];
+    expect(offerable(run, REWARD['implode'])).toBe(false);
+    expect(offerable(run, REWARD['mend'])).toBe(false);
+    expect(offerable(run, REWARD['blood-price'])).toBe(false);
+    expect(offerable(run, REWARD['old-blood'])).toBe(true);
+    run.perks = ['blood-price'];
+    expect(offerable(run, REWARD['feral'])).toBe(false);
+  });
+
+  it('Lone wolf fields one brood at LONE_WOLF times its size, as veterans; Hunger doubles biomass and speeds the Bloom', () => {
+    const run = afterWin('pacts');
+    offerOf(run, ['lone-wolf']);
+    takeReward(run, 'lone-wolf');
+    expect(maxFielded(run)).toBe(1);
+    expect(run.fielded).toHaveLength(1);
+    expect(armyFor(run, run.broods.map((b) => b.id))).toEqual([{ kind: run.broods[0].kind, count: Math.round(run.broods[0].size * LONE_WOLF), vet: true, brood: run.broods[0].id }]);
+
+    const h = afterWin('pacts');
+    const step = h.bloom.step;
+    offerOf(h, ['hunger']);
+    takeReward(h, 'hunger');
+    expect(h.bloom.step).toBeCloseTo(step * 1.25);
+    const before = h.biomass;
+    const res = resolveTurn(h, moves(h).find((n) => !h.visited.includes(n))!, WIN, h.fielded, 0);
+    expect(res.biomass % 2).toBe(0);
+    expect(h.biomass - before).toBe(res.biomass);
+  });
+});
+
+describe('saves', () => {
+  it('a run saved before rewards loads with empty perks and strains', async () => {
+    const mem = new Map<string, string>();
+    const ls = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v), removeItem: (k: string) => void mem.delete(k), key: (i: number) => [...mem.keys()][i] ?? null, get length() { return mem.size; } };
+    (globalThis as { localStorage?: unknown }).localStorage = ls;
+    const { loadRun, saveRun } = await import('../src/campaign/store');
+    const old = newRun('old', 0, 'swarm', 0) as Partial<RunState>;
+    delete old.perks;
+    for (const b of old.broods!) delete (b as Partial<Brood>).strains;
+    // ...and before the following Bloom (#88): a front with no time or seeds.
+    old.bloom!.front = 300;
+    delete (old.bloom as Partial<RunState['bloom']>).time;
+    delete (old.bloom as Partial<RunState['bloom']>).seeds;
+    saveRun(old as RunState);
+    const back = loadRun(old.id!)!;
+    expect(back.perks).toEqual([]);
+    expect(back.broods.every((b) => Array.isArray(b.strains))).toBe(true);
+    expect(back.bloom.time).toBe(0);
+    expect(back.bloom.seeds).toEqual([]);
+    // The old front stays where it stopped, and the Bloom follows from there.
+    expect(inBloom(back.bloom, 250, MAP_H / 2)).toBe(true);
+    resolveTurn(back, moves(back)[0], WIN, back.fielded, 0);
+    expect(back.bloom.seeds.length).toBe(1);
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
+describe('reachable nodes (#95)', () => {
+  it('holds where you stand, your moves and every node you took; never the Bloom; closed under a step', () => {
+    let missed = 0;
+    for (const seed of SEEDS.slice(0, 20)) {
+      const run = newRun(seed, 0, 'swarm', 0);
+      for (let k = 0; k < 3 && run.status === 'active'; k++) {
+        const reach = reachable(run)!;
+        expect(reach.has(run.at)).toBe(true);
+        for (const m of moves(run)) expect(reach.has(m)).toBe(true);
+        for (const id of run.visited) if (!run.swallowed.includes(id)) expect(reach.has(id)).toBe(true);
+        for (const id of run.swallowed) expect(reach.has(id)).toBe(false);
+        // Nothing outside the set is one step from inside it.
+        for (const a of reach) for (const b of run.nodes[a].links) if (!reach.has(b)) expect(canStep(run, a, b)).toBe(false);
+        missed += run.nodes.filter((n) => !reach.has(n.id) && !run.visited.includes(n.id) && !run.swallowed.includes(n.id)).length;
+        // March to the move nearest the heart, winning.
+        const back = hops(run.nodes, run.heart, (id) => run.swallowed.includes(id));
+        const next = moves(run).reduce((a, b) => (back[b] >= 0 && (back[a] < 0 || back[b] < back[a]) ? b : a));
+        resolveTurn(run, next, run.visited.includes(next) ? null : WIN, run.fielded, 0);
+      }
+    }
+    // Moving on leaves branches behind.
+    expect(missed).toBeGreaterThan(0);
+  });
+
+  it('is null once the run is over: nothing is missed then', () => {
+    const run = rush(newRun('over', 0, 'swarm', 0));
+    expect(run.status).not.toBe('active');
+    expect(reachable(run)).toBeNull();
+  });
+});
+
+describe('strain homes (#109)', () => {
+  it('lists broods of the strain\'s kind that lack it, flagged full and fielded', () => {
+    const run = newRun('homes', 0, 'wall', 0);
+    const strain = Object.values(REWARD).filter((r) => r.family === 'strain' && r.kind === Kind.Tank);
+    const [a, b, c] = strain.map((r) => r.id);
+    run.broods = [
+      brood({ id: 0, kind: Kind.Tank, strains: [] }),
+      brood({ id: 1, kind: Kind.Tank, strains: [b, c] }),
+      brood({ id: 2, kind: Kind.Tank, strains: [a] }),
+      brood({ id: 3, kind: Kind.Dot }),
+    ];
+    run.fielded = [1, 3];
+    const homes = strainHomes(run, a);
+    expect(homes.map((h) => h.brood.id)).toEqual([0, 1]);
+    expect(homes.map((h) => h.full)).toEqual([false, true]);
+    expect(homes.map((h) => h.fielded)).toEqual([false, true]);
+    expect(strainHomes(run, 'glass')).toEqual([]);
+  });
+});
+
+describe('pact costs (#109)', () => {
+  it('every pact names its cost apart from its gain; nothing else has one', () => {
+    for (const r of Object.values(REWARD)) {
+      if (r.family === 'pact') expect(r.cost?.length).toBeGreaterThan(0);
+      else expect(r.cost).toBeUndefined();
+    }
+    expect(rewardText(REWARD.hunger)).toBe(`${REWARD.hunger.text}. Cost: ${REWARD.hunger.cost}`);
+    expect(rewardText(REWARD.capital)).toBe(REWARD.capital.text);
+  });
+});

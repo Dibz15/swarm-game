@@ -1,7 +1,25 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
 import { isMobile } from './mobile';
-import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST } from '../sim/index';
+import { MISSIONS } from '../game/tutorial';
+import { ALLY_MARK, sideOf, teamLayout, teamName, teamsLine, teamsList, verb, type TeamGroup, type TeamLayout } from './teams';
+import { heartSlot, standingNests } from '../sim/heart';
+import { BOONS, SIEGE, WAVE_KINDS, waveSize } from '../sim/siege';
+import type { WaveKind } from '../sim/world';
+
+/** Seconds of upcoming waves the siege timeline shows (#67). */
+const SIEGE_SPAN = 90;
+/** Wave icons on the timeline, by kind. */
+const svg = (body: string) => `<svg viewBox="0 0 16 16" aria-hidden="true">${body}</svg>`;
+const WAVE_ICON: Record<WaveKind, string> = {
+  swarm: svg('<circle cx="5" cy="6" r="2.2"/><circle cx="11" cy="6" r="2.2"/><circle cx="8" cy="11" r="2.2"/>'),
+  brutes: svg('<path d="M8 1.5 14 4v4.2c0 3.3-2.6 5.4-6 6.3-3.4-.9-6-3-6-6.3V4z"/>'),
+  spears: svg('<path d="M2 14 11 5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M9.5 2.5H14V7z"/>'),
+  raiders: svg('<path d="M2 3l5 5-5 5zM8 3l5 5-5 5z"/>'),
+  pincer: svg('<path d="M1 8l4-4v3h6V4l4 4-4 4V9H5v3z"/>'),
+  colossus: svg('<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2.4"/><circle cx="8" cy="8" r="2"/>'),
+};
+import { type NestPower, dominationStatus, UNIT_STATS, DOMINATION, KEYS, MAX_LEVEL, NEST_BLURB, NEST_NAMES, NEUTRAL, POWER, TICK_HZ, UPGRADE_COST, bloodCost, siphonWait, surgeCost } from '../sim/index';
 
 const TIPS = [
   'Drag to select your dots, right-click to send them. Tap on touch.',
@@ -44,7 +62,7 @@ const ENEMY_TIPS = [
 
 export type HudAction =
   | 'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'nearest' | 'pause' | 'mute'
-  | 'fortify' | 'barrage' | 'blink' | 'lockdown' | 'skip' | 'go';
+  | 'fortify' | 'barrage' | 'blink' | 'lockdown' | 'skip' | 'go' | 'next';
 
 export function formatTime(ticks: number): string {
   const s = Math.floor(ticks / TICK_HZ);
@@ -56,6 +74,18 @@ export class Hud {
   readonly el: HTMLDivElement;
   private bar: HTMLDivElement;
   private chips: HTMLDivElement;
+  /** chips in the order shown (by team in a team match, #74), and what that order was built from */
+  private chipEls: HTMLElement[] = [];
+  private chipKey = '';
+  /** the start banner and the strip's popover (#74), and the match they were made for */
+  private teamBanner: HTMLDivElement;
+  private teamPop: HTMLDivElement;
+  private teamsGame: GameView | null = null;
+  /** the match's teams, fixed at its start, and each faction's group (#74) */
+  private layout: TeamLayout = { team: false, groups: [] };
+  private groupOf = new Map<number, TeamGroup>();
+  /** the tick the popover last refreshed */
+  private popTick = 0;
   private clock: HTMLSpanElement;
   private sel: HTMLDivElement;
   private energyFill: HTMLDivElement;
@@ -63,6 +93,17 @@ export class Hud {
   private btn: Record<string, HTMLButtonElement> = {};
   private toasts: HTMLDivElement;
   private dom: HTMLDivElement;
+  private heartBar: HTMLDivElement;
+  private warlordChip: HTMLDivElement;
+  private siege: HTMLDivElement;
+  private siegeTrack: HTMLDivElement;
+  private boon: HTMLDivElement;
+  /** the offer the boon panel shows (its closing tick), to rebuild it once per offer */
+  private boonShown = -1;
+  /** one icon per scheduled wave (#67), made when the siege is first seen */
+  private waveIcons: HTMLElement[] = [];
+  /** the warlord in this battle (#66), whose chip greys out once it's eliminated */
+  private warlord = -1;
   private nestShare: HTMLDivElement;
   private domMark: HTMLElement;
   private nestCard: HTMLDivElement;
@@ -95,18 +136,24 @@ export class Hud {
         <div class="strength" title="Army size"></div>
         <div class="nestshare" title="Nests held. Hold past the marker for 30s to win by domination"><div class="segs"></div><span class="mark"></span></div>
         <div class="chips"></div>
+        <div class="team-pop"></div>
       </div>
+      <div class="team-banner" title="Tap to hide"></div>
       <div class="hud-tr">
         <span class="clock">0:00</span>
         <button class="icon" data-a="mute" title="Mute (M)">♪</button>
         <button class="icon" data-a="pause" title="Pause (Esc)">❚❚</button>
       </div>
+      <div class="warlord-chip"></div>
+      <div class="siege"><div class="siege-track"><span class="siege-now"></span></div><div class="siege-clock"></div><div class="siege-lost"></div><div class="siege-bloom"></div></div>
+      <div class="boon"><div class="boon-head">Pick one <span></span></div><div class="boon-list"></div></div>
+      <div class="heartbar"><div class="heart-name">The Bloom's heart</div><div class="heart-hp"><i></i></div><div class="heart-ward"></div></div>
       <div class="dom"><div class="dom-time"></div><div class="dom-text"></div><div class="dom-bar"><i></i></div></div>
       <div class="toasts"></div>
       <div class="nestcard"></div>
       <div class="aimhint"><span></span><button class="cancel">Cancel</button></div>
       <div class="tip"><span></span><button class="x" title="Hide tips">✕</button></div>
-      <div class="coach"><small></small><p></p><div class="coach-status"></div><div class="coach-hold"><span>Paused to read</span><i><b></b></i><button class="small primary" data-a="go">Go</button></div><div class="coach-row"><span class="pips"></span><button class="small" data-a="skip">Skip mission</button></div></div>
+      <div class="coach"><small></small><p></p><div class="coach-status"></div><div class="coach-hold"><span>Paused to read · act any time to go on</span><i><b></b></i><button class="small primary" data-a="go">Go</button></div><div class="coach-next"><button class="small primary" data-a="next">Next ›</button></div><div class="coach-row"><span class="pips"></span><button class="small" data-a="skip">Skip mission</button></div></div>
       <div class="counters" title="Spears pierce Shields · Shields stop Swarmers · Swarmers overrun Spears">
         <svg viewBox="0 0 120 92" aria-hidden="true">
           <defs>
@@ -117,10 +164,10 @@ export class Hud {
           <path class="arrow" data-from="2" data-to="1" d="M68,20 Q98,30 96,56" marker-end="url(#ah)"></path>
           <path class="arrow" data-from="1" data-to="0" d="M84,76 Q60,90 36,76" marker-end="url(#ah)"></path>
           <path class="arrow" data-from="0" data-to="2" d="M22,58 Q20,30 50,20" marker-end="url(#ah)"></path>
-          <g class="node" data-k="2" transform="translate(60,14)"><polygon points="0,-11 4,0 0,11 -4,0"></polygon><text x="9" y="4">3</text></g>
-          <g class="node" data-k="1" transform="translate(98,70)"><rect x="-8" y="-8" width="16" height="16" class="hollow"></rect><text x="-3" y="20">2</text></g>
-          <g class="node" data-k="0" transform="translate(22,70)"><rect x="-9" y="-7" width="7" height="7"></rect><rect x="1" y="-8" width="7" height="7"></rect><rect x="-4" y="1" width="7" height="7"></rect><text x="-3" y="20">1</text></g>
-          <g class="node raider" data-k="3" transform="translate(60,52)"><polygon points="7,0 -6,-6 -3,0 -6,6"></polygon><text x="10" y="4">4</text></g>
+          <g class="node" data-k="2" transform="translate(60,14)"><polygon points="0,-11 4,0 0,11 -4,0"></polygon><text x="9" y="4">3</text><text class="kname" x="9" y="3">Spears</text></g>
+          <g class="node" data-k="1" transform="translate(98,70)"><rect x="-8" y="-8" width="16" height="16" class="hollow"></rect><text x="-3" y="20">2</text><text class="kname" x="0" y="19">Shields</text></g>
+          <g class="node" data-k="0" transform="translate(22,70)"><rect x="-9" y="-7" width="7" height="7"></rect><rect x="1" y="-8" width="7" height="7"></rect><rect x="-4" y="1" width="7" height="7"></rect><text x="-3" y="20">1</text><text class="kname" x="0" y="19">Swarmers</text></g>
+          <g class="node raider" data-k="3" transform="translate(60,52)"><polygon points="7,0 -6,-6 -3,0 -6,6"></polygon><text x="10" y="4">4</text><text class="kname" x="0" y="15">Raiders</text></g>
         </svg>
         <div class="counter-cap"></div>
       </div>
@@ -168,12 +215,35 @@ export class Hud {
     this.counterCap = q('.counter-cap');
     this.bar = q('.strength');
     this.chips = q('.chips');
+    this.teamBanner = q('.team-banner');
+    this.teamPop = q('.team-pop');
+    // Who's on your team, at any time: tap the strip (#74).
+    this.chips.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const g = this.game;
+      if (!g || !this.layout.team) return;
+      this.teamPop.classList.toggle('on');
+      if (this.teamPop.classList.contains('on')) this.teamPop.innerHTML = teamsList(g.world, g.human);
+    });
+    this.teamPop.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.teamPop.classList.remove('on');
+    });
+    this.teamBanner.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.teamBanner.classList.remove('on');
+    });
     this.clock = q('.clock');
     this.sel = q('.selinfo');
     this.energyFill = q('.energy .fill');
     this.energyText = q('.energy span');
     this.toasts = q('.toasts');
     this.dom = q('.dom');
+    this.heartBar = q('.heartbar');
+    this.warlordChip = q('.warlord-chip');
+    this.siege = q('.siege');
+    this.siegeTrack = q('.siege-track');
+    this.boon = q('.boon');
     this.nestShare = q('.nestshare .segs');
     this.domMark = q('.nestshare .mark');
     this.nestCard = q('.nestcard');
@@ -242,43 +312,191 @@ export class Hud {
     this.insetTop = coach.height > 0 ? Math.max(topBottom, coach.bottom) : topBottom;
     // Toasts drop below the tutorial coach while it's up.
     this.toasts.style.top = coach.height > 0 ? `${Math.round(coach.bottom + 8)}px` : '';
-    const b = this.bottom.getBoundingClientRect();
-    this.insetBottom = b.height > 0 ? Math.max(0, h - b.top) : 0;
+    // Its laid-out place, not where a tutorial spotlight has lifted it to (#115).
+    const b = this.bottom;
+    this.insetBottom = b.offsetHeight > 0 ? Math.max(0, h - b.offsetTop) : 0;
+  }
+
+  /** the element the coach has brought to the middle (#115), and the window and element size it was placed for */
+  private spot: HTMLElement | null = null;
+  private spotView = '';
+  /** the spotlit element's own transform at home */
+  private spotBase = '';
+
+  private clearSpot(): void {
+    if (!this.spot) return;
+    this.spot.classList.remove('coach-spot');
+    this.spot.style.transform = '';
+    this.spot = null;
+    this.spotBase = '';
+  }
+
+  /** Move the spotlit element from its home spot to the middle of the screen, enlarged. */
+  private placeSpot(remeasure: boolean): void {
+    const e = this.spot!;
+    // Measure its home without the transform (and without a transition, so the reading is real).
+    if (remeasure) {
+      e.style.transition = 'none';
+      e.style.transform = '';
+    }
+    const r = e.getBoundingClientRect();
+    // Its own transform at home (the bottom bar is centred with one): kept, with the move on top.
+    if (remeasure || !this.spotBase) this.spotBase = getComputedStyle(e).transform.replace('none', '');
+    // Into the space under the coach panel, so it never covers the text or Next: as large as
+    // fits (2.4× at most), never smaller than it is.
+    const top = this.coach.getBoundingClientRect().bottom + 12;
+    const room = Math.max(40, innerHeight - top - 12);
+    const fit = Math.min(2.4, (0.92 * innerWidth) / Math.max(1, r.width), Math.min(0.85 * room, 0.5 * Math.min(innerWidth, innerHeight)) / Math.max(1, r.height));
+    const k = Math.max(1, fit);
+    const dx = innerWidth / 2 - (r.left + r.width / 2), dy = top + room / 2 - (r.top + r.height / 2);
+    e.style.transform = `translate(${dx}px, ${dy}px) ${this.spotBase} scale(${k})`;
+    if (remeasure) {
+      void e.offsetWidth;
+      e.style.transition = '';
+    }
+    this.spotView = this.spotKey();
+  }
+
+  private spotKey(): string {
+    return `${innerWidth}x${innerHeight}:${this.spot?.offsetWidth}x${this.spot?.offsetHeight}`;
   }
 
   /** Tutorial coach: the current step's instruction and progress (#17). */
   private updateCoach(g: GameView, mobile: boolean): void {
     const m = g.mission;
     // The live status line changes on its own; everything else only when the step does.
-    const status = m?.current?.status?.({ w: g.world, human: g.human, log: g.session.log }) ?? '';
+    const ctx = { w: g.world, human: g.human, log: g.session.log };
+    const status = m?.current?.status?.(m.ctx(ctx)) ?? '';
+    // Your part done, the step waits on the world (#115): say so instead of asking again.
+    const wait = m ? g.waitHint : null;
+    const waiting = !!wait;
+    (this.coach.querySelector('.coach-next') as HTMLElement).style.display = m?.current?.next ? '' : 'none';
     const hold = this.coach.querySelector('.coach-hold') as HTMLElement;
     hold.style.display = g.readLeft > 0 ? '' : 'none';
     (hold.querySelector('b') as HTMLElement).style.width = `${Math.round(g.readLeft * 100)}%`;
     const st = this.coach.querySelector('.coach-status') as HTMLElement;
     if (st.innerHTML !== status) st.innerHTML = status;
     st.style.display = status ? '' : 'none';
-    const key = m ? `${m.index}:${m.step}:${mobile}` : '';
+    const shown = wait ? (mobile ? wait.mobile : wait.desktop) : '';
+    const key = m ? `${m.index}:${m.step}:${mobile}:${shown}` : '';
+    // A resize, a turned phone, or the element changing size (buttons shown or hidden) moves its
+    // home: centre it again.
+    if (this.spot && this.spotKey() !== this.spotView) this.placeSpot(true);
     if (key === this.coachKey) return;
     this.coachKey = key;
     this.coach.classList.toggle('on', !!m);
     if (!m) {
       this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
+      // A mission skipped mid-spotlight sends the element home too.
+      this.clearSpot();
       return;
     }
     this.tip.style.display = 'none';
     const step = m.current;
-    (this.coach.querySelector('small') as HTMLElement).textContent = `Mission ${m.index + 1} of 5 · ${m.mission.title}`;
-    (this.coach.querySelector('p') as HTMLElement).innerHTML = step ? (mobile ? step.text.mobile : step.text.desktop) : 'Mission complete!';
+    (this.coach.querySelector('small') as HTMLElement).textContent = `Mission ${m.index + 1} of ${MISSIONS.length} · ${m.mission.title}`;
+    // The graduation match can't be skipped (#147).
+    (this.coach.querySelector('[data-a=skip]') as HTMLElement).style.display = m.mission.real ? 'none' : '';
+    const text = wait ?? step?.text;
+    (this.coach.querySelector('p') as HTMLElement).innerHTML = text ? (mobile ? text.mobile : text.desktop) : 'Mission complete!';
+    this.coach.classList.toggle('waiting', waiting);
     (this.coach.querySelector('.pips') as HTMLElement).innerHTML = m.mission.steps.map((_, i) => `<i class="${i < m.step ? 'done' : i === m.step ? 'now' : ''}"></i>`).join('');
     this.el.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
     if (step?.pulse) this.el.querySelector(step.pulse)?.classList.add('coach-pulse');
+    // A spotlit element (#115) glides to the middle, enlarged; clearing it glides it home.
+    // Consecutive steps on the same element (a tour of the bottom bar) keep it where it is.
+    const next = step?.spotlight ? this.el.querySelector<HTMLElement>(step.spotlight) : null;
+    if (next !== this.spot) {
+      this.clearSpot();
+      this.spot = next;
+      if (next) {
+        next.classList.add('coach-spot');
+        this.placeSpot(false);
+      }
+    }
     this.coach.classList.remove('pop');
     void this.coach.offsetWidth;
     this.coach.classList.add('pop');
   }
 
+  /**
+   * Holding the line (#67): the waves walk along a timeline toward its left
+   * edge, arriving when they reach it; the clock, and a countdown if the
+   * capital has fallen. Every frame, so the icons glide.
+   */
+  private updateSiege(g: GameView): void {
+    const w = g.world;
+    const sg = w.siege;
+    this.siege.style.display = sg ? 'block' : 'none';
+    this.el.classList.toggle('has-siege', !!sg);
+    if (!sg) return;
+    if (!this.waveIcons.length) {
+      this.waveIcons = sg.waves.map((wave, k) => {
+        const i = document.createElement('span');
+        i.className = `wave wave-${wave.kind}${k >= sg.waves.length / 2 ? ' late' : ''}`;
+        i.innerHTML = `${WAVE_ICON[wave.kind]}${wave.from.length > 1 ? '<b>×2</b>' : ''}`;
+        i.style.setProperty('--s', `${0.8 + Math.min(0.7, wave.size / 60)}`);
+        this.siegeTrack.appendChild(i);
+        return i;
+      });
+    }
+    const span = SIEGE_SPAN * TICK_HZ;
+    sg.waves.forEach((wave, k) => {
+      const el = this.waveIcons[k];
+      const dt = wave.at - (w.tick + g.session.alpha);
+      const show = dt >= -0.6 * TICK_HZ && dt <= span;
+      el.style.display = show ? '' : 'none';
+      if (!show) return;
+      el.style.left = `${Math.max(0, (100 * dt) / span)}%`;
+      el.classList.toggle('arrived', dt <= 0);
+      el.title = `${WAVE_KINDS[wave.kind].name} · ${waveSize(w, wave)}${wave.from.length > 1 ? ' (two sides)' : ''} · in ${formatTime(Math.max(0, Math.round(dt)))}`;
+    });
+    const left = Math.max(0, sg.until - w.tick);
+    const clock = this.siege.children[1] as HTMLElement;
+    const text = `Hold ${formatTime(left)}`;
+    if (clock.textContent !== text) clock.textContent = text;
+    const lost = this.siege.children[2] as HTMLElement;
+    lost.style.display = sg.lostAt >= 0 ? 'block' : 'none';
+    if (sg.lostAt >= 0) lost.textContent = `Retake your capital: ${formatTime(Math.max(0, SIEGE.retake - (w.tick - sg.lostAt)))}`;
+    // The Bloom's nests in the field: what taking them would save you.
+    const held = sg.bloomNests.filter((id) => w.nests[id].owner === NEUTRAL).length;
+    const bloom = this.siege.children[3] as HTMLElement;
+    const btext = held ? `${held} Bloom nest${held > 1 ? 's' : ''} feed the waves (+${Math.round(100 * SIEGE.perNest * held)}%): take them to thin them` : 'The Bloom holds no nests: its waves are at their weakest';
+    if (bloom.textContent !== btext) bloom.textContent = btext;
+
+    // A boon on offer: three choices and the time left to pick.
+    const offer = sg.offer;
+    this.boon.style.display = offer ? 'block' : 'none';
+    if (!offer) {
+      this.boonShown = -1;
+      return;
+    }
+    if (this.boonShown !== offer.until) {
+      this.boonShown = offer.until;
+      const list = this.boon.querySelector('.boon-list')!;
+      list.innerHTML = offer.ids.map((id, k) => `<button data-k="${k}"><b>${BOONS[id].name}</b><small>${BOONS[id].text}</small></button>`).join('');
+      list.querySelectorAll<HTMLButtonElement>('button').forEach((b) => b.addEventListener('click', () => this.game?.pickBoon(Number(b.dataset.k))));
+    }
+    const head = this.boon.querySelector('.boon-head span')!;
+    const t = `${Math.ceil((offer.until - w.tick) / TICK_HZ)}s, then the first is yours`;
+    if (head.textContent !== t) head.textContent = t;
+  }
+
+  /** Show a campaign warlord (#66): its name and trait, in its colour, for the whole battle. */
+  setWarlord(w: { faction: number; name: string; trait: string; text: string; citadel?: boolean } | null): void {
+    this.warlord = w ? w.faction : -1;
+    // Toasts drop below the chip so they don't cover it.
+    this.el.classList.toggle('has-lord', !!w);
+    this.warlordChip.style.display = w ? 'block' : 'none';
+    if (!w) return;
+    this.warlordChip.style.setProperty('--c', hex(w.faction));
+    this.warlordChip.innerHTML = `<b>♛ ${w.name}</b><small>${w.trait}: ${w.text}</small>${
+      w.citadel ? '<div class="citadel-goal">Take the citadel to win<span><i></i></span></div>' : ''
+    }`;
+  }
+
   update(g: GameView, dt: number): void {
     this.game = g;
+    this.updateSiege(g);
     this.tipTimer += dt;
     if (this.tipTimer > 9) {
       this.tipTimer = 0;
@@ -297,22 +515,51 @@ export class Hud {
     this.updateCoach(g, mobile);
     this.measure();
     this.aimHint.classList.toggle('on', !!g.aim);
-    if (g.aim) (this.aimHint.firstElementChild as HTMLElement).textContent = `Tap where to cast ${g.aim[0].toUpperCase()}${g.aim.slice(1)}`;
+    if (g.aim) {
+      const name = `${g.aim[0].toUpperCase()}${g.aim.slice(1)}`;
+      (this.aimHint.firstElementChild as HTMLElement).textContent = mobile ? `Tap where to cast ${name}` : `Click where to cast ${name}${g.aim === 'blink' ? ' · G again: at the cursor' : ''}`;
+    }
+
+    // Teams (#74): a banner at the start of a team match, and the strip grouped by team.
+    if (this.teamsGame !== g) {
+      this.teamsGame = g;
+      this.layout = teamLayout(w, g.human);
+      this.groupOf = new Map(this.layout.groups.flatMap((t) => t.members.map((f) => [f, t] as const)));
+      this.chipKey = '';
+      this.popTick = 0;
+      this.teamPop.classList.remove('on');
+      this.teamBanner.innerHTML = this.layout.team ? `<div>${teamsLine(w, g.human)}</div>` : '';
+      this.teamBanner.classList.toggle('on', this.layout.team);
+    }
+    const layout = this.layout;
+    if (w.tick > 6 * TICK_HZ) this.teamBanner.classList.remove('on');
+    // Refresh the open list twice a second (by ticks elapsed, so a frame that steps several can't skip it).
+    if (this.teamPop.classList.contains('on') && w.tick - this.popTick >= 15) {
+      this.popTick = w.tick;
+      this.teamPop.innerHTML = teamsList(w, g.human);
+    }
 
     // Strength bar + chips.
     const active = w.factions.filter((f) => f.active && f.id !== NEUTRAL);
     const total = active.reduce((s, f) => s + w.unitCount[f.id], 0) || 1;
     const nestsOf = (f: number) => w.nests.filter((n) => n.owner === f).length;
-    if (this.bar.children.length !== active.length) {
-      this.bar.innerHTML = active.map((f) => `<i style="background:${hex(f.id)}"></i>`).join('');
-      this.chips.innerHTML = active
-        .map((f) => `<span class="chip${f.id === g.human ? ' me' : ''}" style="--c:${hex(f.id)}"><b></b><em></em></span>`)
-        .join('');
+    const order = layout.team ? layout.groups.flatMap((t) => t.members) : active.map((f) => f.id);
+    const key = `${layout.team ? 't' : ''}${order.join(',')}`;
+    if (key !== this.chipKey) {
+      this.chipKey = key;
+      this.bar.innerHTML = order.map((f) => `<i style="background:${hex(f)}"></i>`).join('');
+      const chip = (f: number) =>
+        `<span class="chip${f === g.human ? ' me' : ''}${sideOf(w, g.human, f) === 'ally' ? ' ally' : ''}" style="--c:${hex(f)}"><b></b><em></em></span>`;
+      this.chips.innerHTML = layout.team
+        ? layout.groups.map((t) => `<span class="team${t.mine ? ' mine' : ''}"><small>${t.mine ? `${t.letter} · you` : t.letter}</small>${t.members.map(chip).join('')}</span>`).join('')
+        : order.map(chip).join('');
+      this.chipEls = [...this.chips.querySelectorAll<HTMLElement>('.chip')];
     }
-    active.forEach((f, k) => {
+    order.forEach((id, k) => {
+      const f = w.factions[id];
       const seg = this.bar.children[k] as HTMLElement;
       seg.style.flexGrow = String(w.unitCount[f.id] / total + 0.0001);
-      const chip = this.chips.children[k] as HTMLElement;
+      const chip = this.chipEls[k];
       chip.classList.toggle('dead', f.eliminated);
       if (f.id === g.human) {
         // Your own chip shows supply: army / cap, red while production is blocked.
@@ -321,10 +568,13 @@ export class Hud {
         chip.classList.toggle('blocked', sp.blocked);
       } else (chip.children[0] as HTMLElement).textContent = String(w.unitCount[f.id]);
       (chip.children[1] as HTMLElement).textContent = `⬡${nestsOf(f.id)}`;
+      const side = layout.team ? this.groupOf.get(f.id) : undefined;
       chip.title =
         f.id === g.human
           ? `${FACTION_NAMES[f.id]} (you). Army / supply cap: nests stop producing at the cap. Take or upgrade nests to raise it.`
-          : FACTION_NAMES[f.id];
+          : side
+            ? `${FACTION_NAMES[f.id]}: ${side.mine ? 'your ally' : 'enemy'} (team ${side.letter}). Tap the strip for every team.`
+            : FACTION_NAMES[f.id];
     });
 
     // Nest share: one segment per faction, unheld nests left empty.
@@ -332,9 +582,37 @@ export class Hud {
       this.nestShare.innerHTML = active.map((f) => `<i style="background:${hex(f.id)}"></i>`).join('');
     }
     this.domMark.style.left = `${w.domShare * 100}%`;
+    // No domination win in this match (a share past 1, #146): no marker.
+    this.domMark.style.display = w.domShare > 1 ? 'none' : '';
     active.forEach((f, k) => {
       (this.nestShare.children[k] as HTMLElement).style.width = `${(100 * nestsOf(f.id)) / Math.max(1, w.nests.length)}%`;
     });
+
+    // The Bloom's heart (campaign finale): its health, and what wards it.
+    const hs = heartSlot(w);
+    this.heartBar.style.display = hs >= 0 ? 'block' : 'none';
+    if (this.warlord >= 0) {
+      this.warlordChip.classList.toggle('below', hs >= 0);
+      this.warlordChip.classList.toggle('down', !!w.factions[this.warlord]?.eliminated);
+      // Your hold on the citadel, while you're taking it.
+      const bar = this.warlordChip.querySelector<HTMLElement>('.citadel-goal i');
+      if (bar && w.citadel >= 0) {
+        const c = w.nests[w.citadel];
+        // Two halves: wearing its control down, then building yours.
+        const k = c.owner === g.human ? 1 : c.owner < 0 ? (c.controller === g.human ? 0.5 + 0.5 * c.control : 0.5) : 0.5 * (1 - c.control);
+        bar.style.width = `${Math.round(100 * Math.max(0, Math.min(1, k)))}%`;
+      }
+    }
+    this.nestShare.parentElement!.style.visibility = hs >= 0 ? 'hidden' : '';
+    if (hs >= 0) {
+      const h = w.heart!;
+      const ward = standingNests(w);
+      (this.heartBar.children[1].children[0] as HTMLElement).style.width = `${(100 * w.hp[hs]) / h.maxHp}%`;
+      const text = ward > 0 ? `Warded by ${ward} Bloom nest${ward > 1 ? 's' : ''}: take them to break the ward` : 'Unwarded: strike now';
+      const el = this.heartBar.children[2] as HTMLElement;
+      if (el.textContent !== text) el.textContent = text;
+      this.heartBar.classList.toggle('open', ward === 0);
+    }
 
     // Domination: a big countdown nobody can miss, with what to do about it.
     const ds = dominationStatus(w);
@@ -346,11 +624,16 @@ export class Hud {
       this.dom.style.setProperty('--c', col);
       this.dom.classList.toggle('urgent', secs <= 10);
       this.dom.classList.toggle('mine', mine);
-      (this.dom.children[0] as HTMLElement).textContent = `0:${String(secs).padStart(2, '0')}`;
-      (this.dom.children[1] as HTMLElement).innerHTML = mine
-        ? `<b>You are dominating</b> · hold ${ds.need} of ${w.nests.length} nests`
-        : `<b>${FACTION_NAMES[ds.face]} is dominating</b> · take back ${ds.toBreak} nest${ds.toBreak > 1 ? 's' : ''} to stop it`;
-      ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${(100 * ds.left) / DOMINATION.ticks}%`;
+      (this.dom.children[0] as HTMLElement).textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+      const scoring = ds.paused ? '<b>not scoring</b>: no key nest held uncontested' : `scoring on ${ds.held} of ${ds.need} key nests`;
+      // In a team match, name the team (#74): "Your team", "Magenta + Lime".
+      const who = teamName(w, g.human, ds.face, layout);
+      (this.dom.children[1] as HTMLElement).innerHTML = ds.keys
+        ? `<b>${who.name} ${verb(who, 'leads', 'lead')} on key nests</b> · ${scoring}${mine ? '' : ': take or contest theirs'}`
+        : mine
+          ? `<b>${who.name} ${verb(who, 'is', 'are')} dominating</b> · hold ${ds.need} of ${w.nests.length} nests`
+          : `<b>${who.name} ${verb(who, 'is', 'are')} dominating</b> · take back ${ds.toBreak} nest${ds.toBreak > 1 ? 's' : ''} to stop it`;
+      ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${100 * ds.frac}%`;
     }
 
     // Energy and buttons.
@@ -361,30 +644,49 @@ export class Hud {
     for (const c of w.crystals) if (c.holder === g.human) crystals++;
     this.energyText.textContent = `Energy ${Math.floor(e)}${crystals ? `  ◆ crystal${crystals > 1 ? ` ×${crystals}` : ''}` : ''}`;
     const nUnits = g.selection.units.size;
-    this.btn.surge.disabled = e < POWER.surgeCost || nUnits === 0;
+    const surge = me ? surgeCost(w, g.human) : POWER.surgeCost;
+    // Feral (#60) has no powers; Blood price (#60) pays for them in units, not energy. Either way, no energy bar.
+    const feral = !!me?.mods.noPowers, blood = !!me?.mods.bloodPrice;
+    (this.energyFill.parentElement as HTMLElement).style.display = feral || blood ? 'none' : '';
+    const army = w.unitCount[g.human] ?? 0;
+    /** Can we pay `cost` from a group of `n` (0: any of the army), keeping `keep`? */
+    const afford = (cost: number, n: number, keep = 1) => (blood ? (n || army) - bloodCost(cost) >= keep : e >= cost);
+    const price = (b: HTMLElement, cost: number) => (b.querySelector('small')!.textContent = blood ? `−${bloodCost(cost)}●` : `${Math.round(cost)}`);
+    this.btn.surge.disabled = !afford(surge, nUnits) || nUnits === 0;
+    price(this.btn.surge, surge);
+    price(this.btn.nova, POWER.novaCost);
     this.btn.nearest.disabled = nUnits === 0;
-    this.btn.nova.disabled = e < POWER.novaCost || nUnits < 4;
-    this.btn.surge.classList.toggle('ready', e >= POWER.surgeCost);
+    this.btn.nova.disabled = !afford(POWER.novaCost, nUnits, 4) || nUnits < 4;
+    this.btn.surge.classList.toggle('ready', afford(surge, nUnits || army));
     // Nest powers only show while you hold the matching nest type.
-    const nestPowers: [NestPower, number, boolean][] = [
-      ['fortify', POWER.fortifyCost, nUnits > 0],
-      ['barrage', POWER.barrageCost, true],
-      ['blink', POWER.blinkCost, nUnits > 0],
-      ['lockdown', POWER.lockdownCost, true],
+    const nestPowers: [NestPower, number, boolean, boolean][] = [
+      ['fortify', POWER.fortifyCost, nUnits > 0, true],
+      ['barrage', POWER.barrageCost, true, false],
+      ['blink', POWER.blinkCost, nUnits > 0, true],
+      ['lockdown', POWER.lockdownCost, true, false],
     ];
-    for (const [p, cost, ok] of nestPowers) {
+    for (const [p, cost, ok, group] of nestPowers) {
       const b = this.btn[p];
       const owned = g.canUse(p) && !g.locked.has(p);
       b.style.display = owned ? '' : 'none';
-      b.disabled = e < cost || !ok;
-      b.classList.toggle('ready', e >= cost);
+      const can = afford(cost, group ? nUnits : 0);
+      b.disabled = !can || !ok;
+      b.classList.toggle('ready', group ? afford(cost, nUnits || army) : can);
       b.classList.toggle('aiming', g.aim === p);
+      price(b, cost);
     }
-    this.btn.nova.classList.toggle('ready', e >= POWER.novaCost);
+    // Siphon (#60): Lockdown rests between locks, the seconds left on the button.
+    const rest = siphonWait(w, g.human);
+    if (rest > 0) {
+      this.btn.lockdown.disabled = true;
+      this.btn.lockdown.classList.remove('ready');
+      this.btn.lockdown.querySelector('small')!.textContent = `${Math.ceil(rest / TICK_HZ)}s`;
+    }
+    this.btn.nova.classList.toggle('ready', afford(POWER.novaCost, nUnits || army, 4));
     const up = g.upgradeInfo();
     this.btn.upgrade.style.display = up && !g.locked.has('upgrade') ? '' : 'none';
-    this.btn.surge.style.display = g.locked.has('surge') ? 'none' : '';
-    this.btn.nova.style.display = g.locked.has('nova') ? 'none' : '';
+    this.btn.surge.style.display = g.locked.has('surge') || feral ? 'none' : '';
+    this.btn.nova.style.display = g.locked.has('nova') || feral ? 'none' : '';
     if (up) {
       (this.btn.upgrade.querySelector('.ucost') as HTMLElement).textContent = `${Math.max(0, up.cost)} dots`;
       (this.btn.upgrade.querySelector('.ulabel') as HTMLElement).textContent = up.repair ? 'Repair' : 'Upgrade';
@@ -418,10 +720,24 @@ export class Hud {
     if (!hn && mobile && nUnits === 0) for (const id of g.selection.nests) hn = hn ?? w.nests[id];
     if (hn && mobile) {
       const next = hn.owner === g.human && hn.level < MAX_LEVEL ? `<br><small>Upgrade: ${UPGRADE_COST[hn.level]} dots → ${LEVEL_PERKS[hn.level + 1]}</small>` : '';
-      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL}${next}`;
+      const s = layout.team ? sideOf(w, g.human, hn.owner) : null;
+      const side = s === 'ally' ? ` · ${ALLY_MARK} Ally` : s === 'enemy' ? ' · Enemy' : '';
+      this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL}${side}${next}`;
       this.nestCard.style.display = 'block';
     } else if (hn) {
-      const owner = hn.owner < 0 ? 'Unclaimed' : hn.owner === NEUTRAL ? 'Neutral' : hn.owner === g.human ? 'Yours' : FACTION_NAMES[hn.owner];
+      const s = sideOf(w, g.human, hn.owner);
+      const owner =
+        hn.owner < 0
+          ? 'Unclaimed'
+          : s === null
+            ? 'Neutral'
+            : s === 'you'
+              ? 'Yours'
+              : !layout.team
+                ? FACTION_NAMES[hn.owner]
+                : s === 'ally'
+                  ? `${ALLY_MARK} Ally: ${FACTION_NAMES[hn.owner]}`
+                  : `Enemy: ${FACTION_NAMES[hn.owner]}`;
       const next = hn.level < MAX_LEVEL ? `<br>Next: <b>Lv${hn.level + 1}</b> for ${UPGRADE_COST[hn.level]} dots (U): ${LEVEL_PERKS[hn.level + 1]}` : '';
       const has = hn.level > 1 ? `<br>Lv${hn.level}: ${LEVEL_PERKS.slice(2, hn.level + 1).join('; ')}` : '';
       this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${has}${hn.owner === g.human ? next : ''}</small>`;

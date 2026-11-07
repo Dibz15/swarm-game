@@ -12,13 +12,13 @@ import { botMatch } from './helpers';
 const CAVES = CAVE_LEVELS.filter((c) => c !== 'off') as CaveLevel[];
 
 describe('cave mapgen', () => {
-  it('every nest sits in open ground and reaches every other, on all sizes and in portrait', () => {
+  it('every nest sits in open ground and reaches every other, on all sizes and shapes', () => {
     for (const caves of CAVES) {
       for (const size of ['small', 'medium', 'large'] as MapSize[]) {
         for (const players of [2, 3, 5]) {
-          for (const portrait of [false, true]) {
+          for (const alt of [0, 1]) {
             for (let s = 0; s < 3; s++) {
-              const m = generateMap({ seed: 300 + s, size, players, portrait, terrain: 'standard', caves });
+              const m = generateMap({ seed: 300 + s + alt * 97, size, players, terrain: 'standard', caves });
               const t = new Terrain(m.terrain, m.width, m.height);
               expect(t.connected(m.nests.map((n) => [n.x, n.y]))).toBe(true);
               for (const n of m.nests) expect(t.clearance(n.x, n.y)).toBeGreaterThan(NEST_RADIUS[n.type] + 10);
@@ -32,7 +32,7 @@ describe('cave mapgen', () => {
 
   it('full caves are mostly rock; the belt leaves the rim open', () => {
     const share = (caves: CaveLevel) => {
-      const m = generateMap({ seed: 5, size: 'medium', players: 4, caves });
+      const m = generateMap({ seed: 5, size: 'medium', players: 4, caves, form: caves === 'full' ? 'caves' : 'classic' });
       const t = new Terrain(m.terrain, m.width, m.height);
       let rock = 0, n = 0;
       for (let y = 8; y < m.height; y += 16) for (let x = 8; x < m.width; x += 16, n++) if (t.rockDist(x, y) < 0) rock++;
@@ -52,7 +52,8 @@ describe('cave mapgen', () => {
         for (const size of ['small', 'medium', 'large'] as MapSize[]) {
           const m = generateMap({ seed: 11 + players, size, players, caves });
           const t = new Terrain(m.terrain, m.width, m.height);
-          const c = m.nests[players];
+          // The middle of the map (a center nest, or open ground on crystal-center layouts).
+          const c = { x: m.width / 2, y: m.height / 2 };
           const d = m.nests.slice(0, players).map((n) => t.pathDist(n.x, n.y, c.x, c.y, 0) / Math.hypot(n.x - c.x, n.y - c.y));
           expect(Math.max(...d) / Math.min(...d)).toBeLessThan(1.25);
         }
@@ -61,8 +62,11 @@ describe('cave mapgen', () => {
   });
 
   it('caves do not reshuffle the nests', () => {
-    const a = generateMap({ seed: 31, size: 'large', players: 4 });
-    const b = generateMap({ seed: 31, size: 'large', players: 4, caves: 'full' });
+    // Cave forms never move nests; open forms like ring and river can, so
+    // compare with classic. (Islands and warrens place their own nests.)
+    const a = generateMap({ seed: 31, size: 'large', players: 4, form: 'classic' });
+    for (const form of ['caves', 'regions'] as const) expect(generateMap({ seed: 31, size: 'large', players: 4, caves: 'full', form }).nests).toEqual(a.nests);
+    const b = generateMap({ seed: 31, size: 'large', players: 4, caves: 'full', form: 'caves' });
     expect(b.nests).toEqual(a.nests);
   });
 });

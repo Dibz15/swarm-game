@@ -92,6 +92,27 @@ EVENTS=normal npx vite-node scripts/event-probe.ts 4 medium 20   # events per ga
 npx vite-node scripts/trace.ts 5 large 1005             # 30 s timeline of one match
 ```
 
+**Campaign balance (#68):**
+```bash
+npx vite-node scripts/run-probe.ts 24 1                 # whole runs: win %, run minutes, losses by depth, warlords, rewards
+IDS=spikes,echo N=8 npx vite-node scripts/reward-probe.ts   # win-rate change per reward, suggested tiers
+npx vite-node scripts/balance/early-check.ts            # is the early-decision rule safe to use on this code?
+npx vite-node scripts/surrogate-probe.ts 1000           # 1000 surrogate runs per difficulty × skill, in seconds
+npx vite-node scripts/balance/validate.ts               # surrogate vs 36 full runs per difficulty
+```
+- **The run surrogate** (`scripts/balance/model.ts`) uses the real run logic and policies, but draws each battle's outcome from a model fitted to a fixed battle panel.
+  - The panel crosses node kind, depth band, army size and bot shift, about 1500 battles taken from snapshots of real runs.
+  - The model's win odds use the node's bot level and rivals, the Bloom's pressure and strength, the army, the proxy's skill, and each node's own hardness, which retries share.
+  - Measuring the panel takes about 6 min on fresh code. After that the surrogate gives win rates per difficulty, losses by depth, run minutes, the biomass curve and warlords in seconds.
+  - `validate.ts` checks the surrogate against full runs. Re-run it whenever the battle code changes.
+- These play their battles on a pool of worker threads (`scripts/balance/pool.ts`).
+- Results are cached in `.balance-cache/` (gitignored). The cache key covers the job and a fingerprint of the bundled battle code plus the `SUPPLY`/`BOT`/`PERS`/`CROWD`/`CHOKE` overrides, so any change to the sim, campaign or proxy starts afresh.
+- Environment options:
+  - `WORKERS=8` sets the number of threads.
+  - `BUDGET_MIN=60` stops the sweep after that many minutes. Finished battles stay cached, so re-running picks up where it stopped.
+  - `EARLY=1` ends a battle once one team holds over 85% of army plus production for 60 s. It applies only if `early-check.ts` passed on the same code (97% of its calls right over at least 200 battles), and only for the battle classes that passed. Early battles end before the real finish, so their minutes run short.
+  - `NOCACHE=1` replays everything.
+
 **Maps:**
 ```bash
 npx vite-node scripts/terrain-probe.ts heavy 40 7 3     # terrain amounts, connectivity, gen time (+ ASCII map)
@@ -133,7 +154,7 @@ Replays only reproduce on the commit that recorded them (stored as `build`); the
   - **Spire → Spears:** long range, shots splash onto nearby enemies.
   - **Den → Raiders:** fast, fragile, capture nests 3× faster.
   - **Bastion:** spawns slowly, beam turret, shields allies in range.
-- **Nest powers:** holding a nest type unlocks its power. **Fortify** (Forge, R): selected dots take half damage but move slower. **Barrage** (Spire, F): telegraphed strike at the cursor. **Blink** (Den, G): teleport the selection toward the cursor. **Lockdown** (Bastion, T): an enemy nest can't spawn or recover for 8s.
+- **Nest powers:** holding a nest type unlocks its power. **Fortify** (Forge, R): selected dots take half damage but move slower. **Barrage** (Spire, F): telegraphed strike at the cursor. **Blink** (Den, G): teleport the selection toward a point; G aims first and shows its reach, then click (or G again for the cursor). **Lockdown** (Bastion, T): an enemy nest can't spawn or recover for 8s.
 - **Terrain** (skirmish setup: None / Light / Standard / Heavy):
   - **Rock** blocks movement and line of fire. Units path around it, and gaps between rocks become chokepoints. Blink jumps over it.
   - **Nebula** slows everything inside: ambush ground.
@@ -177,7 +198,7 @@ src/sim/      deterministic simulation — no DOM, no Math.random, no clock
   commands.ts   the only way to change the world: move / rally / upgrade / surge / nova
   ai/bot.ts     bot players — run inside the sim and issue the same Commands as humans
   ai/chokes.ts  tunnel-mouth map bots read: where chambers narrow, where to stage an attack
-  mapgen.ts     MapParams → MapSpec: rotationally symmetric nests + terrain from a seed (portrait variant for phones)
+  mapgen.ts     MapParams → MapSpec: rotationally symmetric nests + terrain from a seed; the seed also picks the shape, density, form (ring, river, spiral, regions, islands, warrens...) and fill (scattered or noise rock); the camera turns the map to fit the screen; `?maps` previews them
   terrain.ts    walls/fields as capsules + cave rock as a distance grid; tile flags, collision, line of sight, cached flow fields
   events.ts     living-map director: wild swarms, supply drops, the Colossus, garrison regrowth
   mathx.ts      table-based deterministic sin/cos
