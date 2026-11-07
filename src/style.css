@@ -463,7 +463,10 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   padding: 8px 10px;
   pointer-events: auto;
   max-width: calc(100% - 16px);
+  transition: transform 0.8s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s, border-color 0.3s;
 }
+/* The tutorial's spotlight (#115): the bar comes up to the middle, enlarged, for a tour of its parts. */
+.hud-bottom.coach-spot { z-index: 20; border-color: var(--accent); box-shadow: 0 0 30px rgba(45, 226, 230, 0.35); }
 .selinfo { min-width: 120px; font-size: 14px; display: flex; flex-direction: column; line-height: 1.2; }
 .selinfo small { color: var(--muted); font-size: 11px; }
 .energy { position: relative; width: 140px; height: 22px; background: rgba(0, 0, 0, 0.4); border-radius: 4px; overflow: hidden; border: 1px solid var(--line); }
@@ -531,10 +534,22 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   border: 1px solid var(--line);
   border-radius: 10px;
   opacity: 0.55;
-  transition: opacity 0.2s, border-color 0.2s;
+  transition: opacity 0.2s, border-color 0.2s, transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: auto;
 }
 .counters.active { opacity: 1; border-color: var(--line-strong); }
+/* The tutorial's spotlight (#115): in the middle, enlarged, fully lit, over everything. */
+.counters.coach-spot { opacity: 1; z-index: 20; border-color: var(--accent); box-shadow: 0 0 30px rgba(45, 226, 230, 0.35); }
+.counters.coach-spot .node polygon, .counters.coach-spot .node rect { fill: #fff; }
+.counters.coach-spot .node rect.hollow { fill: none; stroke: #fff; }
+.counters.coach-spot .arrow { stroke: var(--accent); }
+.counters.coach-spot .counter-cap { display: none; }
+/* Names on the wheel's glyphs while it's spotlit; the hotkey numbers step aside. */
+.counters .kname { display: none; }
+.counters.coach-spot .node text { display: none; }
+.counters.coach-spot .node text.kname { display: inline; font-size: 6.5px; fill: #fff; text-anchor: middle; }
+.counters.coach-spot .node[data-k="2"] text.kname { text-anchor: start; }
+.counters.coach-spot .node.raider text.kname { fill: #9aa4c7; }
 .counters.enemy { border-color: rgba(255, 93, 115, 0.55); }
 .counters svg { display: block; width: 100%; height: auto; }
 .counters .node polygon, .counters .node rect { fill: #59607f; stroke: none; transition: fill 0.2s; }
@@ -686,8 +701,26 @@ body.mobile .aimhint button { min-height: 40px; }
   pointer-events: auto;
 }
 .coach.on { display: block; }
-.coach.pop { animation: coach-pop 0.35s ease-out; }
-@keyframes coach-pop { from { box-shadow: 0 0 0 3px rgba(45, 226, 230, 0.55); } to { box-shadow: 0 0 0 0 rgba(45, 226, 230, 0); } }
+/* The coach glows (#115): an accent edge and a slow breathing glow, so the eye
+   finds it among the other panels; a flash on each new instruction, and calm
+   while it only waits on the world. */
+.coach.on {
+  border: 1.5px solid var(--accent);
+  background: linear-gradient(rgba(45, 226, 230, 0.13), rgba(45, 226, 230, 0.04)), var(--panel);
+  box-shadow: inset 5px 0 0 var(--accent), 0 0 0 1px rgba(45, 226, 230, 0.35), 0 0 22px rgba(45, 226, 230, 0.4);
+  animation: coach-breathe 2.6s ease-in-out infinite;
+}
+.coach.on.pop { animation: coach-pop 1.4s ease-out, coach-breathe 2.6s ease-in-out 1.4s infinite; }
+.coach.on.waiting { animation: none; border-color: rgba(150, 170, 255, 0.5); box-shadow: inset 5px 0 0 rgba(150, 170, 255, 0.6), 0 0 12px rgba(150, 170, 255, 0.15); }
+@keyframes coach-breathe {
+  0%, 100% { box-shadow: inset 5px 0 0 var(--accent), 0 0 0 1px rgba(45, 226, 230, 0.35), 0 0 18px rgba(45, 226, 230, 0.32); }
+  50% { box-shadow: inset 5px 0 0 var(--accent), 0 0 0 2px rgba(45, 226, 230, 0.55), 0 0 38px rgba(45, 226, 230, 0.65); }
+}
+@keyframes coach-pop {
+  from { box-shadow: inset 5px 0 0 var(--accent), 0 0 0 5px rgba(45, 226, 230, 0.8), 0 0 44px rgba(45, 226, 230, 0.75); }
+  to { box-shadow: inset 5px 0 0 var(--accent), 0 0 0 1px rgba(45, 226, 230, 0.35), 0 0 18px rgba(45, 226, 230, 0.32); }
+}
+@media (prefers-reduced-motion: reduce) { .coach.on, .coach.on.pop { animation: none; } }
 .coach small { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
 .coach p { margin: 4px 0 6px; line-height: 1.35; }
 .coach-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -701,9 +734,20 @@ body.mobile .coach p { margin: 2px 0 4px; }
 body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .card.tutorial h2 small { font-size: 13px; color: var(--muted); font-weight: normal; margin-left: 6px; }
 .missions { list-style: none; padding: 0; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
-.missions button { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; }
-.missions button span { font-size: 13px; color: var(--muted); }
-.missions li.done b::after { content: ' ✓'; color: var(--accent); }
+/* #115: missions read as cards you can tap; locked ones are greyed and say why. */
+.missions button {
+  width: 100%; text-align: left; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; padding: 12px 14px;
+  border-radius: 12px; transition: transform 0.12s, border-color 0.12s, background 0.12s;
+}
+.missions button:hover:not(:disabled) { border-color: var(--accent); background: rgba(45, 226, 230, 0.1); transform: translateY(-1px); }
+.missions button:active:not(:disabled) { transform: translateY(1px); }
+.missions .num { grid-row: span 2; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; border: 1px solid var(--line-strong); }
+.missions li.done .num { background: var(--accent); color: #06070f; border-color: var(--accent); }
+.missions button span.what { grid-column: 2; font-size: 13px; color: var(--muted); }
+.missions .play { grid-row: 1 / span 2; grid-column: 3; font-size: 12px; padding: 4px 10px; border-radius: 999px; background: rgba(45, 226, 230, 0.16); color: var(--accent); white-space: nowrap; }
+.missions li.done .play { background: rgba(150, 170, 255, 0.12); color: var(--text); }
+.missions li.locked button { opacity: 0.45; cursor: not-allowed; }
+.missions li.locked .play { background: none; color: var(--muted); }
 .card.brief { max-width: 460px; }
 .card.brief .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
 .card.brief h2 { margin-top: 4px; }
@@ -749,6 +793,10 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .coach-hold { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
 .coach-hold i { flex: 1; height: 4px; border-radius: 2px; background: var(--line-strong); overflow: hidden; }
 .coach-hold i b { display: block; height: 100%; background: var(--accent); }
+/* #115: once your part is done, the coach waits with you; tour steps move on with Next. */
+.coach.waiting p { color: #c6cceb; }
+.coach-next { display: flex; justify-content: flex-end; margin: 0 0 6px; }
+.nest-ico { display: inline-block; width: 1.05em; height: 1.05em; vertical-align: -0.15em; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
 .coach-hold button { padding: 2px 12px; }
 .card.campaign .menu-buttons { width: 100%; margin: 12px 0 4px; }
 .card.campaign .menu-buttons button { display: flex; flex-direction: column; gap: 2px; text-align: left; }

@@ -23,6 +23,8 @@ export class LocalSession {
   private acc = 0;
   speed = 1;
   paused = false;
+  /** every command issued so far, stepped or not */
+  issued = 0;
   /** held without the pause menu (the tutorial's reading pause) */
   held = false;
   /** interpolation factor between the previous and current tick */
@@ -38,7 +40,13 @@ export class LocalSession {
 
   issue(cmd: Command): void {
     this.queue.push(cmd);
+    this.issued++;
     this.onIssue?.(cmd);
+  }
+
+  /** Orders issued but not yet stepped (held or paused). */
+  get queued(): number {
+    return this.queue.length;
   }
 
   update(dt: number): number {

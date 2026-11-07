@@ -1,11 +1,13 @@
 import { EVENT_PRESETS, type EventSpec, type MapSpec, type NestSpec } from '../sim/mapgen';
-import { NEUTRAL, NestType, TICK_HZ } from '../sim/constants';
+import { NEUTRAL, NestType, POWER, TICK_HZ, UPGRADE_PICK_RADIUS } from '../sim/constants';
 import type { MatchSetup } from '../sim/setup';
 import type { CrystalSpec, FieldSpec, Capsule } from '../sim/terrain';
 import type { World } from '../sim/world';
 import type { DemoAction } from '../ui/demo';
-import { novaRadius, type Command } from '../sim/commands';
-import { UNIT_FEEDING, WILD_SWARM } from '../sim/world';
+import { feedNeed, novaRadius, type Command } from '../sim/commands';
+import { nestIcon } from '../ui/nesticon';
+import { inArmy, UNIT_FEEDING, WILD_SWARM } from '../sim/world';
+import { queryRadius } from '../sim/spatial';
 import type { TimedCommand } from './session';
 
 /**
@@ -19,11 +21,16 @@ import type { TimedCommand } from './session';
 export type Lock = 'surge' | 'nova' | 'upgrade' | 'fortify' | 'barrage' | 'blink' | 'lockdown';
 const ALL_POWERS: Lock[] = ['surge', 'nova', 'upgrade', 'fortify', 'barrage', 'blink', 'lockdown'];
 
+/** A line of coach text, for mouse and for touch. */
+export type Hint = { desktop: string; mobile: string };
+
 export interface StepCtx {
   w: World;
   human: number;
   /** the player's orders so far */
   log: readonly TimedCommand[];
+  /** where in `log` the current step began (#115): orders after it are this step's */
+  since?: number;
 }
 
 export interface Step {
@@ -40,6 +47,15 @@ export interface Step {
   status?: (c: StepCtx) => string | null;
   /** commands issued (as the player) when the step begins: summon its swarm, say */
   enter?: (c: StepCtx) => Command[];
+  /**
+   * Once you've done your part and the step waits on the world (#115): what
+   * the coach says instead of the action hint ("your dots are on their way").
+   */
+  wait?: { text: Hint | ((c: StepCtx) => Hint); when: (c: StepCtx) => boolean };
+  /** a tour step (#115): the game holds and the coach shows Next; `MissionRun.ack` moves on */
+  next?: true;
+  /** a HUD element brought to the middle of the screen, enlarged, while the step lasts (it goes home after) */
+  spotlight?: string;
 }
 
 export interface Mission {
@@ -91,9 +107,76 @@ const versus = (m: MapSpec, personality: 'turtler' | 'expander', energy = 0, pas
 // ---- step checks -------------------------------------------------------------
 
 const owned = (c: StepCtx) => c.w.nests.filter((n) => n.owner === c.human).length;
-const ordered = (c: StepCtx, t: TimedCommand['cmd']['t']) => c.log.some((l) => l.cmd.t === t);
 const unowned = (ids: number[]) => (c: StepCtx) => ids.filter((id) => c.w.nests[id]?.owner !== c.human);
 const won = (c: StepCtx) => c.w.over && c.w.winnerTeam === c.w.teamOf[c.human];
+
+/** Orders given since the current step began. */
+const sinceStep = (c: StepCtx) => c.log.slice(c.since ?? 0);
+const orderedSince = (c: StepCtx, t: TimedCommand['cmd']['t']) => sinceStep(c).some((l) => l.cmd.t === t);
+/** A spot dots can be headed for, and how close their order point must be to count. */
+type Spot = { x: number; y: number; r: number };
+const nestSpot = (c: StepCtx, id: number): Spot => ({ x: c.w.nests[id].x, y: c.w.nests[id].y, r: c.w.nests[id].r * 1.6 });
+/**
+ * Which of these spots some of your dots are headed for, read from the world
+ * (#115): each dot's order point, so it counts however and whenever you sent
+ * them (a step early, a rally point), and stops counting if they all die.
+ */
+function headingTo(c: StepCtx, spots: Spot[]): boolean[] {
+  const hit = spots.map(() => false);
+  let left = spots.length;
+  const { w } = c;
+  for (let i = 0; i < w.n && left; i++) {
+    if (w.owner[i] !== c.human || !inArmy(w, i)) continue;
+    spots.forEach((p, k) => {
+      if (!hit[k] && (w.ox[i] - p.x) ** 2 + (w.oy[i] - p.y) ** 2 <= p.r * p.r) {
+        hit[k] = true;
+        left--;
+      }
+    });
+  }
+  return hit;
+}
+const headingAny = (c: StepCtx, spots: Spot[]) => headingTo(c, spots).some(Boolean);
+/** Nests that aren't yours yet. */
+const notMine = (c: StepCtx, ids: number[]) => ids.filter((id) => c.w.nests[id].owner !== c.human);
+/** Domination: the nests left to take (anything not yours but a home). */
+const toTake = (c: StepCtx) => c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id);
+/** The waiting line once dots are on their way: what the lesson waits for. */
+const onTheWay = (what: string): Hint => {
+  const t = `⏳ Your dots are on their way. The lesson goes on when they ${what}.`;
+  return { desktop: t, mobile: t };
+};
+const same = (t: string): Hint => ({ desktop: t, mobile: t });
+/**
+ * Nests to take: waiting starts once dots head for any of them, and until
+ * every one has dots on the way the coach says what's left (`rest`).
+ */
+const waitTake = (ids: (c: StepCtx) => number[], what: string, rest = 'Now send some to the other glowing nest too.'): Step['wait'] => {
+  const heading = (c: StepCtx) => {
+    const left = notMine(c, ids(c));
+    return { left, to: headingTo(c, left.map((id) => nestSpot(c, id))) };
+  };
+  return {
+    when: (c) => heading(c).to.some(Boolean),
+    text: (c) => (heading(c).to.every(Boolean) ? onTheWay(what) : same(`⏳ Good, dots on their way. ${rest}`)),
+  };
+};
+
+const scratch: number[] = [];
+/** Your dots within reach of a nest, against what feeding it needs (#115). */
+function feedStatus(c: StepCtx, id: number): string | null {
+  const n = c.w.nests[id];
+  if (n.owner !== c.human || n.level >= 2) return null;
+  // The sim's own grid, as the upgrade order counts them: no scan of every dot each frame.
+  queryRadius(c.w, n.x, n.y, UPGRADE_PICK_RADIUS, scratch);
+  let near = 0;
+  for (const i of scratch) if (c.w.owner[i] === c.human && inArmy(c.w, i)) near++;
+  const need = Math.max(0, feedNeed(n));
+  if (n.feedIncoming > 0) return null;
+  return near < need
+    ? `Dots near your nest: <b>${near}</b>, it needs ${need}: bring more`
+    : `Dots near your nest: <b>${near}</b>, it needs ${need}: enough, upgrade now`;
+}
 
 // ---- demos -------------------------------------------------------------------
 
@@ -176,7 +259,7 @@ export const MISSIONS: Mission[] = [
     id: 'move',
     title: 'First steps',
     teaches: 'Select your dots, send them, and capture nests.',
-    learned: ['Select dots, then give them an order.', 'Nests you capture make more dots.'],
+    learned: ['Select dots, then give them an order.', 'Move as one group: gather your dots, then send them together.', 'Nests you capture make more dots.'],
     locked: ALL_POWERS,
     setup: () => solo(map([nest(170, 340, NestType.Hive, 0, 12), nest(480, 300, NestType.Hive, -1, 3), nest(820, 400, NestType.Hive, -1, 6)])),
     steps: [
@@ -187,15 +270,17 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => owned(c) >= 2,
         highlight: unowned([1]),
+        wait: waitTake(() => [1], 'capture the glowing nest'),
         demo: sendTo(() => [1]),
       },
       {
         text: {
-          desktop: 'Captured nests make dots for you. Take the last nest too: it has more guards, so bring everyone. <small>WASD or middle-drag moves the map, the wheel zooms.</small>',
-          mobile: 'Captured nests make dots for you. Take the last nest too: it has more guards, so bring everyone. <small>Two fingers move and zoom the map.</small>',
+          desktop: 'Captured nests make dots for you. The last nest has more guards: <b>select all your dots and send them together</b>, as one group. <small>WASD or middle-drag moves the map, the wheel zooms.</small>',
+          mobile: 'Captured nests make dots for you. The last nest has more guards: <b>select all your dots and send them together</b>, as one group. <small>Two fingers move and zoom the map.</small>',
         },
         done: (c) => owned(c) >= 3,
         highlight: unowned([2]),
+        wait: waitTake(() => [2], 'capture it'),
         demo: sendTo(() => [2]),
       },
     ],
@@ -204,7 +289,11 @@ export const MISSIONS: Mission[] = [
     id: 'rally',
     title: 'Rally and nest types',
     teaches: 'Send new dots where they are needed, and meet the three unit types.',
-    learned: ['A nest’s rally point sends its new dots straight to the front.', 'Hives make Swarmers, Forges make Shields, Spires make Spears.', 'Swarmers beat Spears, Spears beat Shields, Shields beat Swarmers.'],
+    learned: [
+      'A nest’s rally point sends its new dots straight to the front.',
+      `${nestIcon(NestType.Hive)} Hives make Swarmers, ${nestIcon(NestType.Forge)} Forges make Shields, ${nestIcon(NestType.Spire)} Spires make Spears.`,
+      'Swarmers beat Spears, Spears beat Shields, Shields beat Swarmers.',
+    ],
     locked: ALL_POWERS,
     setup: () =>
       solo(
@@ -216,30 +305,42 @@ export const MISSIONS: Mission[] = [
     steps: [
       {
         text: {
-          desktop: '<b>Click your nest</b> to select it, then right-click the glowing Forge. That sets a rally point: new dots walk there by themselves.',
-          mobile: '<b>Tap your nest</b> to select it, then tap the glowing Forge. That sets a rally point: new dots walk there by themselves.',
+          desktop: `<b>Click your nest</b> to select it, then right-click the glowing Forge ${nestIcon(NestType.Forge)}. That sets a rally point: new dots walk there by themselves.`,
+          mobile: `<b>Drag across your nest</b> (dots and all) to select it, then tap the glowing Forge ${nestIcon(NestType.Forge)}. That sets a rally point: new dots walk there by themselves.`,
         },
-        done: (c) => ordered(c, 'rally'),
+        done: (c) => orderedSince(c, 'rally'),
         highlight: () => [1],
         demo: (c) => [{ t: 'tap', at: at(c, 0) }, { t: 'tap', at: at(c, 1), order: true }],
       },
       {
         text: {
-          desktop: 'Forges make <b>Shields</b>: slow and tough. Capture the Forge and the Hive below it.',
-          mobile: 'Forges make <b>Shields</b>: slow and tough. Capture the Forge and the Hive below it.',
+          desktop: `Forges ${nestIcon(NestType.Forge)} make <b>Shields</b>: slow and tough. Capture the Forge and the Hive ${nestIcon(NestType.Hive)} below it.`,
+          mobile: `Forges ${nestIcon(NestType.Forge)} make <b>Shields</b>: slow and tough. Capture the Forge and the Hive ${nestIcon(NestType.Hive)} below it.`,
         },
         done: (c) => c.w.nests[1].owner === c.human && c.w.nests[2].owner === c.human,
         highlight: unowned([1, 2]),
+        wait: waitTake(() => [1, 2], 'hold the Forge and the Hive'),
         demo: sendTo(() => [1, 2]),
+      },
+      // Rock, paper, scissors (#115): the wheel comes to the middle, then goes home to its corner.
+      {
+        text: {
+          desktop: 'Every type beats one and loses to another: <b>Swarmers overrun Spears, Spears pierce Shields, Shields stop Swarmers</b>. This wheel shows it. It lives in the corner, and lights up for the dots you select or the enemy you point at.',
+          mobile: 'Every type beats one and loses to another: <b>Swarmers overrun Spears, Spears pierce Shields, Shields stop Swarmers</b>. This wheel shows it. It lives in the corner, and lights up for the dots you select.',
+        },
+        next: true,
+        spotlight: '.counters',
+        done: () => false,
       },
       {
         text: {
-          desktop: 'Spires make <b>Spears</b>. The glowing wheel shows who beats whom. Walls block the way: go through the gap and take the Spire.',
-          mobile: 'Spires make <b>Spears</b>. The glowing wheel shows who beats whom. Walls block the way: go through the gap and take the Spire.',
+          desktop: `Spires ${nestIcon(NestType.Spire)} make <b>Spears</b>. Walls block the way: go through the gap and take the Spire.`,
+          mobile: `Spires ${nestIcon(NestType.Spire)} make <b>Spears</b>. Walls block the way: go through the gap and take the Spire.`,
         },
         pulse: '.counters',
         done: (c) => c.w.nests[3].owner === c.human,
         highlight: unowned([3]),
+        wait: waitTake(() => [3], 'capture the Spire'),
         demo: sendTo(() => [3]),
       },
     ],
@@ -248,7 +349,12 @@ export const MISSIONS: Mission[] = [
     id: 'fight',
     title: 'First fight',
     teaches: 'Fight an enemy, use energy for Surge, and knock a player out.',
-    learned: ['Fights start on their own when armies meet: bring more dots.', 'Energy builds over time and from captures; Surge spends it for a burst of speed and damage.', 'A player with no nests and no dots is out.'],
+    learned: [
+      'Fights start on their own when armies meet: bring more dots.',
+      'Energy builds over time and from captures; powers spend it. Surge gives your selected dots a burst of speed and damage.',
+      `Holding a nest type unlocks a power: a Spire ${nestIcon(NestType.Spire)} gives Barrage.`,
+      'A player with no nests and no dots is out.',
+    ],
     locked: ['nova', 'upgrade', 'fortify', 'barrage', 'blink', 'lockdown'],
     setup: () =>
       versus(
@@ -277,15 +383,49 @@ export const MISSIONS: Mission[] = [
         },
         done: (c) => c.w.nests[2].owner === c.human && c.w.nests[3].owner === c.human,
         highlight: unowned([2, 3]),
+        wait: waitTake(() => [2, 3], 'hold both nests'),
         demo: sendTo(() => [2, 3]),
+      },
+      // A short tour of the screen before the first power (#115).
+      {
+        text: {
+          desktop: 'Before the fight, a quick look around. This bar is your <b>energy</b>. It builds up over time, and faster with every nest you capture.',
+          mobile: 'Before the fight, a quick look around. This bar is your <b>energy</b>. It builds up over time, and faster with every nest you capture.',
+        },
+        next: true,
+        spotlight: '.hud-bottom',
+        pulse: '.energy',
+        done: () => false,
       },
       {
         text: {
-          desktop: 'Fights happen by themselves when armies meet. When yours does, select your dots and press <b>Surge (Q)</b>: faster, harder hitting.',
-          mobile: 'Fights happen by themselves when armies meet. When yours does, select your dots and tap <b>Surge</b>: faster, harder hitting.',
+          desktop: `<b>Powers</b> spend energy. Surge is always here; others unlock as you hold nest types. A Spire ${nestIcon(NestType.Spire)}, say, gives Barrage: you’ll try it next mission.`,
+          mobile: `<b>Powers</b> spend energy. Surge is always here; others unlock as you hold nest types. A Spire ${nestIcon(NestType.Spire)}, say, gives Barrage: you’ll try it next mission.`,
         },
-        done: (c) => ordered(c, 'surge'),
+        next: true,
+        spotlight: '.hud-bottom',
+        pulse: '.actions',
+        done: () => false,
+      },
+      {
+        text: {
+          desktop: 'Powers act on the dots you have <b>selected</b>: drag over them, or press <b>All (Z)</b> to take every one. Select first, then cast.',
+          mobile: 'Powers act on the dots you have <b>selected</b>: drag over them, or tap <b>All</b> to take every one. Select first, then cast.',
+        },
+        next: true,
+        spotlight: '.hud-bottom',
+        pulse: '[data-a=all]',
+        done: () => false,
+      },
+      {
+        text: {
+          desktop: `Fights happen by themselves when armies meet. When yours does, select your dots and press <b>Surge (Q)</b>. It <b>spends ${POWER.surgeCost} energy</b>: your dots run faster and hit harder for a while. Watch the energy bar drop.`,
+          mobile: `Fights happen by themselves when armies meet. When yours does, select your dots and tap <b>Surge</b>. It <b>spends ${POWER.surgeCost} energy</b>: your dots run faster and hit harder for a while. Watch the energy bar drop.`,
+        },
+        done: (c) => orderedSince(c, 'surge'),
         highlight: unowned([4]),
+        pulse: '.energy',
+        status: (c) => `Energy: <b>${Math.floor(c.w.factions[c.human].energy)}</b>${c.w.factions[c.human].energy < POWER.surgeCost ? ` (Surge needs ${POWER.surgeCost})` : ''}`,
         demo: (c) => [...selectArmy(c), { t: 'button', a: 'surge' }],
       },
       {
@@ -295,6 +435,11 @@ export const MISSIONS: Mission[] = [
         },
         done: won,
         highlight: (c) => c.w.nests.filter((n) => n.owner !== c.human && n.owner >= 0 && n.owner !== NEUTRAL).map((n) => n.id),
+        // Any push counts, through the middle nest too: the enemy is out once its home and dots are gone.
+        wait: {
+          text: onTheWay('knock the enemy out: its home nest and every last dot'),
+          when: (c) => headingAny(c, notMine(c, c.w.nests.map((n) => n.id)).map((id) => nestSpot(c, id))),
+        },
         demo: sendTo((c) => c.w.nests.filter((n) => n.owner !== c.human && n.owner >= 0 && n.owner !== NEUTRAL).map((n) => n.id)),
       },
     ],
@@ -328,19 +473,29 @@ export const MISSIONS: Mission[] = [
     steps: [
       {
         text: {
-          desktop: 'Select your home nest with dots next to it and press <b>Upgrade (U)</b>: dots feed it up to level 2, which spawns faster and shoots back.',
-          mobile: 'Tap your home nest while dots are next to it, then tap <b>Upgrade</b>: dots feed it up to level 2, which spawns faster and shoots back.',
+          desktop: 'A nest levels up by <b>feeding it dots</b>: enough of your dots must stand next to it. Select your home nest and press <b>Upgrade (U)</b>. Level 2 spawns faster and shoots back.',
+          mobile: 'A nest levels up by <b>feeding it dots</b>: enough of your dots must stand next to it. Tap your home nest, then tap <b>Upgrade</b>. Level 2 spawns faster and shoots back.',
         },
         done: (c) => c.w.nests.some((n) => n.owner === c.human && n.level >= 2),
         highlight: () => [0],
+        status: (c) => feedStatus(c, 0),
+        wait: {
+          text: { desktop: '⏳ Your dots are feeding the nest: it levels up when they’re all in.', mobile: '⏳ Your dots are feeding the nest: it levels up when they’re all in.' },
+          when: (c) => orderedSince(c, 'upgrade') && c.w.nests[0].feedIncoming > 0,
+        },
         demo: (c) => [{ t: 'tap', at: at(c, 0) }, { t: 'button', a: 'upgrade' }],
       },
       {
         text: {
-          desktop: 'Your Spire unlocks <b>Barrage (F)</b>: a shell launched from your nearest nest. Press it, then click the guards of the Bastion.',
-          mobile: 'Your Spire unlocks <b>Barrage</b>: a shell launched from your nearest nest. Tap it, then tap the guards of the Bastion.',
+          desktop: `Your Spire ${nestIcon(NestType.Spire)} unlocks <b>Barrage (F)</b>: a shell launched from your nearest nest. Press it, then click the guards of the Bastion ${nestIcon(NestType.Bastion)}.`,
+          mobile: `Your Spire ${nestIcon(NestType.Spire)} unlocks <b>Barrage</b>: a shell launched from your nearest nest. Tap it, then tap the guards of the Bastion ${nestIcon(NestType.Bastion)}.`,
         },
-        done: (c) => ordered(c, 'barrage'),
+        // Done once the shell has landed, so the next lesson doesn't freeze it mid-air (#115).
+        done: (c) => orderedSince(c, 'barrage') && !c.w.barrages.some((b) => b.owner === c.human),
+        wait: {
+          text: { desktop: '⏳ Shell in the air: watch it land on the guards.', mobile: '⏳ Shell in the air: watch it land on the guards.' },
+          when: (c) => c.w.barrages.some((b) => b.owner === c.human),
+        },
         highlight: () => [2],
         demo: (c) => [{ t: 'button', a: 'barrage' }, { t: 'tap', at: at(c, 2) }],
       },
@@ -349,7 +504,7 @@ export const MISSIONS: Mission[] = [
           desktop: 'A wild swarm is on its way. Gather your army at home, and when the swarm arrives select them and press <b>Nova (E)</b>.',
           mobile: 'A wild swarm is on its way. Gather your army at home, and when the swarm arrives select them and tap <b>Nova</b>.',
         },
-        done: (c) => ordered(c, 'nova'),
+        done: (c) => orderedSince(c, 'nova'),
         highlight: () => [0],
         status: swarmStatus,
         enter: (c) => [{ t: 'summon', p: c.human, secs: SWARM_LEAD }],
@@ -357,11 +512,12 @@ export const MISSIONS: Mission[] = [
       },
       {
         text: {
-          desktop: 'Finish the job: capture the Bastion. Bastions shoot back hard, so go in big.',
-          mobile: 'Finish the job: capture the Bastion. Bastions shoot back hard, so go in big.',
+          desktop: `Finish the job: capture the Bastion ${nestIcon(NestType.Bastion)}. Bastions shoot back hard, so go in big.`,
+          mobile: `Finish the job: capture the Bastion ${nestIcon(NestType.Bastion)}. Bastions shoot back hard, so go in big.`,
         },
         done: (c) => c.w.nests[2].owner === c.human,
         highlight: unowned([2]),
+        wait: waitTake(() => [2], 'capture the Bastion'),
         demo: sendTo(() => [2]),
       },
     ],
@@ -399,9 +555,9 @@ export const MISSIONS: Mission[] = [
         'turtler',
         0,
         false,
-        0,
-        // Not a full match yet: it builds at 60% speed.
-        0.6,
+        // Not a full match yet (#115): it still raids, but builds at 40% speed and keeps a small army.
+        18,
+        0.4,
       ),
     }),
     steps: [
@@ -411,6 +567,10 @@ export const MISSIONS: Mission[] = [
           mobile: 'Crystals charge energy while your dots stand on them. Park a few dots on the glowing crystal near home.',
         },
         done: (c) => c.w.crystals.some((k) => k.holder === c.human),
+        wait: {
+          text: { desktop: '⏳ Dots heading to the crystal: it starts charging when they stand on it.', mobile: '⏳ Dots heading to the crystal: it starts charging when they stand on it.' },
+          when: (c) => headingAny(c, [{ x: c.w.crystals[0].x, y: c.w.crystals[0].y, r: c.w.crystals[0].r * 1.5 }]),
+        },
         demo: (c) => [...selectArmy(c, 80), { t: 'tap', at: [c.w.crystals[0].x, c.w.crystals[0].y], order: true }],
       },
       {
@@ -419,12 +579,22 @@ export const MISSIONS: Mission[] = [
           mobile: 'Take the glowing nests. The top bar shows nests held: <b>stay past its marker for 30 seconds</b> to win by domination. No need to storm the enemy’s home.',
         },
         done: won,
-        // The neutral nests to take; once they're held, home: hold on rather than attack.
+        // The nests to take; once they're held, home: hold on rather than attack.
         highlight: (c) => {
-          const left = c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id);
+          const left = toTake(c);
           return left.length ? left : [0];
         },
-        demo: sendTo((c) => c.w.nests.filter((n) => n.owner !== c.human && !n.capital).map((n) => n.id)),
+        // Dots on the move, or every glowing nest held: now it's a matter of holding on.
+        wait: {
+          when: (c) => !toTake(c).length || headingAny(c, toTake(c).map((id) => nestSpot(c, id))),
+          text: (c) =>
+            same(
+              toTake(c).length
+                ? '⏳ Good, dots on their way. Keep taking the glowing nests until the top bar passes its marker.'
+                : '⏳ Hold on: stay past the top bar’s marker for 30 seconds to win. Send dots to any nest the enemy raids.',
+            ),
+        },
+        demo: sendTo(toTake),
       },
     ],
   },
@@ -433,6 +603,10 @@ export const MISSIONS: Mission[] = [
 /** Advances through one mission's steps as the match plays. */
 export class MissionRun {
   step = 0;
+  /** where in the order log the current step began (#115) */
+  since = 0;
+  /** the player pressed Next on a tour step */
+  private acked = false;
   /** step-entry commands waiting to be issued */
   private queue: Command[] = [];
   private entered = -1;
@@ -460,10 +634,38 @@ export class MissionRun {
     return this.mission.steps[this.step] ?? null;
   }
 
+  /** The context for the current step: orders since it began. */
+  ctx(c: StepCtx): StepCtx {
+    return { ...c, since: this.since };
+  }
+
+  /** Next, on a tour step. */
+  ack(): void {
+    if (this.current?.next) this.acked = true;
+  }
+
+  /** Has the player done their part, so the step now waits on the world? */
+  waiting(c: StepCtx): boolean {
+    return !!this.current?.wait?.when(this.ctx(c));
+  }
+
+  /** The coach's line while waiting (null when not). */
+  waitText(c: StepCtx): Hint | null {
+    const w = this.current?.wait;
+    if (!w || !this.waiting(c)) return null;
+    return typeof w.text === 'function' ? w.text(this.ctx(c)) : w.text;
+  }
+
   /** Check the current step (and any that are already satisfied). True if it moved on. */
   update(c: StepCtx): boolean {
     const before = this.step;
-    while (!this.complete && this.mission.steps[this.step].done(c)) this.step++;
+    while (!this.complete) {
+      const s = this.mission.steps[this.step];
+      if (!(s.next ? this.acked : s.done(this.ctx(c)))) break;
+      this.step++;
+      this.acked = false;
+      this.since = c.log.length;
+    }
     return this.step !== before;
   }
 }
@@ -503,6 +705,13 @@ export function saveProgress(p: TutorialProgress): void {
     /* ignore */
   }
 }
+
+/**
+ * Is mission `i` open to play (#115)? The first always; then once the one
+ * before is done, or you've already reached it or beyond (or graduated).
+ */
+export const missionUnlocked = (p: TutorialProgress, i: number): boolean =>
+  i === 0 || p.graduated || MISSIONS.slice(i - 1).some((m) => p.done.includes(m.id));
 
 /** The first mission not yet completed (or 0 to start over). */
 export function nextMission(p: TutorialProgress): number {

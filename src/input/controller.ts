@@ -1,3 +1,4 @@
+import { snapNest } from './snap';
 import type { GameView } from '../game/gameView';
 import type { Camera } from '../render/camera';
 import type { Renderer } from '../render/renderer';
@@ -238,12 +239,20 @@ export class InputController {
   private tap(sx: number, sy: number): void {
     const g = this.game!;
     const [wx, wy] = this.world(sx, sy);
+    // A tap near a nest lands on it (#115): 24 px past its rim on screen, at any zoom.
+    const near = snapNest(g.world.nests, wx, wy, (24 * this.renderer.dpr) / this.camera.zoom);
     if (g.aim) {
-      g.castAt(g.aim, wx, wy);
+      // Ground powers aim where you tapped; Lockdown wants a nest.
+      if (g.aim === 'lockdown' && near) g.castAt(g.aim, near.x, near.y);
+      else g.castAt(g.aim, wx, wy);
     } else if (!g.selection.empty) {
-      g.commandAt(wx, wy);
+      if (near) g.commandAt(near.x, near.y);
+      else g.commandAt(wx, wy);
     } else {
-      g.selectAt(wx, wy, this.pickRadius() * 1.6, false);
+      const r = this.pickRadius() * 1.6;
+      // Your dots under the finger still win: only an empty tap snaps to a nest.
+      if (near && !g.hasOwnUnitsNear(wx, wy, r)) g.selectAt(near.x, near.y, r, false);
+      else g.selectAt(wx, wy, r, false);
     }
   }
 
