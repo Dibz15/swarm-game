@@ -20,8 +20,13 @@ export interface NetMatchEvents {
   onSeat?: (seat: number, state: 'human' | 'away' | 'bot') => void;
   /** the host paused or resumed */
   onPause?: (paused: boolean) => void;
-  /** guests: the host is gone (Phase 2 ends the match; #166 migrates it) */
-  onHostLost?: () => void;
+  /**
+   * guests: the host is gone (Phase 2 ends the match; #166 migrates it):
+   * it left, or its link dropped and didn't come back in time
+   */
+  onHostLost?: (why: 'left' | 'lost') => void;
+  /** guests: the link to the host dropped (the match waits for it), or came back */
+  onHostLink?: (state: 'lost' | 'back') => void;
   /** host: clients disagree about the world at `tick` */
   onDesync?: (tick: number) => void;
 }
@@ -99,9 +104,17 @@ export class NetMatch {
       t.close();
     });
     const prev = t.onPeer;
+    let dropped = false;
     t.onPeer = (peer, up) => {
       prev?.(peer, up);
-      if (!up && peer === host) m.events.onHostLost?.();
+      if (!up && peer === host) m.events.onHostLost?.(dropped ? 'lost' : 'left');
+    };
+    const prevLink = t.onLink;
+    t.onLink = (peer, state) => {
+      prevLink?.(peer, state);
+      if (peer !== host) return;
+      dropped = state !== 'back';
+      if (state !== 'gone') m.events.onHostLink?.(state);
     };
     return m;
   }

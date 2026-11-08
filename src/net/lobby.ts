@@ -356,8 +356,11 @@ export class GuestLobby {
   onChange: ((s: LobbyState) => void) | null = null;
   onRefused: ((reason: string) => void) | null = null;
   onStart: ((s: StartInfo) => void) | null = null;
-  /** the host never answered, or left */
-  onNoHost: ((why: 'none' | 'left') => void) | null = null;
+  /** the host never answered, left, or its link dropped and didn't come back */
+  onNoHost: ((why: 'none' | 'left' | 'lost') => void) | null = null;
+  /** the link to the host dropped (it may reconnect), or came back */
+  onHostLink: ((state: 'lost' | 'back') => void) | null = null;
+  private dropped = false;
   private readonly t: Transport;
   private readonly o: GuestLobbyOptions;
   private readonly since: number;
@@ -368,8 +371,15 @@ export class GuestLobby {
     this.o = o;
     this.since = o.clock();
     t.onPeer = (peer, up) => {
-      if (up && !this.host) this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0 });
-      if (!up && peer === this.host) this.onNoHost?.('left');
+      // a new peer may be the host; the host reconnecting in the lobby gets told again who we are (it may have freed our seat)
+      const hello = up && (!this.host || (peer === this.host && this.state?.phase === 'lobby'));
+      if (hello) this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0 });
+      if (!up && peer === this.host) this.onNoHost?.(this.dropped ? 'lost' : 'left');
+    };
+    t.onLink = (peer, state) => {
+      if (peer !== this.host) return;
+      this.dropped = state !== 'back';
+      if (state !== 'gone') this.onHostLink?.(state);
     };
     t.onMessage = (peer, bytes) => {
       const m = decodeMsg(bytes);

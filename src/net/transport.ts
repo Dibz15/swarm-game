@@ -18,7 +18,79 @@ export interface Transport {
   onMessage: ((peer: string, bytes: Uint8Array) => void) | null;
   /** a peer connected (true) or was lost (false) */
   onPeer: ((peer: string, up: boolean) => void) | null;
+  /**
+   * Optional: a peer's link dropped and is being held open for it ('lost'),
+   * then it reconnected ('back') or the wait ran out ('gone', just before
+   * `onPeer(peer, false)`). Transports that never drop links don't call it.
+   */
+  onLink?: ((peer: string, state: LinkState) => void) | null;
   close(): void;
+}
+
+export type LinkState = 'lost' | 'back' | 'gone';
+
+/**
+ * Holds a lost peer for `graceMs` before reporting it gone. WebRTC links
+ * over mobile data drop for a moment and Trystero reconnects them within
+ * seconds (same peer id): that mustn't end a match. A peer back in time is
+ * reported up again (never down), and the protocol recovers what was lost
+ * in between (the guest asks for missing turns, orders are resent). A peer
+ * that said goodbye (`bye`) is reported gone at once.
+ */
+export class PeerGrace {
+  private readonly held = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly leaving = new Set<string>();
+
+  constructor(
+    private readonly emit: (peer: string, up: boolean) => void,
+    private readonly link: (peer: string, state: LinkState) => void,
+    private readonly graceMs: number,
+  ) {}
+
+  up(peer: string): void {
+    const h = this.held.get(peer);
+    this.leaving.delete(peer);
+    if (h !== undefined) {
+      clearTimeout(h);
+      this.held.delete(peer);
+      this.link(peer, 'back');
+    }
+    this.emit(peer, true);
+  }
+
+  down(peer: string): void {
+    if (this.held.has(peer)) return;
+    if (this.leaving.delete(peer) || this.graceMs <= 0) return this.emit(peer, false);
+    this.link(peer, 'lost');
+    this.held.set(
+      peer,
+      setTimeout(() => {
+        this.held.delete(peer);
+        this.link(peer, 'gone');
+        this.emit(peer, false);
+      }, this.graceMs),
+    );
+  }
+
+  /** its link is down and being held: nothing sent to it can arrive */
+  isHeld(peer: string): boolean {
+    return this.held.has(peer);
+  }
+
+  /** the peer is leaving on purpose: its next loss (or the one being held) is final */
+  bye(peer: string): void {
+    const h = this.held.get(peer);
+    if (h === undefined) return void this.leaving.add(peer);
+    clearTimeout(h);
+    this.held.delete(peer);
+    this.emit(peer, false);
+  }
+
+  close(): void {
+    for (const h of this.held.values()) clearTimeout(h);
+    this.held.clear();
+    this.leaving.clear();
+  }
 }
 
 /**
@@ -84,11 +156,14 @@ export class Router {
     transport.onPeer = (peer, up) => {
       for (const v of this.views) v.t.onPeer?.(peer, up);
     };
+    transport.onLink = (peer, state) => {
+      for (const v of this.views) v.t.onLink?.(peer, state);
+    };
   }
 
   view(kinds: readonly MsgKind[]): Transport {
     const base = this.transport;
-    const t: Transport = { self: base.self, onMessage: null, onPeer: null, send: (peer, bytes) => base.send(peer, bytes), close: () => this.drop(t) };
+    const t: Transport = { self: base.self, onMessage: null, onPeer: null, onLink: null, send: (peer, bytes) => base.send(peer, bytes), close: () => this.drop(t) };
     this.views.push({ kinds: new Set(kinds), t });
     return t;
   }

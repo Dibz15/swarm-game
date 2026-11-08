@@ -706,7 +706,15 @@ class App {
         if (s.phase === 'lobby' && this.match) this.backToRoom();
       };
       lobby.onRefused = (why) => view.status(why, true);
-      lobby.onNoHost = (why) => this.roomLost(why);
+      // in a match, the match reports the host (below, in startGame)
+      lobby.onNoHost = (why) => {
+        if (!this.match) this.roomLost(why);
+      };
+      lobby.onHostLink = (state) => {
+        if (this.match) return;
+        if (state === 'lost') view.status('Lost connection to the host. Reconnecting…', true);
+        else view.status(lobby.state?.phase === 'playing' ? 'The match is starting…' : 'Waiting for the host to start the match.');
+      };
       lobby.onStart = (s) => this.guestGo(s);
       room.lobby = lobby;
     }
@@ -758,19 +766,26 @@ class App {
     return row?.k === 'human' && this.mp ? this.mp.playerCharacter(row.char).name : FACTION_NAMES[seat];
   }
 
-  /** The host left or never answered. */
-  private roomLost(why: 'none' | 'left'): void {
+  /** The host left, never answered, or its link dropped for good. */
+  private roomLost(why: 'none' | 'left' | 'lost'): void {
     const r = this.room;
     if (!r) return;
     if (this.game && this.match) {
       this.input.enabled = false;
       this.netMenu = null;
       this.setModal(
-        this.mp!.messageCard(why === 'left' ? 'The host left' : 'Lost the host', 'The match can’t go on without the host, who runs it for everyone.', [{ label: 'Menu', primary: true, on: () => this.leaveRoom() }]),
+        this.mp!.messageCard(
+          why === 'left' ? 'The host left' : 'Lost the host',
+          `${why === 'lost' ? 'The connection to the host dropped and didn’t come back. ' : ''}The match can’t go on without the host, who runs it for everyone.`,
+          [{ label: 'Menu', primary: true, on: () => this.leaveRoom() }],
+        ),
       );
       return;
     }
-    r.view.status(why === 'left' ? 'The host left the room.' : 'No one is hosting this room. Check the link, or ask the host to open it again.', true);
+    r.view.status(
+      why === 'left' ? 'The host left the room.' : why === 'lost' ? 'Lost connection to the host, and it didn’t come back. Check your connection and open the link again.' : 'No one is hosting this room. Check the link, or ask the host to open it again.',
+      true,
+    );
   }
 
   /** Leave the room for good, and go back to the menu. */
@@ -936,7 +951,8 @@ class App {
           else this.hud?.toast(`${who} is back`, '#8aa0b8');
         },
         onPause: (p) => this.netPaused(p),
-        onHostLost: () => this.roomLost('left'),
+        onHostLost: (why) => this.roomLost(why),
+        onHostLink: (state) => this.hud?.toast(state === 'lost' ? 'Lost connection to the host. Reconnecting…' : 'Reconnected to the host', state === 'lost' ? '#ffb627' : '#8aa0b8'),
         onDesync: (t) => this.hud?.toast(`Desync at ${formatTime(t)}: players’ games may differ from here`, '#ff3cac'),
       };
     }
