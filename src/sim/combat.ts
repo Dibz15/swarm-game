@@ -1,11 +1,16 @@
-import { AGGRO_EXTRA, ALERT_EVERY, ALERT_RADIUS, DAMAGE_VS, RETALIATE_EXTRA, DT, ENERGY, Kind, NEUTRAL, POWER, RETARGET, STRAINS, TRAITS, UNIT_STATS } from './constants';
+import { AGGRO_EXTRA, ALERT_EVERY, ALERT_RADIUS, DAMAGE_VS, RETALIATE_EXTRA, DT, ENERGY, Kind, NEUTRAL, NUM_FACTIONS, POWER, RETARGET, STRAINS, TRAITS, UNIT_STATS } from './constants';
 import { queryRadius } from './spatial';
 import { segDist2 } from './terrain';
 import { pushFx, removeUnit, UNIT_RETREAT, WILD_HEART, type World } from './world';
 import { colossusSlain } from './events';
 import { heartSlain, heartWard } from './heart';
 
-const MAX_SCAN = 420;
+/**
+ * Most in-range enemies one scan weighs before taking the nearest so far.
+ * Real matches never reach it (the most seen in 50 bot matches was 106);
+ * it only bounds the cost of absurdly dense crowds.
+ */
+const MAX_SCAN = 160;
 
 const TAUNT2 = TRAITS.taunt * TRAITS.taunt;
 const pierceScratch: number[] = [];
@@ -27,25 +32,44 @@ function findTarget(w: World, i: number, radius: number): number {
  */
 function scanTarget(w: World, i: number, radius: number, walls: boolean): number {
   const g = w.grid;
-  const x = w.x[i], y = w.y[i];
-  const myTeam = w.teamOf[w.owner[i]];
+  const { items, start, byFaction, fstart, stale, factions: cellFactions, cols } = g;
+  const { teamOf, owner, alive, kind, ghost } = w;
+  const xs = w.x, ys = w.y;
+  const x = xs[i], y = ys[i];
+  const myTeam = teamOf[owner[i]];
+  // Cells holding only allies can't hold a target: skip them whole (exact,
+  // since every unit skipped would have been passed over below).
+  let hostile = 0;
+  for (let f = 0; f < NUM_FACTIONS; f++) if (teamOf[f] !== myTeam) hostile |= 1 << f;
+  const r2 = radius * radius;
   const x0 = g.cx(x - radius), x1 = g.cx(x + radius);
   const y0 = g.cy(y - radius), y1 = g.cy(y + radius);
   let best = -1;
-  let bestD = radius * radius;
+  let bestD = r2;
   let scanned = 0;
   for (let cy = y0; cy <= y1; cy++) {
     for (let cx = x0; cx <= x1; cx++) {
-      const c = cy * g.cols + cx;
-      for (let k = g.start[c], e = g.start[c + 1]; k < e; k++) {
-        const j = g.items[k];
-        if (w.teamOf[w.owner[j]] === myTeam || !w.alive[j]) continue;
-        const dx = w.x[j] - x, dy = w.y[j] - y;
+      const c = cy * cols + cx;
+      const enemies = cellFactions[c] & hostile;
+      if (!enemies) continue;
+      // With one enemy faction here, walk only its list: the same enemies
+      // in the same order as walking the whole cell, minus the allies.
+      let list = items, k = start[c], e = start[c + 1];
+      if (!(enemies & (enemies - 1)) && !stale[c]) {
+        const fc = c * NUM_FACTIONS + 31 - Math.clz32(enemies);
+        list = byFaction;
+        k = fstart[fc];
+        e = fstart[fc + 1];
+      }
+      for (; k < e; k++) {
+        const j = list[k];
+        if (teamOf[owner[j]] === myTeam || !alive[j]) continue;
+        const dx = xs[j] - x, dy = ys[j] - y;
         const raw = dx * dx + dy * dy;
-        if (raw > radius * radius) continue;
+        if (raw > r2) continue;
         // Echo's ghosts draw fire like Shields.
-        const d = w.kind[j] === Kind.Tank ? raw * TAUNT2 * w.factions[w.owner[j]].mods.kind[Kind.Tank].taunt : w.ghost[j] ? raw * TAUNT2 : raw;
-        if (d < bestD && (!walls || w.terrain.los(x, y, w.x[j], w.y[j]))) {
+        const d = kind[j] === Kind.Tank ? raw * TAUNT2 * w.factions[owner[j]].mods.kind[Kind.Tank].taunt : ghost[j] ? raw * TAUNT2 : raw;
+        if (d < bestD && (!walls || w.terrain.los(x, y, xs[j], ys[j]))) {
           bestD = d;
           best = j;
         }
