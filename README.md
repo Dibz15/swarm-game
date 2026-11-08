@@ -2,7 +2,7 @@
 
 A fast, colorful dot-swarm RTS for the browser. You command one neon color of tiny square dots and fight rival colors for control of the map's **nests** (spawners). Dots fight automatically when they get close to an enemy. Your job is to decide where they go and when.
 
-Play the latest build at https://dibz15.github.io/swarm-game/.
+Play the latest build at https://fourthcontact.github.io/swarm-game/.
 
 ## Development
 

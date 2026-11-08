@@ -3,7 +3,7 @@ import { fetchTurn } from '../src/net/ice';
 import { Budget, CHECK_MS, GRAPHQL_URL, monthRange, STALE_MS } from '../workers/turn/src/budget';
 import { cleanServers, handle as handleWith, TTL_SECONDS, type Env } from '../workers/turn/src/index';
 
-const ORIGIN = 'https://dibz15.github.io';
+const ORIGIN = 'https://fourthcontact.github.io';
 const ACCOUNT = 'a'.repeat(32);
 const env = (over: Partial<Env> = {}): Env => ({
   TURN_KEY_ID: 'key123',

@@ -30,7 +30,7 @@ export interface WebRtcRoom {
 }
 
 /** Namespaces our rooms on the relays: bumped with the protocol so old clients never meet new ones there. */
-const APP_ID = 'swarm-game.dibz15.v2';
+const APP_ID = 'swarm-game.fourthcontact.v2';
 
 export async function webrtcTransport(o: WebRtcRoom): Promise<Transport> {
   const { joinRoom, selfId } = await import('trystero/nostr');
