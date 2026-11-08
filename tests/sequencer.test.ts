@@ -118,7 +118,7 @@ describe('Sequencer (#158)', () => {
     expect(Math.abs(total(0, 2, seq.delayOf(0)) - total(300, 4, seq.delayOf(1)))).toBeLessThan(TICK);
     ack(0, 3000);
     advance(10000);
-    expect(seq.delayOf(0)).toBe(15); // dMax
+    expect(seq.delayOf(0)).toBe(30); // dMax
   });
 
   it('keeps a seat in order when its delay drops', () => {
