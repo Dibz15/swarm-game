@@ -1,6 +1,6 @@
 import { DT } from '../sim/constants';
 import type { Command } from '../sim/commands';
-import { quantizeCommand } from '../sim/sanitize';
+import { normalizeCommand } from '../sim/sanitize';
 import { createWorld, type MatchSetup } from '../sim/setup';
 import { step } from '../sim/step';
 import type { World } from '../sim/world';
@@ -40,8 +40,8 @@ export class LocalSession {
   }
 
   issue(order: Command): void {
-    // Snap x/y to 1/16 px here (#154), so the log, the recorder and the wire hold the same numbers.
-    const cmd = quantizeCommand(order);
+    // Canonical form here (#154, #157): x/y on a 1/16 px grid, sorted unit lists. The log, the recorder and the wire then agree.
+    const cmd = normalizeCommand(order);
     this.queue.push(cmd);
     this.issued++;
     this.onIssue?.(cmd);

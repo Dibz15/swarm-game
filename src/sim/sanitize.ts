@@ -1,7 +1,22 @@
 import { FACTION_UNIT_CAP, NEUTRAL } from './constants';
 import type { Command } from './commands';
 import { clamp } from './mathx';
-import type { World } from './world';
+
+/**
+ * What sanitizing needs to know about the match. A World satisfies it; a
+ * sequencer that runs no sim (a relay) can fill it in from the map.
+ */
+export interface CommandLimits {
+  readonly width: number;
+  readonly height: number;
+  readonly nests: { readonly length: number };
+  readonly endless?: boolean;
+}
+
+/** The limits of a world, as plain data (for a sequencer, or to send to one). */
+export function limitsOf(w: CommandLimits): CommandLimits {
+  return { width: w.width, height: w.height, nests: { length: w.nests.length }, endless: !!w.endless };
+}
 
 /**
  * Network commands are untrusted (#154). `sanitizeCommand` turns whatever
@@ -9,7 +24,7 @@ import type { World } from './world';
  * touches it: no NaN coordinates, no duplicate or endless unit lists, no
  * out-of-range ids, no commands for the wild swarms. Honest commands
  * (the local player's, every bot's) come through unchanged in meaning.
- * It only reads `w` and never mutates `c`.
+ * It only reads `w` (a World or plain `CommandLimits`) and never mutates `c`.
  */
 
 /** Seconds a `summon` may bring the next swarm forward to. */
@@ -34,15 +49,15 @@ function idList(v: unknown, cap: number): number[] | null {
   return out;
 }
 
-const nestOk = (w: World, id: unknown): id is number => isInt(id) && id >= 0 && id < w.nests.length;
+const nestOk = (w: CommandLimits, id: unknown): id is number => isInt(id) && id >= 0 && id < w.nests.length;
 
 /** Map coordinates, clamped to the map; null if either isn't a finite number (`clamp` keeps NaN). */
-function point(w: World, x: unknown, y: unknown): { x: number; y: number } | null {
+function point(w: CommandLimits, x: unknown, y: unknown): { x: number; y: number } | null {
   if (!isNum(x) || !isNum(y)) return null;
   return { x: clamp(x, 0, w.width), y: clamp(y, 0, w.height) };
 }
 
-export function sanitizeCommand(w: World, c: unknown): Command | null {
+export function sanitizeCommand(w: CommandLimits, c: unknown): Command | null {
   if (typeof c !== 'object' || c === null) return null;
   const r = c as Record<string, unknown>;
   const p = r.p;
@@ -89,14 +104,31 @@ export function sanitizeCommand(w: World, c: unknown): Command | null {
 }
 
 /** Coordinates snap to this grid at issue time, so the log, the recorder and the wire agree bit for bit. */
-const QUANTUM = 16;
+export const QUANTUM = 16;
 const snap = (v: number) => Math.round(v * QUANTUM) / QUANTUM;
 
+/** Ascending with no repeats already? */
+function canonical(ids: number[]): boolean {
+  for (let k = 1; k < ids.length; k++) if (ids[k] <= ids[k - 1]) return false;
+  return true;
+}
+
+const sortedIds = (ids: number[]) => (canonical(ids) ? ids : [...new Set(ids)].sort((a, b) => a - b));
+
 /**
- * Round a command's x/y to 1/16 px. Applied where a client issues a command
- * (LocalSession.issue), never inside the sim: bots' own orders stay exact.
+ * The canonical form of a command, applied where a client issues it
+ * (LocalSession.issue, NetSession.issue) and never inside the sim, so bots'
+ * own orders stay exact:
+ * - x/y snap to 1/16 px;
+ * - unit and nest lists are sorted ascending, without repeats (the wire
+ *   sends them delta-coded, #157).
+ * The log, the recorder and the wire then hold the same command. Returns `c`
+ * itself when it is already canonical.
  */
-export function quantizeCommand(c: Command): Command {
-  if (!('x' in c)) return c;
-  return { ...c, x: snap(c.x), y: snap(c.y) };
+export function normalizeCommand(c: Command): Command {
+  let out = c;
+  if ('x' in c && (snap(c.x) !== c.x || snap(c.y) !== c.y)) out = { ...c, x: snap(c.x), y: snap(c.y) };
+  if ('units' in c && !canonical(c.units)) out = { ...out, units: sortedIds(c.units) } as Command;
+  if ('nests' in c && !canonical(c.nests)) out = { ...out, nests: sortedIds(c.nests) } as Command;
+  return out;
 }

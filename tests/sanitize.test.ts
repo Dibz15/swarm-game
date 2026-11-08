@@ -7,7 +7,7 @@ import { FACTION_UNIT_CAP, POWER_NEST } from '../src/sim/constants';
 import { worldHash } from '../src/sim/hash';
 import { POWER_LOCK } from '../src/sim/mods';
 import { Rng } from '../src/sim/rng';
-import { quantizeCommand, sanitizeCommand } from '../src/sim/sanitize';
+import { limitsOf, normalizeCommand, sanitizeCommand } from '../src/sim/sanitize';
 import { createWorld } from '../src/sim/setup';
 import { step } from '../src/sim/step';
 import { inArmy, type World } from '../src/sim/world';
@@ -216,12 +216,28 @@ describe('untrusted commands (#154)', () => {
   });
 });
 
-describe('quantized at issue time (#154)', () => {
+describe('normalized at issue time (#154, #157)', () => {
   it('rounds x/y to 1/16 and leaves the rest alone', () => {
-    expect(quantizeCommand({ t: 'barrage', p: 0, x: 100.03, y: 7.97 })).toEqual({ t: 'barrage', p: 0, x: 100, y: 8 });
-    expect(quantizeCommand({ t: 'move', p: 0, units: [1], x: 1 / 3, y: 2, nest: -1 })).toEqual({ t: 'move', p: 0, units: [1], x: 0.3125, y: 2, nest: -1 });
-    const c: Command = { t: 'nova', p: 0, units: [1] };
-    expect(quantizeCommand(c)).toBe(c);
+    expect(normalizeCommand({ t: 'barrage', p: 0, x: 100.03, y: 7.97 })).toEqual({ t: 'barrage', p: 0, x: 100, y: 8 });
+    expect(normalizeCommand({ t: 'move', p: 0, units: [1], x: 1 / 3, y: 2, nest: -1 })).toEqual({ t: 'move', p: 0, units: [1], x: 0.3125, y: 2, nest: -1 });
+    const c: Command = { t: 'nova', p: 0, units: [1, 5, 9] };
+    expect(normalizeCommand(c)).toBe(c);
+  });
+
+  it('sorts unit and nest lists and drops repeats', () => {
+    const c: Command = { t: 'blink', p: 1, units: [9, 3, 9, 1], x: 4, y: 4 };
+    expect(normalizeCommand(c)).toEqual({ t: 'blink', p: 1, units: [1, 3, 9], x: 4, y: 4 });
+    expect(c.units).toEqual([9, 3, 9, 1]); // never mutated
+    expect(normalizeCommand({ t: 'rally', p: 0, nests: [4, 2], x: 1, y: 1 })).toEqual({ t: 'rally', p: 0, nests: [2, 4], x: 1, y: 1 });
+  });
+
+  it('sanitizes against plain limits as against the world', () => {
+    const w = createWorld(botMatch(3));
+    const lim = limitsOf(w);
+    expect(JSON.parse(JSON.stringify(lim))).toEqual(lim);
+    for (const c of [{ t: 'move', p: 0, units: [1], x: 1e9, y: -4, nest: 99 }, { t: 'upgrade', p: 2, nest: w.nests.length }, { t: 'summon', p: 0, secs: 4 }]) {
+      expect(sanitizeCommand(lim, c)).toEqual(sanitizeCommand(w, c));
+    }
   });
 
   it('LocalSession logs and records the quantized command', () => {
