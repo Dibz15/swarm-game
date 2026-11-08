@@ -20,5 +20,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "trystero": "^0.26.0"
   }
 }

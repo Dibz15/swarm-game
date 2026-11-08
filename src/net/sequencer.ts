@@ -1,7 +1,7 @@
 import type { Command } from '../sim/commands';
 import { DT } from '../sim/constants';
 import { normalizeCommand, sanitizeCommand, type CommandLimits } from '../sim/sanitize';
-import { MAX_ENTRIES_PER_TURN, MAX_TURNS_PER_MSG, type Ctrl, type Entry, type Msg, type SeatBot, type SeatState, type Turn } from './protocol';
+import { MAX_ENTRIES_PER_TURN, MAX_TURNS_PER_MSG, type Ctrl, type Entry, type LatRow, type Msg, type SeatBot, type SeatState, type Turn } from './protocol';
 
 /**
  * The Sequencer (#158): the one place that decides which tick each command
@@ -46,12 +46,16 @@ export interface SequencerOptions {
   /** pauses each seat may call, and their total length */
   pauses: number;
   pauseMs: number;
+  /** the seats that may pause and resume the match (null: every human seat); a networked match passes only the host's (#162) */
+  pausers: number[] | null;
   /** countdown between a resume and the next turn */
   resumeMs: number;
   /** how often clients hear `status` while paused */
   statusMs: number;
   /** hash reports for a tick are compared at the latest this many ticks later */
   hashTicks: number;
+  /** how often everyone hears the latency table (`lat`, #161) */
+  latMs: number;
 }
 
 export const SEQUENCER_DEFAULTS: SequencerOptions = {
@@ -65,9 +69,11 @@ export const SEQUENCER_DEFAULTS: SequencerOptions = {
   seatBot: { difficulty: 0, personality: 'expander' },
   pauses: 3,
   pauseMs: 120000,
+  pausers: null,
   resumeMs: 3000,
   statusMs: 1000,
   hashTicks: 300,
+  latMs: 2000,
 };
 
 /** A human seat in the match, and the peer that plays it (null: nobody yet). */
@@ -148,6 +154,7 @@ export class Sequencer {
   /** the turn after which the clock stops (the one carrying the pause entry); -1 once stopped */
   private pauseAfter = -1;
   private statusAt = -Infinity;
+  private latAt = -Infinity;
   private hashes = new Map<number, Map<number, number>>();
   private readonly clock: () => number;
   private readonly send: (peer: string, msg: Msg) => void;
@@ -271,6 +278,7 @@ export class Sequencer {
         this.hash(rec.seat, msg.tick, msg.hash);
         return;
       case 'pause':
+        if (this.opts.pausers && !this.opts.pausers.includes(rec.seat)) return;
         if (msg.on) this.requestPause(rec, now);
         else this.requestResume(now);
         return;
@@ -360,6 +368,7 @@ export class Sequencer {
   update(): void {
     const now = this.clock();
     this.seatTimers(now);
+    if (now - this.latAt >= this.opts.latMs) this.broadcastLat(now);
     if (this.pause && this.pauseAfter < 0) {
       this.paused_(now);
       return;
@@ -395,12 +404,26 @@ export class Sequencer {
     if (now - this.statusAt >= this.opts.statusMs) this.broadcastStatus(now);
   }
 
+  /** Every human seat's round trip and order-to-effect delay: their RTT, the delay their orders are held, and their buffer. */
+  private broadcastLat(now: number): void {
+    this.latAt = now;
+    const rows: LatRow[] = [...this.seats.values()].map((r) => ({ seat: r.seat, state: r.state, rtt: r.rtt, delay: r.rtt + (r.d + r.buffer) * DT_MS }));
+    for (const peer of this.byPeer.keys()) this.send(peer, { k: 'lat', rows });
+  }
+
   private broadcastStatus(now: number): void {
     this.statusAt = now;
     const p = this.pause;
+    const left = p ? (this.seats.get(p.by)?.pauseMsLeft ?? 0) : 0;
     const msg: Msg = p
-      ? { k: 'status', paused: true, by: p.by, resumeIn: p.resumeAt === Infinity ? -1 : Math.max(0, Math.round(p.resumeAt - now)) }
-      : { k: 'status', paused: false, by: -1, resumeIn: 0 };
+      ? {
+          k: 'status',
+          paused: true,
+          by: p.by,
+          resumeIn: p.resumeAt === Infinity ? -1 : Math.max(0, Math.round(p.resumeAt - now)),
+          auto: p.resumeAt === Infinity ? Math.max(0, Math.round(left - (now - p.at))) + this.opts.resumeMs : Math.max(0, Math.round(p.resumeAt - now)),
+        }
+      : { k: 'status', paused: false, by: -1, resumeIn: 0, auto: 0 };
     for (const peer of this.byPeer.keys()) this.send(peer, msg);
   }
 

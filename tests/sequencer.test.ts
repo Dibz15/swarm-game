@@ -173,13 +173,48 @@ describe('Sequencer (#158)', () => {
   });
 
   it('resumes by itself when the pauser’s pause time runs out', () => {
-    const { seq, advance } = rig({ pauseMs: 4000, resumeMs: 1000 });
+    const { seq, advance, inbox } = rig({ pauseMs: 4000, resumeMs: 1000 });
     advance(100);
     seq.onMessage('b', { k: 'pause', on: true });
-    advance(4500);
+    advance(1500);
+    // everyone hears when play will come back by itself: what's left of the allowance, plus the countdown
+    const st = inbox.get('a')!.filter((m) => m.k === 'status').at(-1)!;
+    expect(st.k === 'status' && st.auto).toBeGreaterThan(3000);
+    expect(st.k === 'status' && st.auto).toBeLessThanOrEqual(5000);
+    advance(3000);
     expect(seq.paused).toBe(true);
     advance(1000);
     expect(seq.paused).toBe(false);
+  });
+
+  it('with pausers set, only those seats can pause or resume (#162: the host)', () => {
+    const { seq, advance } = rig({ pausers: [0], resumeMs: 1000 });
+    advance(200);
+    seq.onMessage('b', { k: 'pause', on: true });
+    advance(300);
+    expect(seq.paused).toBe(false);
+    seq.onMessage('a', { k: 'pause', on: true });
+    advance(300);
+    expect(seq.paused).toBe(true);
+    seq.onMessage('b', { k: 'pause', on: false });
+    advance(2000);
+    expect(seq.paused).toBe(true);
+    seq.onMessage('a', { k: 'pause', on: false });
+    advance(1200);
+    expect(seq.paused).toBe(false);
+  });
+
+  it('tells everyone every seat’s round trip and order delay, every couple of seconds (#161)', () => {
+    const { seq, inbox, advance } = rig({ latMs: 2000 });
+    seq.onMessage('a', { k: 'ack', tick: 0, seq: 0, rtt: 40, buffer: 2 });
+    seq.onMessage('b', { k: 'ack', tick: 0, seq: 0, rtt: 300, buffer: 5 });
+    advance(4100);
+    const lats = inbox.get('b')!.filter((m) => m.k === 'lat');
+    expect(lats.length).toBe(3); // at 0 s, 2 s and 4 s
+    const last = lats.at(-1)!;
+    expect(last.k === 'lat' && last.rows.map((r) => [r.seat, r.state, r.rtt])).toEqual([[0, 'human', 40], [1, 'human', 300]]);
+    // delay: the round trip, plus the hold and the buffer
+    expect(last.k === 'lat' && last.rows[1].delay).toBe(300 + (seq.delayOf(1) + 5) * TICK);
   });
 
   it('a silent seat goes away, then an Easy bot takes it, and its player can reclaim it', () => {

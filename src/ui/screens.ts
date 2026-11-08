@@ -9,6 +9,7 @@ import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
 import { buildSetup, loadPrefs, randomSeed, savePrefs, type SetupPrefs } from '../game/matchSetup';
+import { relayOnly, setRelayOnly, TURN_URL } from '../net/ice';
 import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
@@ -63,7 +64,7 @@ export function controlsHtml(): string {
   return isMobile() ? TOUCH_CONTROLS_HTML : CONTROLS_HTML;
 }
 
-export function mainMenu(handlers: { skirmish: () => void; campaign: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
+export function mainMenu(handlers: { skirmish: () => void; multiplayer: () => void; campaign: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
   const m = el(`
     <div class="screen menu">
       <button class="menu-corner" data-a="howto" title="How to play"><span aria-hidden="true">?</span> How to play</button>
@@ -72,6 +73,7 @@ export function mainMenu(handlers: { skirmish: () => void; campaign: () => void;
         <p class="tag">a tiny war of colors</p>
         <div class="menu-buttons">
           <button class="primary" data-a="skirmish">Skirmish</button>
+          <button data-a="multiplayer">Multiplayer</button>
           <button data-a="campaign">Campaign</button>
           <button data-a="settings">Settings</button>
         </div>
@@ -79,6 +81,7 @@ export function mainMenu(handlers: { skirmish: () => void; campaign: () => void;
       <footer>v0.1 · fight for the nests</footer>
     </div>`);
   m.querySelector('[data-a=skirmish]')!.addEventListener('click', handlers.skirmish);
+  m.querySelector('[data-a=multiplayer]')!.addEventListener('click', handlers.multiplayer);
   m.querySelector('[data-a=campaign]')!.addEventListener('click', handlers.campaign);
   m.querySelector('[data-a=howto]')!.addEventListener('click', handlers.howto);
   m.querySelector('[data-a=settings]')!.addEventListener('click', handlers.settings);
@@ -396,10 +399,12 @@ export function settingsScreen(audio: AudioEngine, onBack: () => void): HTMLDivE
       <div class="card">
         <h2>Settings</h2>
         <div class="fields"></div>
+        <div class="relay-field"></div>
         <div class="row end"><button class="primary" data-a="back">Done</button></div>
       </div>
     </div>`);
   m.querySelector('.fields')!.replaceWith(settingsFields(audio, () => {}));
+  m.querySelector('.relay-field')!.replaceWith(relayField());
   m.querySelector('[data-a=back]')!.addEventListener('click', onBack);
   return m;
 }
@@ -512,6 +517,96 @@ const SCENARIOS: Scenario[] = [
   { name: '3-player FFA, domination', seed: 'rec-dom-3', size: 'medium', caves: 'off', bots: ['random', 'random'], domShare: 0.5 },
 ];
 
+/**
+ * Multiplayer's "Hide my IP" (#163): connect only through the relay, so other
+ * players never see your address. Off when this build has no relay.
+ */
+export function relayField(): HTMLDivElement {
+  const f = el(`
+    <div class="field">
+      <label>Multiplayer</label>
+      <label class="check"><input type="checkbox" data-a="relay"> Hide my IP from other players (relay only)</label>
+      <p class="hint"></p>
+    </div>`);
+  const box = f.querySelector('[data-a=relay]') as HTMLInputElement;
+  const hint = f.querySelector('.hint') as HTMLParagraphElement;
+  box.checked = relayOnly();
+  box.disabled = !TURN_URL;
+  hint.textContent = TURN_URL
+    ? 'Everything goes through a relay server instead of straight between players: a little more delay. Takes effect the next time you join a room.'
+    : 'This version of the game has no relay, so players connect directly.';
+  box.addEventListener('change', () => setRelayOnly(box.checked));
+  return f;
+}
+
+/** The map's choices, as the skirmish screen and the multiplayer lobby (#162) show them. */
+export interface MapChoice {
+  size: MapSize;
+  terrain: TerrainLevel;
+  caves: CaveLevel;
+  layout: SetupPrefs['layout'];
+  events: EventLevel;
+}
+
+/**
+ * Map size, terrain, ground, layout and events as segmented buttons.
+ * `onChange` gets each pick; `render` shows a choice (and, with `readOnly`,
+ * nothing can be picked: a guest's view of the host's lobby).
+ */
+export function mapFields(onChange: (patch: Partial<MapChoice>) => void): { el: HTMLDivElement; render: (m: MapChoice, readOnly?: boolean) => void } {
+  const f = el(`
+    <div class="mapfields">
+      <div class="field two">
+        <div>
+          <label>Map size</label>
+          <div class="seg" data-a="size">
+            <button data-v="small">Small</button><button data-v="medium">Medium</button><button data-v="large">Large</button>
+          </div>
+        </div>
+        <div>
+          <label>Terrain</label>
+          <div class="seg" data-a="terrain">
+            ${TERRAIN_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Ground <small>open, a ring of caves around the center, or one big cave system</small></label>
+        <div class="seg" data-a="caves">
+          ${CAVE_LEVELS.map((t) => `<button data-v="${t}">${CAVE_LABEL[t]}</button>`).join('')}
+        </div>
+      </div>
+      <div class="field">
+        <label>Map <small>how the nests are spread</small></label>
+        <div class="seg wrap" data-a="layout">
+          ${(['random', ...MAP_LAYOUTS] as const).map((t) => `<button data-v="${t}">${LAYOUT_LABEL[t]}</button>`).join('')}
+        </div>
+      </div>
+      <div class="field">
+        <label>Events <small>wild swarms, drops, the Colossus</small></label>
+        <div class="seg" data-a="events">
+          ${EVENT_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
+        </div>
+      </div>
+    </div>`) as HTMLDivElement;
+  const keys = ['size', 'terrain', 'caves', 'layout', 'events'] as const;
+  for (const k of keys) {
+    f.querySelector(`[data-a=${k}]`)!.addEventListener('click', (e) => {
+      const v = (e.target as HTMLElement).dataset.v;
+      if (v) onChange({ [k]: v } as Partial<MapChoice>);
+    });
+  }
+  const render = (m: MapChoice, readOnly = false) => {
+    for (const k of keys) {
+      f.querySelectorAll<HTMLButtonElement>(`[data-a=${k}] button`).forEach((b) => {
+        b.classList.toggle('on', b.dataset.v === m[k]);
+        b.disabled = readOnly && b.dataset.v !== m[k];
+      });
+    }
+  };
+  return { el: f, render };
+}
+
 export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) => void, onBack: () => void): HTMLDivElement {
   const prefs = loadPrefs();
   let seedText = randomSeed();
@@ -538,43 +633,10 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
             <label class="check"><input type="checkbox" data-a="teams"> Teams (you are team A)</label>
           </div>
         </div>
-        <div class="field two">
-          <div>
-            <label>Map size</label>
-            <div class="seg" data-a="size">
-              <button data-v="small">Small</button><button data-v="medium">Medium</button><button data-v="large">Large</button>
-            </div>
-          </div>
-          <div>
-            <label>Terrain</label>
-            <div class="seg" data-a="terrain">
-              ${TERRAIN_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
-            </div>
-          </div>
-        </div>
+        <div class="mapfields"></div>
         <div class="field">
-          <label>Ground <small>open, a ring of caves around the center, or one big cave system</small></label>
-          <div class="seg" data-a="caves">
-            ${CAVE_LEVELS.map((t) => `<button data-v="${t}">${CAVE_LABEL[t]}</button>`).join('')}
-          </div>
-        </div>
-        <div class="field">
-          <label>Map <small>how the nests are spread</small></label>
-          <div class="seg wrap" data-a="layout">
-            ${(['random', ...MAP_LAYOUTS] as const).map((t) => `<button data-v="${t}">${LAYOUT_LABEL[t]}</button>`).join('')}
-          </div>
-        </div>
-        <div class="field two">
-          <div>
-            <label>Events <small>wild swarms, drops, the Colossus</small></label>
-            <div class="seg" data-a="events">
-              ${EVENT_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
-            </div>
-          </div>
-          <div>
-            <label>Map seed</label>
-            <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
-          </div>
+          <label>Map seed</label>
+          <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
         </div>
         <div class="row end">
           <button data-a="back">Back</button>
@@ -583,6 +645,11 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
       </div>
     </div>`);
 
+  const fields = mapFields((patch) => {
+    Object.assign(prefs, patch);
+    render();
+  });
+  m.querySelector('.mapfields')!.replaceWith(fields.el);
   const swatches = m.querySelector('.swatches') as HTMLDivElement;
   const bots = m.querySelector('.bots') as HTMLDivElement;
   const seedInput = m.querySelector('.seed') as HTMLInputElement;
@@ -647,11 +714,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
       )
       .join('');
     (m.querySelector('[data-a=add]') as HTMLButtonElement).disabled = prefs.bots.length >= 5;
-    m.querySelectorAll<HTMLButtonElement>('[data-a=size] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.size));
-    m.querySelectorAll<HTMLButtonElement>('[data-a=terrain] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.terrain));
-    m.querySelectorAll<HTMLButtonElement>('[data-a=caves] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.caves));
-    m.querySelectorAll<HTMLButtonElement>('[data-a=layout] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.layout));
-    m.querySelectorAll<HTMLButtonElement>('[data-a=events] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.events));
+    fields.render(prefs);
   };
 
   swatches.addEventListener('click', (e) => {
@@ -707,41 +770,6 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     if (prefs.teams) prefs.bots.forEach((b, i) => (b.team = i % 2 === 0 ? 1 : 0));
     render();
   });
-  m.querySelector('[data-a=size]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as MapSize | undefined;
-    if (v) {
-      prefs.size = v;
-      render();
-    }
-  });
-  m.querySelector('[data-a=terrain]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as TerrainLevel | undefined;
-    if (v) {
-      prefs.terrain = v;
-      render();
-    }
-  });
-  m.querySelector('[data-a=caves]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as CaveLevel | undefined;
-    if (v) {
-      prefs.caves = v;
-      render();
-    }
-  });
-  m.querySelector('[data-a=layout]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as SetupPrefs['layout'] | undefined;
-    if (v) {
-      prefs.layout = v;
-      render();
-    }
-  });
-  m.querySelector('[data-a=events]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as EventLevel | undefined;
-    if (v) {
-      prefs.events = v;
-      render();
-    }
-  });
   m.querySelector('[data-a=dice]')!.addEventListener('click', () => {
     seedText = randomSeed();
     seedInput.value = seedText;
@@ -761,16 +789,34 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
   return m;
 }
 
-export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine; quitLabel?: string; teams?: string }): HTMLDivElement {
+/**
+ * The pause menu. In a networked match (#162) there's no restart, the title
+ * says whether the match is actually stopped, and `note` (a `.note` line the
+ * caller may update) says for how long; `players` lists who's in it.
+ */
+export function pauseMenu(h: {
+  resume: () => void;
+  restart?: () => void;
+  quit: () => void;
+  audio: AudioEngine;
+  quitLabel?: string;
+  teams?: string;
+  title?: string;
+  note?: string;
+  resumeLabel?: string;
+  players?: string;
+}): HTMLDivElement {
   const m = el(`
     <div class="screen modal dim">
       <div class="card">
-        <h2>Paused</h2>
+        <h2>${h.title ?? 'Paused'}</h2>
+        <p class="note hint"${h.note ? '' : ' hidden'}>${h.note ?? ''}</p>
         <div class="menu-buttons">
-          <button class="primary" data-a="resume">Resume</button>
-          <button data-a="restart">Restart match</button>
+          <button class="primary" data-a="resume">${h.resumeLabel ?? 'Resume'}</button>
+          ${h.restart ? '<button data-a="restart">Restart match</button>' : ''}
           <button data-a="quit">${h.quitLabel ?? 'Quit to menu'}</button>
         </div>
+        ${h.players ? `<h3>Players</h3>${h.players}` : ''}
         ${h.teams ? `<h3>Teams</h3>${h.teams}` : ''}
         <div class="fields"></div>
         <h3>Controls</h3>
@@ -782,7 +828,7 @@ export function pauseMenu(h: { resume: () => void; restart: () => void; quit: ()
   m.querySelector('.fields')!.replaceWith(settingsFields(h.audio, showControls));
   showControls();
   m.querySelector('[data-a=resume]')!.addEventListener('click', h.resume);
-  m.querySelector('[data-a=restart]')!.addEventListener('click', h.restart);
+  if (h.restart) m.querySelector('[data-a=restart]')!.addEventListener('click', h.restart);
   m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
   return m;
 }
@@ -792,12 +838,15 @@ export function endScreen(
   human: number,
   victory: boolean,
   h: { rematch: () => void; newMap: () => void; quit: () => void },
+  /** a networked match (#162): players' character names, and its own buttons in place of rematch / new map / menu */
+  net?: { names: Record<number, string>; buttons: { label: string; primary?: boolean; on: () => void }[]; note?: string },
 ): HTMLDivElement {
+  const nameOf = (id: number) => net?.names[id] ?? FACTION_NAMES[id];
   const rows = w.factions
     .filter((f) => f.active && f.id !== NEUTRAL)
     .map(
       (f) => `<tr class="${f.id === human ? 'me' : ''}${f.eliminated ? ' dead' : ''}">
-        <td><i style="background:${FACTION_HEX[f.id]}"></i>${FACTION_NAMES[f.id]}${f.id === human ? ' (you)' : ''}</td>
+        <td><i style="background:${FACTION_HEX[f.id]}"></i>${nameOf(f.id)}${f.id === human ? ' (you)' : ''}</td>
         <td>${f.stats.spawned}</td><td>${f.stats.kills}</td><td>${f.stats.lost}</td><td>${f.stats.captured}</td><td>${f.stats.peak}</td>
         <td>${f.eliminated ? formatTime(f.eliminatedTick) : '—'}</td></tr>`,
     )
@@ -819,9 +868,21 @@ export function endScreen(
         </div>
       </div>
     </div>`);
-  m.querySelector('[data-a=rematch]')!.addEventListener('click', h.rematch);
-  m.querySelector('[data-a=newmap]')!.addEventListener('click', h.newMap);
-  m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
+  if (net) {
+    const row = m.querySelector('.row.end')!;
+    row.innerHTML = net.note ? `<span class="hint">${net.note}</span>` : '';
+    for (const b of net.buttons) {
+      const btn = document.createElement('button');
+      btn.textContent = b.label;
+      if (b.primary) btn.className = 'primary';
+      btn.addEventListener('click', b.on);
+      row.appendChild(btn);
+    }
+  } else {
+    m.querySelector('[data-a=rematch]')!.addEventListener('click', h.rematch);
+    m.querySelector('[data-a=newmap]')!.addEventListener('click', h.newMap);
+    m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
+  }
   requestAnimationFrame(() => drawChart(m.querySelector('.chart') as HTMLCanvasElement, w));
   return m;
 }

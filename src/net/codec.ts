@@ -3,8 +3,8 @@ import type { Command } from '../sim/commands';
 import { FACTION_UNIT_CAP, NEUTRAL } from '../sim/constants';
 import { QUANTUM } from '../sim/sanitize';
 import {
-  MAX_BUILD, MAX_CTRL_PER_TURN, MAX_ENTRIES_PER_TURN, MAX_NAME, MAX_REASON, MAX_SEATS, MAX_SETUP, MAX_TURNS_PER_MSG,
-  SEAT_STATES, SNAP_CHUNK, type Ctrl, type Entry, type Msg, type SeatInfo, type Turn,
+  MAX_BUILD, MAX_CTRL_PER_TURN, MAX_ENTRIES_PER_TURN, MAX_LOBBY, MAX_NAME, MAX_REASON, MAX_SEATS, MAX_SETUP, MAX_TURNS_PER_MSG,
+  SEAT_STATES, SNAP_CHUNK, type Ctrl, type Entry, type LatRow, type Msg, type MsgKind, type SeatInfo, type Turn,
 } from './protocol';
 
 /**
@@ -352,6 +352,11 @@ function writeTurn(w: Writer, t: Turn): void {
   }
 }
 
+function u32(w: Writer, v: number): void {
+  if (!Number.isInteger(v) || v < 0 || v > 0xffffffff) throw new Error('codec: not a u32');
+  w.uv(v);
+}
+
 function readTurn(r: Reader): Turn {
   const head = r.upTo(MAX_ENTRIES_PER_TURN * 2 + 1);
   const n = Math.floor(head / 2);
@@ -370,8 +375,13 @@ function readTurn(r: Reader): Turn {
 
 // ---- messages ---------------------------------------------------------------
 
-const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim'] as const;
+const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat'] as const;
 const KIND_INDEX = new Map<string, number>(KINDS.map((k, i) => [k, i]));
+
+/** The kind of the message in `bytes` from its first byte alone (for routing), or null. */
+export function msgKind(bytes: Uint8Array): MsgKind | null {
+  return bytes.length ? (KINDS[bytes[0]] ?? null) : null;
+}
 
 export function encodeMsg(m: Msg): Uint8Array {
   const w = new Writer();
@@ -381,7 +391,7 @@ export function encodeMsg(m: Msg): Uint8Array {
       w.uv(m.proto);
       w.str(m.build, MAX_BUILD);
       w.u8(m.mobile ? 1 : 0);
-      w.str(m.name, MAX_NAME);
+      u32(w, m.char);
       break;
     case 'refuse':
       w.str(m.reason, MAX_REASON);
@@ -448,8 +458,31 @@ export function encodeMsg(m: Msg): Uint8Array {
       w.u8(m.paused ? 1 : 0);
       w.sv(m.by);
       w.sv(Math.round(m.resumeIn));
+      w.uv(Math.max(0, Math.round(m.auto)));
       break;
     case 'reclaim':
+    case 'ready':
+      break;
+    case 'lobby':
+      w.str(m.state, MAX_LOBBY);
+      break;
+    case 'lat':
+      if (m.rows.length > MAX_SEATS) throw new Error('codec: latency table too long');
+      w.uv(m.rows.length);
+      for (const r of m.rows) {
+        seat(w, r.seat);
+        const st = SEAT_STATES.indexOf(r.state);
+        if (st < 0) throw new Error(`codec: bad seat state ${r.state}`);
+        w.u8(st);
+        w.uv(Math.min(65535, Math.max(0, Math.round(r.rtt))));
+        w.uv(Math.min(65535, Math.max(0, Math.round(r.delay))));
+      }
+      break;
+    case 'pick':
+      seat(w, m.seat);
+      if (!Number.isInteger(m.team) || m.team < 0 || m.team > 255) throw new Error('codec: bad team');
+      w.uv(m.team);
+      u32(w, m.char);
       break;
   }
   return w.done();
@@ -473,7 +506,7 @@ function readMsg(r: Reader): Msg {
   switch (k) {
     case 'hello': {
       const proto = r.uv(), build = r.str(MAX_BUILD), mobile = r.bool();
-      return { k, proto, build, mobile, name: r.str(MAX_NAME) };
+      return { k, proto, build, mobile, char: r.upTo(0xffffffff) };
     }
     case 'refuse':
       return { k, reason: r.str(MAX_REASON) };
@@ -528,11 +561,29 @@ function readMsg(r: Reader): Msg {
     case 'pause':
       return { k, on: r.bool() };
     case 'status': {
-      const paused = r.bool(), by = r.sv();
-      return { k, paused, by, resumeIn: r.sv() };
+      const paused = r.bool(), by = r.sv(), resumeIn = r.sv();
+      return { k, paused, by, resumeIn, auto: r.uv() };
     }
     case 'reclaim':
+    case 'ready':
       return { k };
+    case 'lobby':
+      return { k, state: r.str(MAX_LOBBY) };
+    case 'lat': {
+      const n = r.upTo(MAX_SEATS);
+      const rows: LatRow[] = [];
+      for (let i = 0; i < n; i++) {
+        const s = readSeat(r);
+        const state = SEAT_STATES[r.u8()];
+        if (!state) throw new Bad();
+        rows.push({ seat: s, state, rtt: r.upTo(65535), delay: r.upTo(65535) });
+      }
+      return { k, rows };
+    }
+    case 'pick': {
+      const s = readSeat(r), team = r.upTo(255);
+      return { k, seat: s, team, char: r.upTo(0xffffffff) };
+    }
     default:
       throw new Bad();
   }

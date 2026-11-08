@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeMsg, encodeMsg } from '../src/net/codec';
+import { decodeMsg, encodeMsg, msgKind } from '../src/net/codec';
 import { MAX_TURNS_PER_MSG, PROTOCOL_VERSION, SNAP_CHUNK, type Msg, type Turn } from '../src/net/protocol';
 import type { Command } from '../src/sim/commands';
 import { TICK_HZ } from '../src/sim/constants';
@@ -42,7 +42,12 @@ describe('wire codec (#157)', () => {
 
   it('round-trips every message kind', () => {
     const msgs: Msg[] = [
-      { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: true, name: 'Zoë 🐝' },
+      { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: true, char: 0xdeadbeef },
+      { k: 'lobby', state: JSON.stringify({ seed: 'ember-tide-4', name: 'Zoë 🐝', rows: [] }) },
+      { k: 'pick', seat: 5, team: 3, char: 0 },
+      { k: 'ready' },
+      { k: 'lat', rows: [{ seat: 0, state: 'human', rtt: 12, delay: 145 }, { seat: 4, state: 'away', rtt: 340, delay: 610 }] },
+      { k: 'lat', rows: [] },
       { k: 'refuse', reason: 'build mismatch: refresh the page' },
       { k: 'seats', you: 1, table: [{ seat: 0, team: 0, name: 'host', state: 'human' }, { seat: 3, team: 1, name: '', state: 'bot' }] },
       { k: 'seats', you: -1, table: [] },
@@ -68,11 +73,16 @@ describe('wire codec (#157)', () => {
       { k: 'hash', tick: 900, hash: 0xdeadbeef },
       { k: 'snap', tick: 300, part: 2, of: 3, bytes: new Uint8Array(SNAP_CHUNK).map((_, i) => i * 7) },
       { k: 'pause', on: true },
-      { k: 'status', paused: true, by: 3, resumeIn: -1 },
-      { k: 'status', paused: false, by: 0, resumeIn: 2500 },
+      { k: 'status', paused: true, by: 3, resumeIn: -1, auto: 95000 },
+      { k: 'status', paused: false, by: 0, resumeIn: 2500, auto: 2500 },
       { k: 'reclaim' },
     ];
-    for (const m of msgs) expect(roundTrip(m)).toEqual(m);
+    for (const m of msgs) {
+      expect(roundTrip(m)).toEqual(m);
+      expect(msgKind(encodeMsg(m))).toBe(m.k); // routable from the first byte
+    }
+    expect(msgKind(new Uint8Array())).toBeNull();
+    expect(msgKind(Uint8Array.of(250))).toBeNull();
   });
 
   it('keeps empty turns tiny, and long uid lists compact', () => {
@@ -127,7 +137,9 @@ describe('wire codec (#157)', () => {
     // mutations of real messages: truncations, bit flips, a trailing byte
     const real = [
       encodeMsg(turnsMsg(812, [{ entries: CMDS.map((cmd, j) => ({ seat: 2, seq: j + 1, cmd })), ctrl: [{ k: 'seat', seat: 2, state: 'bot', bot: { difficulty: 0, personality: 'rusher' } }] }])),
-      encodeMsg({ k: 'hello', proto: 1, build: 'x', mobile: false, name: 'n' }),
+      encodeMsg({ k: 'hello', proto: 1, build: 'x', mobile: false, char: 77 }),
+      encodeMsg({ k: 'pick', seat: 1, team: 2, char: 123456 }),
+      encodeMsg({ k: 'lobby', state: '{"rows":[]}' }),
       encodeMsg({ k: 'ack', tick: 4, seq: 2, rtt: 40, buffer: 3, want: [5, 9] }),
     ];
     for (const b of real) {

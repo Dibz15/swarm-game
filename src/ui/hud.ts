@@ -87,6 +87,8 @@ export class Hud {
   /** the tick the popover last refreshed */
   private popTick = 0;
   private clock: HTMLSpanElement;
+  /** networked: how long orders take (#161) */
+  private ping: HTMLSpanElement;
   private sel: HTMLDivElement;
   private energyFill: HTMLDivElement;
   private energyText: HTMLSpanElement;
@@ -151,6 +153,7 @@ export class Hud {
       </div>
       <div class="team-banner" title="Tap to hide"></div>
       <div class="hud-tr">
+        <span class="ping" hidden title="How long your orders take to land, round trip included"></span>
         <span class="clock">0:00</span>
         <button class="icon" data-a="mute" title="Mute (M)">♪</button>
         <button class="icon" data-a="pause" title="Pause (Esc)">❚❚</button>
@@ -245,6 +248,7 @@ export class Hud {
       this.teamBanner.classList.remove('on');
     });
     this.clock = q('.clock');
+    this.ping = q('.ping');
     this.sel = q('.selinfo');
     this.energyFill = q('.energy .fill');
     this.energyText = q('.energy span');
@@ -527,6 +531,15 @@ export class Hud {
     }`;
   }
 
+  /**
+   * Every frame, not at the 10 Hz of the rest: a power you just used shows
+   * as pending at once, until it lands (#161).
+   */
+  syncPending(g: GameView): void {
+    if (!g.session.net) return;
+    for (const k of ['surge', 'nova', 'fortify', 'barrage', 'blink', 'lockdown', 'upgrade'] as const) this.btn[k].classList.toggle('pending', g.pending.has(k));
+  }
+
   update(g: GameView, dt: number): void {
     this.game = g;
     this.updateSiege(g);
@@ -669,9 +682,18 @@ export class Hud {
       ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${100 * ds.frac}%`;
     }
 
-    // Energy and buttons.
+    // Networked (#161): how long orders take, amber past 150 ms, red past 300.
+    if (g.session.net) {
+      const ms = Math.round(g.session.expectedDelayMs());
+      this.ping.hidden = false;
+      this.ping.textContent = `${ms} ms`;
+      this.ping.classList.toggle('warn', ms >= 150 && ms < 300);
+      this.ping.classList.toggle('bad', ms >= 300);
+    }
+
+    // Energy and buttons. Energy that orders on their way will spend (#161) already shows as spent.
     const me = w.factions[g.human];
-    const e = me ? me.energy : 0;
+    const e = me ? Math.max(0, me.energy - g.pending.cost()) : 0;
     this.energyFill.style.width = `${e}%`;
     let crystals = 0;
     for (const c of w.crystals) if (c.holder === g.human) crystals++;

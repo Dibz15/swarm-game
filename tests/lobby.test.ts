@@ -1,0 +1,425 @@
+import { describe, expect, it, vi } from 'vitest';
+import { playerCharacter } from '../src/game/character';
+import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
+import { buildNetSetup, GuestLobby, HostLobby, parseLobby, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
+import { NetMatch } from '../src/net/match';
+import { PROTOCOL_VERSION } from '../src/net/protocol';
+import { encodeMsg } from '../src/net/codec';
+import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, PeerGrace, Router, type LinkState, type Transport } from '../src/net/transport';
+import { Proxy } from '../src/proxy/proxy';
+import { DT } from '../src/sim/constants';
+
+const FRAME = 1000 / 60;
+
+const prefs = (over: Partial<SetupPrefs> = {}): SetupPrefs => ({ ...loadPrefs(), size: 'small', color: 0, teams: false, bots: [], ...over });
+
+/**
+ * A room on a loopback hub where everyone hears about everyone, both ways,
+ * as with the real transports (the hub alone only tells those already there).
+ */
+function room() {
+  const hub = new LoopbackHub();
+  const clock = { now: 0 };
+  const routers = new Map<string, Router>();
+  /** links that are down: nothing gets through either way, as when WebRTC drops */
+  const cuts = new Set<string>();
+  const pair = (a: string, b: string) => [a, b].sort().join('|');
+  const link = (id: string) => {
+    const inner = hub.link(id);
+    const t: Transport = { ...inner, send: (peer, bytes) => void (cuts.has(pair(id, peer)) || inner.send(peer, bytes)), close: () => inner.close() };
+    Object.defineProperty(t, 'onMessage', { get: () => inner.onMessage, set: (f) => (inner.onMessage = f) });
+    Object.defineProperty(t, 'onPeer', { get: () => inner.onPeer, set: (f) => (inner.onPeer = f) });
+    const r = new Router(t);
+    routers.set(id, r);
+    return r;
+  };
+  /** what each side's transport says while a link is held open, then when it's back (PeerGrace) */
+  const linkEvent = (a: string, b: string, state: LinkState) => {
+    for (const [x, y] of [[a, b], [b, a]]) {
+      const t = routers.get(x)!.transport;
+      t.onLink?.(y, state);
+      if (state === 'back') t.onPeer?.(y, true);
+      if (state === 'gone') t.onPeer?.(y, false);
+    }
+  };
+  const drop = (a: string, b: string) => {
+    cuts.add(pair(a, b));
+    linkEvent(a, b, 'lost');
+  };
+  const reconnect = (a: string, b: string) => {
+    cuts.delete(pair(a, b));
+    linkEvent(a, b, 'back');
+  };
+  const giveUp = (a: string, b: string) => linkEvent(a, b, 'gone');
+  /** after the newcomer's handlers are set: tell it who's already here */
+  const arrived = (id: string) => {
+    for (const other of routers.keys()) if (other !== id) routers.get(id)!.transport.onPeer?.(other, true);
+  };
+  const host = (o: Partial<{ prefs: SetupPrefs; char: number; build: string }> = {}) => {
+    const r = link('H');
+    const lobby = new HostLobby(r.view(LOBBY_KINDS), { build: o.build ?? 'test', char: o.char ?? 1, prefs: o.prefs ?? prefs(), seed: 'ember-tide-7', clock: () => clock.now, readyMs: 5000 });
+    arrived('H');
+    return { r, lobby };
+  };
+  const guest = (id: string, o: Partial<{ char: number; build: string }> = {}) => {
+    const r = link(id);
+    const lobby = new GuestLobby(r.view(LOBBY_KINDS), { build: o.build ?? 'test', char: o.char ?? id.charCodeAt(0) * 1000, mobile: false, clock: () => clock.now });
+    const refused: string[] = [];
+    lobby.onRefused = (why) => refused.push(why);
+    let start: StartInfo | null = null;
+    lobby.onStart = (s) => (start = s);
+    arrived(id);
+    return { id, r, lobby, refused, start: () => start };
+  };
+  const leave = (id: string) => {
+    routers.get(id)!.close();
+    routers.delete(id);
+  };
+  return { clock, host, guest, leave, drop, reconnect, giveUp };
+}
+
+const occupant = (s: LobbyState) => s.rows.map((r) => (r.k === 'human' ? r.peer : r.k));
+
+describe('lobby (#162)', () => {
+  it('seats guests in open rows, and every guest sees the host’s state', () => {
+    const { host, guest } = room();
+    const h = host({ prefs: prefs({ color: 2, bots: [{ faction: 4, difficulty: 2, personality: 'rusher', team: 1 }] }) });
+    const a = guest('A');
+    const b = guest('B');
+    expect(occupant(h.lobby.state)).toEqual(['A', 'B', 'H', 'open', 'bot', 'open']);
+    for (const g of [a, b]) {
+      expect(g.lobby.host).toBe('H');
+      expect(g.lobby.state).toEqual(h.lobby.state);
+    }
+    expect(a.lobby.mySeat).toBe(0);
+    expect(b.lobby.mySeat).toBe(1);
+  });
+
+  it('refuses another version, a full room, and a match in progress', () => {
+    const { host, guest } = room();
+    const h = host();
+    expect(guest('A', { build: 'other' }).refused[0]).toMatch(/different version/);
+    for (let i = 1; i < 6; i++) h.lobby.setRow(i, i === 5 ? { k: 'closed', team: 5 } : { k: 'bot', team: i, difficulty: 1, personality: 'random' });
+    expect(guest('B').refused[0]).toMatch(/full/);
+    h.lobby.setRow(5, { k: 'open', team: 5 });
+    guest('C');
+    h.lobby.start();
+    expect(guest('D').refused[0]).toMatch(/already started/);
+  });
+
+  it('guests move to open colours, change team, and pick characters; names stay unique', () => {
+    const { host, guest } = room();
+    const h = host({ char: 42 });
+    const a = guest('A', { char: 42 }); // same character as the host: renamed
+    const names = () => h.lobby.state.rows.flatMap((r) => (r.k === 'human' ? [playerCharacter(r.char).name] : []));
+    expect(new Set(names()).size).toBe(2);
+    const b = guest('B');
+    a.lobby.pick(4, 3, 99);
+    expect(a.lobby.mySeat).toBe(4);
+    expect(h.lobby.state.rows[4]).toMatchObject({ k: 'human', peer: 'A', team: 3, char: 99 });
+    expect(h.lobby.state.rows[1]).toEqual({ k: 'open', team: 1 });
+    // a taken colour: stays put; a taken name: keeps its character
+    b.lobby.pick(4, 0, 42);
+    expect(b.lobby.mySeat).toBe(2);
+    const bRow = h.lobby.state.rows[2];
+    expect(bRow.k === 'human' && playerCharacter(bRow.char).name).not.toBe(playerCharacter(42).name);
+    expect(new Set(names()).size).toBe(3);
+  });
+
+  it('a guest who leaves frees their row; the host can remove one', () => {
+    const { host, guest, leave } = room();
+    const h = host();
+    guest('A');
+    const b = guest('B');
+    leave('A');
+    expect(occupant(h.lobby.state)).toEqual(['H', 'open', 'B', 'open', 'open', 'open']);
+    h.lobby.kick(2);
+    expect(b.refused[0]).toMatch(/removed/);
+    expect(occupant(h.lobby.state)[2]).toBe('open');
+  });
+
+  it('a link that drops and comes back in the lobby: the guest says hello again and keeps its seat', () => {
+    const { host, guest, drop, reconnect, giveUp } = room();
+    const h = host();
+    const a = guest('A');
+    const seen: string[] = [];
+    a.lobby.onHostLink = (s) => seen.push(s);
+    a.lobby.onNoHost = (w) => seen.push(`no host: ${w}`);
+    drop('A', 'H');
+    h.lobby.setTeams(true); // missed while the link is down
+    reconnect('A', 'H');
+    expect(seen).toEqual(['lost', 'back']);
+    expect(a.lobby.state!.teams).toBe(true); // the hello brought the state back
+    expect(occupant(h.lobby.state)[1]).toBe('A');
+    // gone for good this time: the host frees the row, the guest is told why
+    drop('A', 'H');
+    giveUp('A', 'H');
+    expect(seen.at(-1)).toBe('no host: lost');
+    expect(occupant(h.lobby.state)[1]).toBe('open');
+    // and if it does come back later, the hello seats it again
+    reconnect('A', 'H');
+    expect(occupant(h.lobby.state)[1]).toBe('A');
+  });
+
+  it('a guest with no host gives up after a while', () => {
+    const { clock, guest } = room();
+    const a = guest('A');
+    let why = '';
+    a.lobby.onNoHost = (w) => (why = w);
+    clock.now = 16000;
+    a.lobby.update();
+    expect(why).toBe('none');
+  });
+
+  it('parses only well-formed lobby states', () => {
+    const { host } = room();
+    const s = host().lobby.state;
+    expect(parseLobby(JSON.stringify(s))).toEqual(s);
+    expect(parseLobby('nope')).toBeNull();
+    expect(parseLobby(JSON.stringify({ ...s, rows: s.rows.slice(1) }))).toBeNull();
+    expect(parseLobby(JSON.stringify({ ...s, map: { ...s.map, size: 'huge' } }))).toBeNull();
+    expect(parseLobby(JSON.stringify({ ...s, rows: [{ k: 'bot', team: 0, difficulty: 9, personality: 'x' }, ...s.rows.slice(1)] }))).toBeNull();
+  });
+
+  it('builds the match from the rows: colours are seats, teams only when on', () => {
+    const { host, guest } = room();
+    const h = host({ prefs: prefs({ bots: [{ faction: 3, difficulty: 0, personality: 'random', team: 1 }] }) });
+    guest('A');
+    const ffa = buildNetSetup(h.lobby.state);
+    expect(ffa.players.map((p) => [p.faction, p.team, p.human])).toEqual([[0, 0, true], [1, 1, true], [3, 3, false]]);
+    expect(ffa.players[2].bot?.personality).not.toBe('random');
+    h.lobby.setTeams(true);
+    expect(buildNetSetup(h.lobby.state).players.map((p) => p.team)).toEqual([0, 1, 1]);
+  });
+});
+
+describe('lobby to match (#162)', () => {
+  /** host + two guests through the lobby into running NetMatches, all on one fake clock */
+  function play() {
+    const rm = room();
+    const h = rm.host({ prefs: prefs({ bots: [{ faction: 5, difficulty: 1, personality: 'expander', team: 1 }] }) });
+    const gs = [rm.guest('A'), rm.guest('B')];
+    let go: HostGo | null = null;
+    h.lobby.onGo = (g) => (go = g);
+    const setup = h.lobby.start()!;
+    expect(setup).not.toBeNull();
+    const matches = new Map<string, NetMatch>();
+    for (const g of gs) {
+      const s = g.start()!;
+      expect(s.setup).toEqual(setup);
+      expect(s.seat).toBe(g.lobby.mySeat);
+      matches.set(g.id, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now }));
+      g.lobby.ready();
+    }
+    expect(go).not.toBeNull();
+    matches.set('H', NetMatch.host(h.r.view(MATCH_KINDS), go!, { clock: () => rm.clock.now, heartbeat: false }));
+    const proxies = new Map([...matches].map(([id, m]) => [id, new Proxy(m.session.localSeat, { skill: 1 })]));
+    const run = (ms: number, frozen: string[] = []) => {
+      for (const end = rm.clock.now + ms; rm.clock.now < end; ) {
+        rm.clock.now += FRAME;
+        for (const [id, m] of matches) {
+          if (frozen.includes(id)) continue;
+          const w = m.session.world;
+          for (const c of proxies.get(id)!.think(w)) m.session.issue(c);
+          m.update();
+          m.session.update(FRAME / 1000);
+          w.fx = [];
+          w.deaths = [];
+        }
+      }
+    };
+    return { ...rm, h, gs, matches, run };
+  }
+
+  it('everyone gets the same match, plays it, and ends on the same world', () => {
+    const { matches, run } = play();
+    const desyncs: number[] = [];
+    matches.get('H')!.events.onDesync = (t) => desyncs.push(t);
+    run(60_000);
+    const ticks = [...matches.values()].map((m) => m.session.world.tick);
+    expect(Math.min(...ticks)).toBeGreaterThan(55 / DT);
+    expect(desyncs).toEqual([]);
+    // compare at the tick everyone has reached
+    const t = Math.min(...ticks);
+    const logs = [...matches.values()].map((m) => JSON.stringify(m.session.log.filter((e) => e.tick <= t)));
+    expect(new Set(logs).size).toBe(1);
+    for (const m of matches.values()) expect(m.session.issued).toBeGreaterThan(5);
+    run(2000); // and the hashes really are compared: nobody flagged one
+    expect(desyncs).toEqual([]);
+  });
+
+  it('only the host pauses the match; a guest’s pause is ignored', () => {
+    const { matches, run } = play();
+    run(2000);
+    matches.get('A')!.session.setPaused(true);
+    run(1000);
+    expect([...matches.values()].some((m) => m.session.paused)).toBe(false);
+    const pauses: boolean[] = [];
+    matches.get('B')!.events.onPause = (p) => pauses.push(p);
+    matches.get('H')!.session.setPaused(true);
+    run(1000);
+    expect([...matches.values()].every((m) => m.session.paused)).toBe(true);
+    const t = matches.get('B')!.session.world.tick;
+    matches.get('A')!.session.setPaused(false); // not theirs to resume either
+    run(5000);
+    expect(matches.get('B')!.session.world.tick).toBe(t);
+    matches.get('H')!.session.setPaused(false);
+    run(5000);
+    expect(matches.get('B')!.session.world.tick).toBeGreaterThan(t);
+    expect(pauses).toEqual([true, false]);
+  });
+
+  it('a guest who drops mid-match goes away, then a bot takes the seat', () => {
+    const { matches, run, leave, gs } = play();
+    const seen: [number, string][] = [];
+    matches.get('A')!.events.onSeat = (seat, state) => seen.push([seat, state]);
+    run(2000);
+    leave('B');
+    matches.delete('B');
+    run(65_000);
+    expect(seen).toEqual([[gs[1].lobby.mySeat, 'away'], [gs[1].lobby.mySeat, 'bot']]);
+  });
+
+  it('a guest’s link that drops mid-match and comes back: the match goes on, and everyone ends on the same world', () => {
+    const { matches, run, drop, reconnect } = play();
+    const desyncs: number[] = [];
+    matches.get('H')!.events.onDesync = (t) => desyncs.push(t);
+    const link: string[] = [];
+    const lost: string[] = [];
+    matches.get('A')!.events.onHostLink = (s) => link.push(s);
+    matches.get('A')!.events.onHostLost = (w) => lost.push(w);
+    const seats: [number, string][] = [];
+    matches.get('B')!.events.onSeat = (seat, state) => seats.push([seat, state]);
+    run(5000);
+    drop('A', 'H');
+    run(12_000); // everything either way is lost meanwhile: turns, acks, orders
+    const behind = matches.get('A')!.session.world.tick;
+    expect(matches.get('H')!.session.world.tick - behind).toBeGreaterThan(10 / DT);
+    reconnect('A', 'H');
+    run(20_000);
+    expect(link).toEqual(['lost', 'back']);
+    expect(lost).toEqual([]);
+    const seatA = matches.get('A')!.session.localSeat;
+    expect(seats).toEqual([[seatA, 'away'], [seatA, 'human']]);
+    // A caught up and plays on, in step with everyone
+    const ticks = [...matches.values()].map((m) => m.session.world.tick);
+    expect(Math.max(...ticks) - Math.min(...ticks)).toBeLessThan(1 / DT);
+    const t = Math.min(...ticks);
+    const logs = [...matches.values()].map((m) => JSON.stringify(m.session.log.filter((e) => e.tick <= t)));
+    expect(new Set(logs).size).toBe(1);
+    run(2000);
+    expect(desyncs).toEqual([]);
+  });
+
+  it('a host whose link drops and never comes back: the guest is told it was lost, not that the host left', () => {
+    const { matches, run, drop, giveUp, leave } = play();
+    const lostA: string[] = [];
+    const lostB: string[] = [];
+    matches.get('A')!.events.onHostLost = (w) => lostA.push(w);
+    matches.get('B')!.events.onHostLost = (w) => lostB.push(w);
+    run(2000);
+    drop('A', 'H');
+    run(3000);
+    giveUp('A', 'H');
+    expect(lostA).toEqual(['lost']);
+    leave('H'); // B's host really leaves
+    expect(lostB).toEqual(['left']);
+  });
+
+  it('a guest who never says ready doesn’t hold up the start for long', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    let go: HostGo | null = null;
+    h.lobby.onGo = (g) => (go = g);
+    h.lobby.start();
+    expect(go).toBeNull();
+    rm.clock.now = 6000;
+    h.lobby.update();
+    expect(go).not.toBeNull();
+    // and the room shows the match as started
+    expect(h.lobby.state.phase).toBe('playing');
+    h.lobby.backToLobby();
+    expect(h.lobby.state.phase).toBe('lobby');
+  });
+
+  it('ignores a pick or hello it can’t trust', () => {
+    const { host, guest } = room();
+    const h = host();
+    const a = guest('A');
+    // a pick for a seat out of range, a team out of range
+    a.r.transport.send('H', encodeMsg({ k: 'pick', seat: 5, team: 200, char: 1 }));
+    const row = h.lobby.state.rows[5];
+    expect(row.k === 'human' && row.team).toBeLessThan(6);
+    // hello from a peer speaking another protocol
+    const t: Transport = a.r.transport;
+    t.send('H', encodeMsg({ k: 'hello', proto: PROTOCOL_VERSION + 1, build: 'test', mobile: false, char: 3 }));
+    expect(h.lobby.state.rows.filter((r) => r.k === 'human').length).toBe(2);
+  });
+});
+
+describe('holding dropped links (PeerGrace)', () => {
+  function grace(ms = 20_000) {
+    const ev: string[] = [];
+    const g = new PeerGrace(
+      (p, up) => ev.push(`${p} ${up ? 'up' : 'down'}`),
+      (p, s) => ev.push(`${p} ${s}`),
+      ms,
+    );
+    return { g, ev };
+  }
+
+  it('a peer that reconnects in time is never reported down', () => {
+    vi.useFakeTimers();
+    try {
+      const { g, ev } = grace();
+      g.up('p');
+      g.down('p');
+      g.down('p'); // twice is still once
+      expect(g.isHeld('p')).toBe(true);
+      vi.advanceTimersByTime(19_000);
+      g.up('p');
+      expect(g.isHeld('p')).toBe(false);
+      vi.advanceTimersByTime(60_000);
+      expect(ev).toEqual(['p up', 'p lost', 'p back', 'p up']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('one that doesn’t is reported gone, then down', () => {
+    vi.useFakeTimers();
+    try {
+      const { g, ev } = grace();
+      g.up('p');
+      g.down('p');
+      vi.advanceTimersByTime(20_000);
+      expect(ev).toEqual(['p up', 'p lost', 'p gone', 'p down']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('one that said goodbye goes at once, before or during the wait', () => {
+    vi.useFakeTimers();
+    try {
+      const { g, ev } = grace();
+      g.up('a');
+      g.bye('a');
+      g.down('a');
+      g.up('b');
+      g.down('b');
+      g.bye('b');
+      vi.advanceTimersByTime(60_000);
+      expect(ev).toEqual(['a up', 'a down', 'b up', 'b lost', 'b down']);
+      // closing drops what's held without reporting it
+      g.up('c');
+      g.down('c');
+      g.close();
+      vi.advanceTimersByTime(60_000);
+      expect(ev.slice(5)).toEqual(['c up', 'c lost']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

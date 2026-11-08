@@ -1,5 +1,5 @@
 import { DT } from '../sim/constants';
-import type { Command } from '../sim/commands';
+import { REJECTS, type Command, type Reject } from '../sim/commands';
 import { normalizeCommand } from '../sim/sanitize';
 import { createWorld, type MatchSetup } from '../sim/setup';
 import { step } from '../sim/step';
@@ -8,6 +8,19 @@ import type { World } from '../sim/world';
 export interface TimedCommand {
   tick: number;
   cmd: Command;
+}
+
+/** Why an order did nothing (#161): the sim refused it, or (networked) it never reached a turn. */
+export type OrderFail = Reject | 'lost';
+
+/** The orders at these indices of a step's list did nothing, and why: from the `cmdFail` fx it pushed after `from`. */
+export function rejectedIn(w: World, from: number): Map<number, Reject> {
+  const out = new Map<number, Reject>();
+  for (let k = from; k < w.fx.length; k++) {
+    const e = w.fx[k];
+    if (e.type === 'cmdFail') out.set(e.r, REJECTS[e.nest] ?? 'invalid');
+  }
+  return out;
 }
 
 /**
@@ -37,7 +50,14 @@ export interface Session {
   readonly lastStepMs: number;
   /** sees every command as it is issued (the match recorder) */
   onIssue: ((cmd: Command) => void) | null;
-  issue(order: Command): void;
+  /** an order ran: the id `issue` gave it, and ms from issue to the step that ran it (#161) */
+  onEffect: ((id: number, ms: number) => void) | null;
+  /** an order did nothing, and why */
+  onReject: ((id: number, why: OrderFail) => void) | null;
+  /** send an order; returns its id, for `onEffect` / `onReject` */
+  issue(order: Command): number;
+  /** about how long an order issued now takes to run, ms */
+  expectedDelayMs(): number;
   /** advance by dt seconds of real time; returns the ticks stepped */
   update(dt: number): number;
 }
@@ -50,7 +70,7 @@ export class LocalSession implements Session {
   readonly setup: MatchSetup;
   /** seed + this log fully reproduce the match */
   readonly log: TimedCommand[] = [];
-  private queue: Command[] = [];
+  private queue: { cmd: Command; id: number; at: number }[] = [];
   private acc = 0;
   speed = 1;
   paused = false;
@@ -63,6 +83,8 @@ export class LocalSession implements Session {
   lastStepMs = 0;
   /** sees every command as it is issued (the match recorder) */
   onIssue: ((cmd: Command) => void) | null = null;
+  onEffect: ((id: number, ms: number) => void) | null = null;
+  onReject: ((id: number, why: OrderFail) => void) | null = null;
 
   /** `seat`: the local faction (default: the setup's first human, or -1) */
   constructor(setup: MatchSetup, seat?: number) {
@@ -75,12 +97,18 @@ export class LocalSession implements Session {
     this.paused = on;
   }
 
-  issue(order: Command): void {
+  issue(order: Command): number {
     // Canonical form here (#154, #157): x/y on a 1/16 px grid, sorted unit lists. The log, the recorder and the wire then agree.
     const cmd = normalizeCommand(order);
-    this.queue.push(cmd);
-    this.issued++;
+    const id = ++this.issued;
+    this.queue.push({ cmd, id, at: performance.now() });
     this.onIssue?.(cmd);
+    return id;
+  }
+
+  /** the next step: about a tick (more when held or paused) */
+  expectedDelayMs(): number {
+    return DT * 1000;
   }
 
   /** Orders issued but not yet stepped (held or paused). */
@@ -96,12 +124,22 @@ export class LocalSession implements Session {
     this.acc += dt * this.speed;
     let steps = 0;
     while (this.acc >= DT && steps < 6) {
-      const cmds = this.queue;
+      const orders = this.queue;
       this.queue = [];
+      const cmds = orders.map((o) => o.cmd);
       for (const c of cmds) this.log.push({ tick: this.world.tick + 1, cmd: c });
+      const fx = this.world.fx.length;
       const t0 = performance.now();
       step(this.world, cmds);
       this.lastStepMs = performance.now() - t0;
+      if (orders.length && (this.onEffect || this.onReject)) {
+        const failed = rejectedIn(this.world, fx);
+        for (let i = 0; i < orders.length; i++) {
+          const why = failed.get(i);
+          if (why) this.onReject?.(orders[i].id, why);
+          else this.onEffect?.(orders[i].id, t0 - orders[i].at);
+        }
+      }
       this.acc -= DT;
       steps++;
     }
