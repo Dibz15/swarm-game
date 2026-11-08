@@ -11,12 +11,42 @@ export interface TimedCommand {
 }
 
 /**
- * Drives the sim at a fixed tick rate from a variable frame clock.
- * A future LockstepSession would expose the same surface but only advance
- * once every peer's commands for a tick have arrived.
+ * What GameView drives a match through (#159): the local LocalSession, or a
+ * NetSession that steps the turns a sequencer closes (src/net/netSession.ts).
  */
-export class LocalSession {
+export interface Session {
   readonly world: World;
+  readonly setup: MatchSetup;
+  /** seed + this log fully reproduce the match (with a NetSession's ctrlLog) */
+  readonly log: TimedCommand[];
+  /** the faction this client plays (-1: none) */
+  readonly localSeat: number;
+  /** networked: speed and held do nothing, pause goes through the sequencer */
+  readonly net: boolean;
+  readonly paused: boolean;
+  /** ask to pause or resume; a NetSession's pause only shows once the sequencer agrees */
+  setPaused(on: boolean): void;
+  /** every command issued so far, stepped or not */
+  readonly issued: number;
+  /** orders issued but not yet stepped */
+  readonly queued: number;
+  speed: number;
+  held: boolean;
+  /** interpolation factor between the previous and current tick */
+  readonly alpha: number;
+  readonly lastStepMs: number;
+  /** sees every command as it is issued (the match recorder) */
+  onIssue: ((cmd: Command) => void) | null;
+  issue(order: Command): void;
+  /** advance by dt seconds of real time; returns the ticks stepped */
+  update(dt: number): number;
+}
+
+/** Drives the sim at a fixed tick rate from a variable frame clock. Single player, the tutorial, the demo. */
+export class LocalSession implements Session {
+  readonly world: World;
+  readonly net = false;
+  readonly localSeat: number;
   readonly setup: MatchSetup;
   /** seed + this log fully reproduce the match */
   readonly log: TimedCommand[] = [];
@@ -34,9 +64,15 @@ export class LocalSession {
   /** sees every command as it is issued (the match recorder) */
   onIssue: ((cmd: Command) => void) | null = null;
 
-  constructor(setup: MatchSetup) {
+  /** `seat`: the local faction (default: the setup's first human, or -1) */
+  constructor(setup: MatchSetup, seat?: number) {
     this.setup = setup;
     this.world = createWorld(setup);
+    this.localSeat = seat ?? setup.players.find((p) => p.human)?.faction ?? -1;
+  }
+
+  setPaused(on: boolean): void {
+    this.paused = on;
   }
 
   issue(order: Command): void {

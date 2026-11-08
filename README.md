@@ -203,7 +203,8 @@ src/sim/      deterministic simulation — no DOM, no Math.random, no clock
   events.ts     living-map director: wild swarms, supply drops, the Colossus, garrison regrowth
   mathx.ts      table-based deterministic sin/cos
   hash.ts       state checksum
-src/game/     LocalSession (fixed-timestep driver + command log), GameView (match + feedback)
+src/game/     Session: LocalSession (fixed-timestep driver + command log); GameView (match + feedback)
+src/net/      multiplayer core (#152): wire codec, Sequencer (host turn clock), NetSession (jitter buffer, catch-up), transports
 src/render/   WebGL2: instanced units, beams, SDF nest shapes, terrain baked to a distance texture; particles; camera
 src/input/    mouse / touch / keyboard → actions; client-only selection
 src/ui/       DOM HUD, menus, settings, end screen; mobile mode (body.mobile: touch layout + wording)
@@ -214,7 +215,7 @@ tests/        vitest suites, all headless
 ```
 
 **Why deterministic:** the same seed and command log always produce the same match, and `tests/sim.test.ts` checks this. That gives us:
-- **Lockstep multiplayer** later: peers exchange only Commands and compare `worldHash` every N ticks.
+- **Sequenced-lockstep multiplayer** (#152): clients send Commands to one Sequencer, which stamps each with an execution tick and broadcasts a closed turn every tick without waiting for anyone. Each client steps tick T once turn T arrives, behind a small jitter buffer, and reports `fullHash` to catch desyncs. A laggy player's own orders take longer; nobody else stalls.
 - **Replays**: `LocalSession.log` already records every command.
 - **Headless bot-vs-bot tests**.
 
@@ -223,7 +224,7 @@ tests/        vitest suites, all headless
 1. ~~Core engine + playable skirmish vs bots~~
 2. Balance pass after playtesting
 3. Campaign: about 10 levels in JSON, a level-select screen, progress in localStorage
-4. Multiplayer: a `LockstepSession` over WebRTC data channels or a small WebSocket relay, with bots filling empty slots
+4. Multiplayer (#152): sequenced lockstep. The Sequencer runs in the host's browser over WebRTC (P2P), and the same class can later run in a relay. Bots fill empty seats, and an Easy bot takes over a dropped player's seat
 5. Replay viewer and map editor
 
 ## License
