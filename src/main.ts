@@ -304,6 +304,7 @@ class App {
     this.setModal(playtestMenu({ play: (p) => this.startPlaytest(p), back: () => this.showMenu() }));
   }
 
+  // Dev playtests write straight into the world: fine while nothing is networked (#156); gating them for networked sessions is #159.
   private startPlaytest(p: Playtest): void {
     const scene = p.make(loadPrefs().color);
     if (scene.kind === 'map') return this.showRunMap(scene.run);
@@ -556,7 +557,8 @@ class App {
     this.rings.list = [];
   }
 
-  private startGame(setup: MatchSetup, opts: { scenario?: string; record?: boolean } = {}, prevEnd: EndReason = 'quit'): void {
+  /** `opts.seat`: the local seat (#156), one of the setup's human factions; default: the first human. */
+  private startGame(setup: MatchSetup, opts: { scenario?: string; record?: boolean; seat?: number } = {}, prevEnd: EndReason = 'quit'): void {
     this.endGame(prevEnd);
     this.demo = null;
     this.setModal(null);
@@ -566,7 +568,7 @@ class App {
     this.quick = null;
     this.run = null;
     const record = opts.record !== false && recordingEnabled();
-    this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null);
+    this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null, { seat: opts.seat });
     this.sfx.useTheme(setup.seed);
     this.input.game = this.game;
     this.input.enabled = true;
@@ -633,7 +635,7 @@ class App {
           restart: () => {
             const run = this.run;
             if (g.mission) this.playMission(g.mission.index, 'restart');
-            else this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart');
+            else this.startGame(g.setup, { scenario: g.rec?.scenario, seat: g.human >= 0 ? g.human : undefined }, 'restart');
             this.run = run;
           },
           // Leaving a campaign battle is a retreat: it counts as a loss.
@@ -689,7 +691,7 @@ class App {
       endScreen(g.world, g.human, g.result === 'victory', {
         rematch: () => {
           const q = this.quick;
-          this.startGame(g.setup, { scenario: g.rec?.scenario });
+          this.startGame(g.setup, { scenario: g.rec?.scenario, seat: g.human >= 0 ? g.human : undefined });
           this.quick = q;
         },
         newMap: () => {

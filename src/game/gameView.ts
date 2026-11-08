@@ -33,9 +33,21 @@ const READ_PAUSE = 10;
 /** Barrage aim outside every nest's range */
 const OUT_OF_RANGE: RGB = [150, 155, 175];
 
+/** The local seat (#156): `seat` if it is one of the setup's human seats, else the first human (-1: none). */
+export function localSeat(setup: MatchSetup, seat?: number): number {
+  if (seat === undefined) return setup.players.find((p) => p.human)?.faction ?? -1;
+  if (!setup.players.some((p) => p.human && p.faction === seat)) throw new Error(`GameView: seat ${seat} is not a human seat`);
+  return seat;
+}
+
 /** A match in progress: owns the session, selection and event feedback. */
 export class GameView {
   readonly session: LocalSession;
+  /**
+   * The local seat (#156): the faction this client plays. With several human
+   * seats it is whichever one was passed in; it defaults to the first human.
+   * (Named `human` from single-player days.)
+   */
   readonly human: number;
   readonly selection = new Selection();
   hoverNest = -1;
@@ -103,9 +115,10 @@ export class GameView {
     readonly setup: MatchSetup,
     private readonly s: Services,
     record: { scenario?: string; mobile: boolean } | null = null,
+    opts: { seat?: number } = {},
   ) {
     this.session = new LocalSession(setup);
-    this.human = setup.players.find((p) => p.human)?.faction ?? -1;
+    this.human = localSeat(setup, opts.seat);
     this.rec = record
       ? new Recorder(setup, this.human, { mobile: record.mobile, touch: matchMedia('(pointer: coarse)').matches, w: innerWidth, h: innerHeight }, record.scenario)
       : null;
