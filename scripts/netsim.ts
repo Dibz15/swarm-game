@@ -30,7 +30,9 @@ const JITTERS = [20, 80];
 const LOSSES = [0, 0.02, 0.05];
 
 const pad = (v: unknown, n: number) => String(v).padStart(n);
-const ok = (r: NetMatchReport) => (r.desyncs.length || !r.finalAgree || r.hashTicks === 0 ? 'DESYNC' : 'ok');
+/** 'ok', or what went wrong: worlds that disagree, or orders that never ran */
+const ok = (r: NetMatchReport) =>
+  r.desyncs.length || r.mismatches.length || !r.finalAgree || r.hashTicks === 0 ? 'DESYNC' : r.seats.some((s) => s.ran !== s.issued) ? 'LOST' : 'ok';
 
 console.log(`${secs} s matches, host + one friend; latencies are order-to-effect ms (p50/p95); stall is the friend's, s per minute\n`);
 console.log('  rtt  jit  loss | co-op host  friend   buf stall | pvp host   friend   buf stall |  hashes');
@@ -53,7 +55,7 @@ for (const rtt of RTTS) {
         );
         checks.push(ok(r));
       }
-      row.push(pad(checks.every((c) => c === 'ok') ? 'ok' : 'DESYNC', 7));
+      row.push(pad(checks.find((c) => c !== 'ok') ?? 'ok', 7));
       console.log(row.join(' '));
     }
   }

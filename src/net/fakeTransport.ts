@@ -77,7 +77,9 @@ export class VirtualClock {
  * - `hostile`: losses drop the message, `dup` sends it twice, and each
  *   copy takes its own delay, so messages overtake each other.
  *
- * A `loss` of 1 is a dead link: nothing arrives, in either mode.
+ * A `loss` of 1 is a dead link: nothing arrives, in either mode. A link
+ * with no delay delivers at once, like the host's loopback, unless something
+ * sent earlier is still on its way.
  */
 export interface LinkSpec {
   latency: number;
@@ -93,6 +95,8 @@ interface Dir {
   spec: LinkSpec;
   /** last delivery time (reliable mode keeps order) */
   last: number;
+  /** messages on their way */
+  inflight: number;
   /** [from, to): nothing gets through; reliable traffic waits it out */
   cuts: [number, number][];
 }
@@ -101,6 +105,9 @@ export class FakeNetwork {
   private readonly peers = new Map<string, Transport>();
   private readonly links = new Map<string, Dir>();
   private readonly frozen = new Map<string, number>();
+  /** bumped each time a peer id gets a new transport: what was on its way to the old one is lost */
+  private readonly gens = new Map<string, number>();
+  private gen = 0;
   private readonly rng: Rng;
   /** messages and bytes sent, per sender */
   readonly sent = new Map<string, { msgs: number; bytes: number }>();
@@ -116,12 +123,13 @@ export class FakeNetwork {
   private dir(a: string, b: string): Dir {
     const k = `${a}>${b}`;
     let d = this.links.get(k);
-    if (!d) this.links.set(k, (d = { spec: this.fallback, last: 0, cuts: [] }));
+    if (!d) this.links.set(k, (d = { spec: this.fallback, last: 0, inflight: 0, cuts: [] }));
     return d;
   }
 
   /** set both directions between a and b (each one-way `latency`) */
   link(a: string, b: string, spec: Partial<LinkSpec>): void {
+    if ((spec.dup ?? 0) > 0 && (spec.mode ?? this.fallback.mode) !== 'hostile') throw new Error('fake network: dup needs mode "hostile" (a reliable channel never duplicates)');
     for (const [x, y] of [[a, b], [b, a]]) {
       const d = this.dir(x, y);
       d.spec = { ...this.fallback, ...spec };
@@ -154,12 +162,19 @@ export class FakeNetwork {
         net.deliver(self, peer, bytes);
       },
       close() {
+        if (net.peers.get(self) !== t) return;
         net.peers.delete(self);
+        net.gens.delete(self);
+        // a later transport under this id starts clean: nothing waiting, not frozen, no ordering floor
+        net.thawQueue.delete(self);
+        net.frozen.delete(self);
+        for (const [k, d] of net.links) if (k.startsWith(`${self}>`) || k.endsWith(`>${self}`)) d.last = 0;
         for (const p of net.peers.values()) p.onPeer?.(self, false);
       },
     };
     for (const p of this.peers.values()) p.onPeer?.(self, true);
     this.peers.set(self, t);
+    this.gens.set(self, ++this.gen);
     return t;
   }
 
@@ -186,7 +201,7 @@ export class FakeNetwork {
       at = this.afterCuts(d, now, at);
       at = Math.max(at, d.last);
       d.last = at;
-      this.schedule(to, from, copy, at);
+      this.schedule(d, to, from, copy, at);
       return;
     }
     const copies = this.rng.next() < s.dup ? 2 : 1;
@@ -194,7 +209,7 @@ export class FakeNetwork {
       if (this.rng.next() < s.loss) continue;
       const at = now + this.delay(s);
       if (d.cuts.some(([a, b]) => (at >= a && at < b) || (now >= a && now < b))) continue;
-      this.schedule(to, from, copy, at);
+      this.schedule(d, to, from, copy, at);
     }
   }
 
@@ -221,25 +236,37 @@ export class FakeNetwork {
     return at;
   }
 
-  /** what reaches a frozen peer, waiting in arrival order */
-  private thawQueue = new Map<string, [string, Uint8Array][]>();
+  /** what reaches a frozen peer, waiting in arrival order (with the generation it was sent to) */
+  private thawQueue = new Map<string, [string, Uint8Array, number][]>();
 
-  private schedule(to: string, from: string, bytes: Uint8Array, at: number): void {
+  private schedule(d: Dir, to: string, from: string, bytes: Uint8Array, at: number): void {
+    const gen = this.gens.get(to) ?? -1;
+    if (at <= this.clock.now && d.inflight === 0) {
+      this.arrive(to, from, bytes, gen);
+      return;
+    }
+    d.inflight++;
     this.clock.at(at, () => {
-      // anything already waiting goes first, even if this one is due right at the thaw
-      const waiting = this.thawQueue.get(to);
-      if (waiting) {
-        waiting.push([from, bytes]);
-        return;
-      }
-      const until = this.frozen.get(to) ?? -1;
-      if (until > this.clock.now) {
-        this.thawQueue.set(to, [[from, bytes]]);
-        this.clock.at(until, () => this.thaw(to));
-        return;
-      }
-      this.peers.get(to)?.onMessage?.(from, bytes);
+      d.inflight--;
+      this.arrive(to, from, bytes, gen);
     });
+  }
+
+  private arrive(to: string, from: string, bytes: Uint8Array, gen: number): void {
+    if (this.gens.get(to) !== gen) return; // sent to a transport that has since closed
+    // anything already waiting goes first, even if this one is due right at the thaw
+    const waiting = this.thawQueue.get(to);
+    if (waiting) {
+      waiting.push([from, bytes, gen]);
+      return;
+    }
+    const until = this.frozen.get(to) ?? -1;
+    if (until > this.clock.now) {
+      this.thawQueue.set(to, [[from, bytes, gen]]);
+      this.clock.at(until, () => this.thaw(to));
+      return;
+    }
+    this.peers.get(to)?.onMessage?.(from, bytes);
   }
 
   private thaw(to: string): void {
@@ -251,6 +278,6 @@ export class FakeNetwork {
     }
     const q = this.thawQueue.get(to) ?? [];
     this.thawQueue.delete(to);
-    for (const [from, b] of q) this.peers.get(to)?.onMessage?.(from, b);
+    for (const [from, b, gen] of q) if (this.gens.get(to) === gen) this.peers.get(to)?.onMessage?.(from, b);
   }
 }

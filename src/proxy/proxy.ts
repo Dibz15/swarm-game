@@ -148,6 +148,14 @@ export class Proxy {
   private pushFrom = 0;
   private readonly novaLocked: boolean;
   private readonly citadelBlob: number;
+  /**
+   * The tick think() last saw. Its periodic decisions fire when a multiple
+   * of their period has passed since then, so a caller that steps several
+   * ticks between calls (a net client catching up) doesn't skip them, and
+   * one that calls twice on a tick doesn't decide twice. Called once per
+   * tick, that is exactly `tick % period === 0`.
+   */
+  private seen: number | null = null;
 
   /** Hostile units within r of (x, y); neutral garrisons (which never move) don't count. */
   private near(w: World, x: number, y: number, r: number): number {
@@ -214,6 +222,10 @@ export class Proxy {
 
   think(w: World): Command[] {
     const out: Command[] = [];
+    const t = w.tick;
+    const prev = this.seen !== null && this.seen <= t ? this.seen : t - 1;
+    this.seen = t;
+    const due = (period: number) => Math.floor(t / period) > Math.floor(prev / period);
     const me = this.f;
     if (w.factions[me].eliminated) return out;
 
@@ -234,8 +246,8 @@ export class Proxy {
     cx /= army.length;
     cy /= army.length;
 
-    if (w.tick % TICK_HZ === 0) this.powers(w, army, out);
-    if (w.tick % Math.max(1, Math.round(this.k.every * TICK_HZ)) !== 0) return out;
+    if (due(TICK_HZ)) this.powers(w, army, out);
+    if (!due(Math.max(1, Math.round(this.k.every * TICK_HZ)))) return out;
 
     const mine = w.nests.filter((n) => n.owner === me);
     const enemyNests = w.nests.filter((n) => this.hostile(w, n.owner));

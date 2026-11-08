@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LocalSession } from '../src/game/session';
+import { decodeMsg } from '../src/net/codec';
 import { NetSession, type NetSessionOptions } from '../src/net/netSession';
 import type { SequencerOptions } from '../src/net/sequencer';
 import { hostSequencer, LoopbackHub, type Transport } from '../src/net/transport';
@@ -190,6 +191,38 @@ describe('NetSession (#159)', () => {
     expect(seq.seatState(2)).toBe('human');
     expect(seatHasBot(a.world, 2) || seatHasBot(b.world, 2)).toBe(false);
     expect(seatCtrl(b)).toEqual(seatCtrl(a));
+  });
+
+  it('asks again for the last turn when it is lost with nothing behind it', () => {
+    let drop = false;
+    let lost = -1;
+    const { clock, seq, nets } = table(setup([0]), [0], {}, {}, (t) => {
+      const out: Transport = { self: t.self, onMessage: null, onPeer: null, send: (p, b) => t.send(p, b), close: () => t.close() };
+      t.onMessage = (peer, bytes) => {
+        const m = decodeMsg(bytes);
+        if (drop && m?.k === 'turns') {
+          drop = false;
+          lost = m.first + m.list.length - 1;
+          return;
+        }
+        out.onMessage?.(peer, bytes);
+      };
+      return out;
+    });
+    const net = nets[0];
+    const frame = (close: boolean) => {
+      clock.now += FRAME;
+      if (close) seq.update();
+      net.update(FRAME / 1000);
+      tidy(net.world);
+    };
+    for (let i = 0; i < 120; i++) frame(true);
+    // the next turn to close is lost, and none close after it: no later turn shows the gap
+    drop = true;
+    while (drop) frame(true);
+    expect(lost).toBe(seq.closed);
+    for (let i = 0; i < 3 * 60; i++) frame(false);
+    expect(net.world.tick).toBe(seq.closed);
   });
 
   it('stops stepping once the match is decided', () => {

@@ -8,7 +8,7 @@ import { fullHash } from '../sim/snapshot';
 import { step } from '../sim/step';
 import type { World } from '../sim/world';
 import { decodeMsg, encodeMsg } from './codec';
-import type { Ctrl, Msg, Turn } from './protocol';
+import { MAX_TURNS_PER_MSG, type Ctrl, type Msg, type Turn } from './protocol';
 import type { Transport } from './transport';
 
 /**
@@ -104,6 +104,8 @@ export class NetSession implements Session {
   onLand: ((seq: number, tick: number) => void) | null = null;
   /** one of our orders ran: ms from issue to the step that ran it */
   onEffect: ((seq: number, ms: number) => void) | null = null;
+  /** each fullHash this client reports, as it reports it */
+  onHash: ((tick: number, hash: number) => void) | null = null;
 
   /** paused by a control entry (someone pressed pause), and the sequencer's latest word on it */
   private pausedBy = -1;
@@ -131,6 +133,8 @@ export class NetSession implements Session {
   private maxSeen = 0;
   private gapSince = -1;
   private wantAt = -Infinity;
+  /** when the last new turn came in */
+  private turnAt = -1;
   private seq = 0;
   private pending = new Map<number, Pending>();
   private lastLanded = 0;
@@ -233,6 +237,7 @@ export class NetSession implements Session {
   private turnIn(tick: number, turn: Turn, now: number): void {
     if (tick <= this.world.tick || this.turns.has(tick)) return;
     this.turns.set(tick, turn);
+    this.turnAt = now;
     if (turn.ctrl?.some((c) => c.k === 'resume')) this.offsets.length = 0; // the clock restarted: old timing says nothing
     this.offsets.push(now - tick * DT_MS);
     if (this.offsets.length > this.opts.jitterWindow) this.offsets.shift();
@@ -320,7 +325,11 @@ export class NetSession implements Session {
       this.pending.delete(e.seq);
       this.onEffect?.(e.seq, now - p.issuedAt);
     }
-    if (t % this.opts.hashTicks === 0) this.send({ k: 'hash', tick: t, hash: fullHash(w) });
+    if (t % this.opts.hashTicks === 0) {
+      const hash = fullHash(w);
+      this.onHash?.(t, hash);
+      this.send({ k: 'hash', tick: t, hash });
+    }
   }
 
   private applyCtrl(tick: number, c: Ctrl): void {
@@ -350,7 +359,17 @@ export class NetSession implements Session {
         want = [this.held_ + 1, to];
         this.wantAt = now;
       }
-    } else this.gapSince = -1;
+    } else {
+      this.gapSince = -1;
+      // No gap, but nothing new for a while either, and not paused: the last
+      // turns may be lost with nothing behind them to show it. Ask for
+      // whatever comes next; if nothing has closed, the sequencer sends nothing.
+      const quiet = Math.max(200, 2 * this.rtt) + this.opts.resendMs;
+      if (this.started && !this.paused && this.turnAt >= 0 && now - this.turnAt >= quiet && now - this.wantAt >= quiet) {
+        want = [this.held_ + 1, this.held_ + MAX_TURNS_PER_MSG];
+        this.wantAt = now;
+      }
+    }
     if (want || now - this.ackAt >= this.opts.ackMs) {
       this.ackAt = now;
       this.send({ k: 'ack', tick: this.held_, seq: this.lastLanded, rtt: Math.round(this.rtt), buffer: this.target, ...(want ? { want } : {}) });

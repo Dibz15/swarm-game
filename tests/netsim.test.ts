@@ -19,6 +19,7 @@ function table(humans: [seat: number, team: number][], seed = 7): MatchSetup {
 /** No desync anywhere, everyone ends on the same world, and every order issued ran. */
 function healthy(r: NetMatchReport): void {
   expect(r.desyncs).toEqual([]);
+  expect(r.mismatches).toEqual([]);
   expect(r.finalAgree).toBe(true);
   for (const s of r.seats) {
     expect(s.ran).toBe(s.issued);
@@ -36,7 +37,9 @@ describe('net-sim (#160)', () => {
     });
     healthy(r);
     expect(r.closed).toBe(300 * TICK_HZ);
-    expect(r.hashTicks).toBeGreaterThanOrEqual(290);
+    // every client hashed every 30th tick it reached (the match may be won before the 5 minutes are up)
+    expect(r.seats[0].tick).toBeGreaterThan(200 * TICK_HZ);
+    expect(r.hashTicks).toBe(Math.floor(r.seats[0].tick / 30));
     // a dropped turn now and then, but nobody waits for long
     for (const s of r.seats) expect(s.stallMs).toBeLessThan(10000);
     // an idle turn stream is cheap: a few hundred bytes a second
@@ -72,6 +75,12 @@ describe('net-sim (#160)', () => {
     expect(coop.seats[1].effect.p50).toBeGreaterThan(300);
   }, 60_000);
 
+  it('refuses a seat that is not a human player in the match', () => {
+    const s = table([[0, 0]]);
+    expect(() => runNetMatch({ setup: s, secs: 1, peers: [{ seat: 0, rtt: 0 }, { seat: 1, rtt: 50 }] })).toThrow(/bot/);
+    expect(() => runNetMatch({ setup: s, secs: 1, peers: [{ seat: 7, rtt: 50 }] })).toThrow(/not in the match/);
+  });
+
   it('a hostile link (loss, duplicates, reordering) still converges', () => {
     const bad = { mode: 'hostile' as const, rtt: 180, jitter: 120, loss: 0.05, dup: 0.05 };
     const r = runNetMatch({
@@ -94,7 +103,7 @@ describe('FakeNetwork', () => {
     const b = net.transport('b');
     const got: [number, number][] = [];
     b.onMessage = (_p, bytes) => got.push([clock.now, bytes[0]]);
-    return { clock, net, a, got };
+    return { clock, net, a, b, got };
   }
 
   it('runs events in time order, ties in the order they were scheduled', () => {
@@ -165,6 +174,38 @@ describe('FakeNetwork', () => {
       clock.advanceTo(1000);
       expect(got).toEqual([]);
     }
+  });
+
+  it('a link with no delay delivers at once, behind anything still on its way', () => {
+    const z = pair({ latency: 0 });
+    z.a.send('b', new Uint8Array([1]));
+    expect(z.got).toEqual([[0, 1]]); // no advance needed
+    const j = pair({ latency: 0, jitter: 40 });
+    j.clock.advanceTo(100);
+    for (let i = 0; i < 20; i++) j.a.send('b', new Uint8Array([i]));
+    j.clock.advanceTo(1000);
+    expect(j.got.map(([, v]) => v)).toEqual([...Array(20).keys()]);
+  });
+
+  it('a reopened peer gets nothing meant for the old one, and starts unfrozen', () => {
+    const { clock, net, a, b } = pair({ latency: 100 });
+    net.freeze('b', 500);
+    a.send('b', new Uint8Array([1])); // waits for the thaw
+    clock.advanceTo(50);
+    a.send('b', new Uint8Array([2])); // still on its way
+    clock.advanceTo(200);
+    b.close();
+    const b2 = net.transport('b');
+    const got: number[] = [];
+    b2.onMessage = (_p, bytes) => got.push(bytes[0]);
+    expect(net.isFrozen('b')).toBe(false);
+    a.send('b', new Uint8Array([3]));
+    clock.advanceTo(1000);
+    expect(got).toEqual([3]);
+  });
+
+  it('refuses duplicates on a reliable link', () => {
+    expect(() => pair({ latency: 10, dup: 0.1 })).toThrow(/hostile/);
   });
 
   it('announces a new peer to the ones already there', () => {
