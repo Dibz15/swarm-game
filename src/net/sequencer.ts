@@ -28,7 +28,10 @@ const DT_MS = DT * 1000;
 export interface SequencerOptions {
   /** minimum delay in ticks, for every seat including the host's */
   dMin: number;
-  /** most delay in ticks a seat is ever given */
+  /**
+   * most delay in ticks a seat is ever given: 1 s, enough to even out a
+   * 300 ms friend on a lossy link (whose jitter buffer runs ~8 ticks)
+   */
   dMax: number;
   /** D moves one tick at most this often */
   dStepMs: number;
@@ -53,7 +56,7 @@ export interface SequencerOptions {
 
 export const SEQUENCER_DEFAULTS: SequencerOptions = {
   dMin: 2,
-  dMax: 15,
+  dMax: 30,
   dStepMs: 500,
   burst: 60,
   refill: 30,
