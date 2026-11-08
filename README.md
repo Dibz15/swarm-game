@@ -66,7 +66,7 @@ To deploy it:
    npx wrangler secret put CF_ANALYTICS_TOKEN
    ```
 5. Run `npx wrangler deploy`. It prints the Worker's URL, e.g. `https://swarm-turn.<you>.workers.dev`.
-6. In the GitHub repo, go to **Settings > Secrets and variables > Actions > Variables** and add `TURN_URL` with that URL. CI builds pass it to the game as `VITE_TURN_URL`. For local dev, put `VITE_TURN_URL=…` in `.env.local`.
+6. In the GitHub repo, go to **Settings > Secrets and variables > Actions > Variables** and add a *repository* variable `VITE_TURN_URL` with that URL (not an environment variable: PR builds can't read the `github-pages` environment). CI builds pass it to the game. For local dev, put `VITE_TURN_URL=…` in `.env.local`.
 
 What it does and doesn't do:
 - `GET /ice?room=<id>` returns ICE servers whose credentials last 2 hours, long enough for a lobby and a match. Only the game's origins may call it (`ALLOWED_ORIGINS` in `wrangler.toml`), and calls are rate-limited to 10 a minute per IP and 30 per room.
@@ -270,4 +270,4 @@ tests/        vitest suites, all headless
 
 ## License
 
-[MIT](LICENSE) © 2026 Dibz15
+[MIT](LICENSE) © 2026 Fourth Contact / Dibz15

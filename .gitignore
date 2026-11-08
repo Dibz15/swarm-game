@@ -5,3 +5,6 @@ dist
 vite.config.ts.timestamp-*
 recordings/
 .balance-cache/
+# local settings, e.g. VITE_TURN_URL
+.env.local
+.env.*.local

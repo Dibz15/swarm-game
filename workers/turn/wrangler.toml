@@ -8,9 +8,8 @@ compatibility_date = "2026-10-01"
 enabled = false
 
 [vars]
-# Pages (main and PR previews share this origin) and local dev. The repo is
-# moving from dibz15 to the fourthcontact org: drop dibz15.github.io once it has.
-ALLOWED_ORIGINS = "https://fourthcontact.github.io,https://dibz15.github.io,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173"
+# Pages (main and PR previews share this origin) and local dev.
+ALLOWED_ORIGINS = "https://fourthcontact.github.io,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173"
 
 # Stop minting credentials once the account's TURN egress this month passes
 # this many GB (Cloudflare's free tier is 1,000 GB; see src/budget.ts). "off"
