@@ -46,6 +46,8 @@ describe('wire codec (#157)', () => {
       { k: 'lobby', state: JSON.stringify({ seed: 'ember-tide-4', name: 'Zoë 🐝', rows: [] }) },
       { k: 'pick', seat: 5, team: 3, char: 0 },
       { k: 'ready' },
+      { k: 'lat', rows: [{ seat: 0, state: 'human', rtt: 12, delay: 145 }, { seat: 4, state: 'away', rtt: 340, delay: 610 }] },
+      { k: 'lat', rows: [] },
       { k: 'refuse', reason: 'build mismatch: refresh the page' },
       { k: 'seats', you: 1, table: [{ seat: 0, team: 0, name: 'host', state: 'human' }, { seat: 3, team: 1, name: '', state: 'bot' }] },
       { k: 'seats', you: -1, table: [] },

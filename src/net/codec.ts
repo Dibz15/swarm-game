@@ -4,7 +4,7 @@ import { FACTION_UNIT_CAP, NEUTRAL } from '../sim/constants';
 import { QUANTUM } from '../sim/sanitize';
 import {
   MAX_BUILD, MAX_CTRL_PER_TURN, MAX_ENTRIES_PER_TURN, MAX_LOBBY, MAX_NAME, MAX_REASON, MAX_SEATS, MAX_SETUP, MAX_TURNS_PER_MSG,
-  SEAT_STATES, SNAP_CHUNK, type Ctrl, type Entry, type Msg, type MsgKind, type SeatInfo, type Turn,
+  SEAT_STATES, SNAP_CHUNK, type Ctrl, type Entry, type LatRow, type Msg, type MsgKind, type SeatInfo, type Turn,
 } from './protocol';
 
 /**
@@ -375,7 +375,7 @@ function readTurn(r: Reader): Turn {
 
 // ---- messages ---------------------------------------------------------------
 
-const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready'] as const;
+const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat'] as const;
 const KIND_INDEX = new Map<string, number>(KINDS.map((k, i) => [k, i]));
 
 /** The kind of the message in `bytes` from its first byte alone (for routing), or null. */
@@ -465,6 +465,18 @@ export function encodeMsg(m: Msg): Uint8Array {
       break;
     case 'lobby':
       w.str(m.state, MAX_LOBBY);
+      break;
+    case 'lat':
+      if (m.rows.length > MAX_SEATS) throw new Error('codec: latency table too long');
+      w.uv(m.rows.length);
+      for (const r of m.rows) {
+        seat(w, r.seat);
+        const st = SEAT_STATES.indexOf(r.state);
+        if (st < 0) throw new Error(`codec: bad seat state ${r.state}`);
+        w.u8(st);
+        w.uv(Math.min(65535, Math.max(0, Math.round(r.rtt))));
+        w.uv(Math.min(65535, Math.max(0, Math.round(r.delay))));
+      }
       break;
     case 'pick':
       seat(w, m.seat);
@@ -557,6 +569,17 @@ function readMsg(r: Reader): Msg {
       return { k };
     case 'lobby':
       return { k, state: r.str(MAX_LOBBY) };
+    case 'lat': {
+      const n = r.upTo(MAX_SEATS);
+      const rows: LatRow[] = [];
+      for (let i = 0; i < n; i++) {
+        const s = readSeat(r);
+        const state = SEAT_STATES[r.u8()];
+        if (!state) throw new Bad();
+        rows.push({ seat: s, state, rtt: r.upTo(65535), delay: r.upTo(65535) });
+      }
+      return { k, rows };
+    }
     case 'pick': {
       const s = readSeat(r), team = r.upTo(255);
       return { k, seat: s, team, char: r.upTo(0xffffffff) };

@@ -104,7 +104,7 @@ export class Router {
 }
 
 /** The kinds a match's sequencer and sessions use; the rest belong to the lobby. */
-export const MATCH_KINDS: readonly MsgKind[] = ['cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim'];
+export const MATCH_KINDS: readonly MsgKind[] = ['cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lat'];
 export const LOBBY_KINDS: readonly MsgKind[] = ['hello', 'refuse', 'seats', 'start', 'lobby', 'pick', 'ready'];
 
 /** The id the host's own client has on the host's sequencer transport. */

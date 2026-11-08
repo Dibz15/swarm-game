@@ -104,7 +104,9 @@ export type FxType =
   | 'capitalRetaken'
   | 'boonOffer'
   | 'boonTaken'
-  | 'swarmCall';
+  | 'swarmCall'
+  /** the command at index `r` of this tick's list did nothing; `nest` is its reason (an index into REJECTS) */
+  | 'cmdFail';
 
 export interface SurgeState {
   /** ticks: the warning, then the first wave; waves after it come `every` apart */

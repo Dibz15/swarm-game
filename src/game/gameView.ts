@@ -14,7 +14,9 @@ import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, 
 import { inArmy, type Nest, type World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
-import { LocalSession, type Session } from './session';
+import { LocalSession, type OrderFail, type Session } from './session';
+import { drawPending, PendingOrders } from './pending';
+import type { Command } from '../sim/commands';
 import type { Hint, Lock, MissionRun } from './tutorial';
 
 export interface Services {
@@ -38,6 +40,32 @@ export function localSeat(setup: MatchSetup, seat?: number): number {
   if (seat === undefined) return setup.players.find((p) => p.human)?.faction ?? -1;
   if (!setup.players.some((p) => p.human && p.faction === seat)) throw new Error(`GameView: seat ${seat} is not a human seat`);
   return seat;
+}
+
+const POWER_LABEL: Partial<Record<Command['t'], string>> = { surge: 'Surge', nova: 'Nova', fortify: 'Fortify', barrage: 'Barrage', blink: 'Blink', lockdown: 'Lockdown', upgrade: 'the upgrade' };
+
+/** What to tell the player when an order did nothing (null: nothing worth a toast). */
+export function rejectText(cmd: Command, why: OrderFail, blood: boolean): string | null {
+  const what = POWER_LABEL[cmd.t] ?? 'That order';
+  switch (why) {
+    case 'cost':
+      return blood ? `Not enough dots left to pay for ${what}` : `Not enough energy for ${what} by the time it landed`;
+    case 'units':
+      return 'Those dots were gone before the order landed';
+    case 'power':
+      return `You lost the nest ${what} needs`;
+    case 'locked':
+      return `${what} is locked`;
+    case 'target':
+      if (cmd.t === 'barrage') return 'Barrage: out of range of your nests by the time it landed';
+      if (cmd.t === 'lockdown') return 'Lockdown: that nest can’t be locked any more';
+      return 'That nest isn’t yours any more';
+    case 'lost':
+      return 'An order didn’t reach the host: try again';
+    default:
+      // 'upgrade' has its own toast (upgradeFail); 'needless' and 'invalid' aren't news
+      return null;
+  }
 }
 
 /** A match in progress: owns the session, selection and event feedback. */
@@ -120,6 +148,11 @@ export class GameView {
     // a networked match brings its own session (#159); otherwise play locally
     this.session = opts.session ?? new LocalSession(setup, localSeat(setup, opts.seat));
     this.human = this.session.localSeat;
+    // Networked, orders take a moment to run: show them on their way (#161).
+    if (this.session.net) {
+      this.session.onEffect = (id) => void this.pending.take(id);
+      this.session.onReject = (id, why) => this.rejected(id, why);
+    }
     this.rec = record
       ? new Recorder(setup, this.human, { mobile: record.mobile, touch: matchMedia('(pointer: coarse)').matches, w: innerWidth, h: innerHeight }, record.scenario)
       : null;
@@ -140,6 +173,7 @@ export class GameView {
 
   update(dt: number, time: number): void {
     this.session.update(dt);
+    this.pending.expire(this.now);
     this.drainEvents();
     this.updateBloom(dt, time);
     this.selection.prune(this.world, this.human);
@@ -278,6 +312,10 @@ export class GameView {
       bloom: this.bloom,
       allies: this.allyMask(),
     });
+    if (this.pending.size) {
+      const { renderer, camera } = this.s;
+      drawPending(renderer, this.world, this.pending.values(), { alpha: this.session.alpha, color: FACTION_RGB[this.human], time, now: this.now, zoom: camera.zoom / renderer.dpr });
+    }
     this.drawAim(time);
     this.drawBlinkFlash(time);
     this.drawEdgeMarkers(time);
@@ -974,19 +1012,48 @@ export class GameView {
     this.noteSelection('cycle');
   }
 
+  // ---- orders on their way (#161) ------------------------------------------
+
+  /** orders given but not yet run (networked play only) */
+  readonly pending = new PendingOrders();
+
+  /** Give an order; networked, show it until it runs. `cost`: the energy it will spend. */
+  private order(cmd: Command, cost = 0): void {
+    const id = this.session.issue(cmd);
+    if (!this.session.net) return;
+    // Blood price pays in units, not energy (#60): nothing to take off the bar
+    const blood = this.world.factions[this.human]?.mods.bloodPrice;
+    this.pending.add({ id, cmd, at: this.now, cost: blood ? 0 : cost });
+  }
+
+  /** An order ring lasts until the order is expected to run. */
+  private ringDur(): number {
+    return this.session.net ? Math.max(0.35, this.session.expectedDelayMs() / 1000 + 0.1) : 0.35;
+  }
+
+  /** The sim refused one of our orders, or it never reached the host: clear its marker and say so. */
+  private rejected(id: number, why: OrderFail): void {
+    const o = this.pending.take(id);
+    if (!o) return;
+    const text = rejectText(o.cmd, why, !!this.world.factions[this.human]?.mods.bloodPrice);
+    if (!text) return;
+    this.s.sfx.fail();
+    this.s.toast(text, '#ffb627');
+  }
+
   commandAt(wx: number, wy: number): boolean {
     const sel = this.selection;
     if (sel.empty) return false;
     const n = this.nestAt(wx, wy);
     const tx = n ? n.x : wx, ty = n ? n.y : wy;
     if (sel.units.size) {
-      this.session.issue({ t: 'move', p: this.human, units: [...sel.units], x: wx, y: wy, nest: n ? n.id : -1 });
+      this.order({ t: 'move', p: this.human, units: [...sel.units], x: wx, y: wy, nest: n ? n.id : -1 });
     }
     if (sel.nests.size) {
-      this.session.issue({ t: 'rally', p: this.human, nests: [...sel.nests], x: tx, y: ty });
+      this.order({ t: 'rally', p: this.human, nests: [...sel.nests], x: tx, y: ty });
     }
     const c = FACTION_RGB[this.human];
-    this.s.rings.add({ x: tx, y: ty, r0: n ? n.r * 1.8 : 22, r1: n ? n.r * 1.1 : 4, dur: 0.35, c, thick: 2 });
+    this.s.rings.add({ x: tx, y: ty, r0: n ? n.r * 1.8 : 22, r1: n ? n.r * 1.1 : 4, dur: this.ringDur(), c, thick: 2 });
     this.s.sfx.order();
     return true;
   }
@@ -1005,8 +1072,8 @@ export class GameView {
     const c = FACTION_RGB[this.human];
     for (const o of orders) {
       const n = this.world.nests[o.nest];
-      this.session.issue({ t: 'move', p: this.human, units: o.units, x: n.x, y: n.y, nest: n.id });
-      this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.8, r1: n.r * 1.1, dur: 0.35, c, thick: 2 });
+      this.order({ t: 'move', p: this.human, units: o.units, x: n.x, y: n.y, nest: n.id });
+      this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.8, r1: n.r * 1.1, dur: this.ringDur(), c, thick: 2 });
     }
     this.s.sfx.order();
     return this.world.nests[orders[0].nest];
@@ -1021,7 +1088,7 @@ export class GameView {
     if (this.blocked('surge')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Surge', '#9aa4c7');
     if (this.short(surgeCost(this.world, this.human))) return this.s.sfx.fail();
-    this.session.issue({ t: 'surge', p: this.human, units: [...this.selection.units] });
+    this.order({ t: 'surge', p: this.human, units: [...this.selection.units] }, surgeCost(this.world, this.human));
   }
 
   nova(): void {
@@ -1032,7 +1099,7 @@ export class GameView {
     }
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');
     if (this.short(POWER.novaCost)) return this.s.sfx.fail();
-    this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
+    this.order({ t: 'nova', p: this.human, units: [...this.selection.units] }, POWER.novaCost);
   }
 
   private novaWouldHit(): boolean {
@@ -1081,7 +1148,7 @@ export class GameView {
     if (this.blocked('fortify')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Fortify', '#9aa4c7');
     if (!this.power('fortify', POWER.fortifyCost)) return;
-    this.session.issue({ t: 'fortify', p: this.human, units: [...this.selection.units] });
+    this.order({ t: 'fortify', p: this.human, units: [...this.selection.units] }, POWER.fortifyCost);
   }
 
   /** Targeted powers: cast at a world point. */
@@ -1095,7 +1162,7 @@ export class GameView {
         this.s.sfx.fail();
         return this.s.toast('Out of range: Barrage launches from your nests', '#9aa4c7');
       }
-      this.session.issue({ t: 'barrage', p: this.human, x: wx, y: wy });
+      this.order({ t: 'barrage', p: this.human, x: wx, y: wy }, POWER.barrageCost);
     } else if (power === 'blink') {
       if (!this.selection.units.size) return this.s.toast('Select dots first, then Blink', '#9aa4c7');
       if (!this.power('blink', POWER.blinkCost)) return;
@@ -1106,7 +1173,7 @@ export class GameView {
         const k = range / Math.hypot(wx - from[0], wy - from[1]);
         this.blinkFlash = { x: from[0], y: from[1], r: range, tx: from[0] + (wx - from[0]) * k, ty: from[1] + (wy - from[1]) * k, at: this.now };
       }
-      this.session.issue({ t: 'blink', p: this.human, units: [...this.selection.units], x: wx, y: wy });
+      this.order({ t: 'blink', p: this.human, units: [...this.selection.units], x: wx, y: wy }, POWER.blinkCost);
     } else {
       const n = this.nestAt(wx, wy, 1.6);
       if (!n || n.owner < 0 || n.owner === NEUTRAL || !this.world.hostile(n.owner, this.human)) {
@@ -1115,7 +1182,7 @@ export class GameView {
       if (!this.power('lockdown', POWER.lockdownCost)) return;
       const rest = siphonWait(this.world, this.human);
       if (rest > 0) return this.s.toast(`Siphon: Lockdown is ready again in ${Math.ceil(rest / TICK_HZ)} s`, '#9aa4c7');
-      this.session.issue({ t: 'lockdown', p: this.human, nest: n.id });
+      this.order({ t: 'lockdown', p: this.human, nest: n.id }, POWER.lockdownCost);
     }
   }
 
@@ -1157,7 +1224,7 @@ export class GameView {
       return n.owner === this.human && (n.level < MAX_LEVEL || n.control < 1);
     });
     if (!ids.length) return this.s.toast('Select one of your nests to upgrade', '#9aa4c7');
-    for (const id of ids) this.session.issue({ t: 'upgrade', p: this.human, nest: id });
+    for (const id of ids) this.order({ t: 'upgrade', p: this.human, nest: id });
   }
 
   /** Remaining dots for the first selected nest that can be fed (repair first, then level). */

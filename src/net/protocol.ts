@@ -14,7 +14,7 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;
@@ -64,6 +64,14 @@ export interface Turn {
   ctrl?: Ctrl[];
 }
 
+/** One seat's connection, as the sequencer sees it (#161): round trip, and order-to-effect delay, ms. */
+export interface LatRow {
+  seat: number;
+  state: SeatState;
+  rtt: number;
+  delay: number;
+}
+
 export interface SeatInfo {
   seat: number;
   team: number;
@@ -86,6 +94,8 @@ export type Msg =
   | { k: 'pick'; seat: number; team: number; char: number }
   /** client → host: built the world from `start`, ready for turns */
   | { k: 'ready' }
+  /** sequencer → clients, every couple of seconds: every human seat's latency (#161) */
+  | { k: 'lat'; rows: LatRow[] }
   /** client → sequencer: one order (no `p`; the decoder gives it p = -1) */
   | { k: 'cmd'; seq: number; cmd: Command }
   /** sequencer → clients: closed turns first .. first + list.length - 1 */

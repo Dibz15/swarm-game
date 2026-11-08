@@ -204,6 +204,19 @@ describe('Sequencer (#158)', () => {
     expect(seq.paused).toBe(false);
   });
 
+  it('tells everyone every seat’s round trip and order delay, every couple of seconds (#161)', () => {
+    const { seq, inbox, advance } = rig({ latMs: 2000 });
+    seq.onMessage('a', { k: 'ack', tick: 0, seq: 0, rtt: 40, buffer: 2 });
+    seq.onMessage('b', { k: 'ack', tick: 0, seq: 0, rtt: 300, buffer: 5 });
+    advance(4100);
+    const lats = inbox.get('b')!.filter((m) => m.k === 'lat');
+    expect(lats.length).toBe(3); // at 0 s, 2 s and 4 s
+    const last = lats.at(-1)!;
+    expect(last.k === 'lat' && last.rows.map((r) => [r.seat, r.state, r.rtt])).toEqual([[0, 'human', 40], [1, 'human', 300]]);
+    // delay: the round trip, plus the hold and the buffer
+    expect(last.k === 'lat' && last.rows[1].delay).toBe(300 + (seq.delayOf(1) + 5) * TICK);
+  });
+
   it('a silent seat goes away, then an Easy bot takes it, and its player can reclaim it', () => {
     const { seq, turns, advance } = rig({ awayMs: 5000, botMs: 60000 });
     advance(6000, ['b']);

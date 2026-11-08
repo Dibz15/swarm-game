@@ -1,7 +1,7 @@
 import type { Command } from '../sim/commands';
 import { DT } from '../sim/constants';
 import { normalizeCommand, sanitizeCommand, type CommandLimits } from '../sim/sanitize';
-import { MAX_ENTRIES_PER_TURN, MAX_TURNS_PER_MSG, type Ctrl, type Entry, type Msg, type SeatBot, type SeatState, type Turn } from './protocol';
+import { MAX_ENTRIES_PER_TURN, MAX_TURNS_PER_MSG, type Ctrl, type Entry, type LatRow, type Msg, type SeatBot, type SeatState, type Turn } from './protocol';
 
 /**
  * The Sequencer (#158): the one place that decides which tick each command
@@ -54,6 +54,8 @@ export interface SequencerOptions {
   statusMs: number;
   /** hash reports for a tick are compared at the latest this many ticks later */
   hashTicks: number;
+  /** how often everyone hears the latency table (`lat`, #161) */
+  latMs: number;
 }
 
 export const SEQUENCER_DEFAULTS: SequencerOptions = {
@@ -71,6 +73,7 @@ export const SEQUENCER_DEFAULTS: SequencerOptions = {
   resumeMs: 3000,
   statusMs: 1000,
   hashTicks: 300,
+  latMs: 2000,
 };
 
 /** A human seat in the match, and the peer that plays it (null: nobody yet). */
@@ -151,6 +154,7 @@ export class Sequencer {
   /** the turn after which the clock stops (the one carrying the pause entry); -1 once stopped */
   private pauseAfter = -1;
   private statusAt = -Infinity;
+  private latAt = -Infinity;
   private hashes = new Map<number, Map<number, number>>();
   private readonly clock: () => number;
   private readonly send: (peer: string, msg: Msg) => void;
@@ -364,6 +368,7 @@ export class Sequencer {
   update(): void {
     const now = this.clock();
     this.seatTimers(now);
+    if (now - this.latAt >= this.opts.latMs) this.broadcastLat(now);
     if (this.pause && this.pauseAfter < 0) {
       this.paused_(now);
       return;
@@ -397,6 +402,13 @@ export class Sequencer {
       return;
     }
     if (now - this.statusAt >= this.opts.statusMs) this.broadcastStatus(now);
+  }
+
+  /** Every human seat's round trip and order-to-effect delay: their RTT, the delay their orders are held, and their buffer. */
+  private broadcastLat(now: number): void {
+    this.latAt = now;
+    const rows: LatRow[] = [...this.seats.values()].map((r) => ({ seat: r.seat, state: r.state, rtt: r.rtt, delay: r.rtt + (r.d + r.buffer) * DT_MS }));
+    for (const peer of this.byPeer.keys()) this.send(peer, { k: 'lat', rows });
   }
 
   private broadcastStatus(now: number): void {

@@ -1,6 +1,6 @@
 import { siegeVictory } from './siege';
 import { BALANCE, DOMINATION, DT, KEYS, ENERGY, ESCALATION, POWER, TERRAIN, VARIANTS, escalation, NEUTRAL, NEUTRAL_TEAM, NUM_FACTIONS, TICK_HZ } from './constants';
-import { applyCommand, type Command } from './commands';
+import { applyCommand, REJECTS, type Command } from './commands';
 import { updateCombat, resolveDamage } from './combat';
 import { updateMovement } from './movement';
 import { updateNests } from './nests';
@@ -21,7 +21,12 @@ export function step(w: World, commands: readonly Command[]): void {
   w.py.set(w.y.subarray(0, w.n));
 
   w.grid.build(w);
-  for (const c of commands) applyCommand(w, c);
+  // a command that does nothing says why, for its sender's pending marker (#161): fx are render output, never hashed
+  commands.forEach((c, i) => {
+    const why = applyCommand(w, c);
+    // (a garbage command from the wire may not even have a p)
+    if (why) pushFx(w, 'cmdFail', 0, 0, Number.isInteger(c?.p) ? c.p : -1, i, REJECTS.indexOf(why));
+  });
   for (const b of w.bots) b.update(w);
   updateEvents(w);
 

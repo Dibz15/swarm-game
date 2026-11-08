@@ -92,6 +92,9 @@ class App {
   /** the pause menu in a networked match: opened by us, or because the host paused */
   private netMenu: 'user' | 'pause' | null = null;
   private netNote: HTMLElement | null = null;
+  /** the pause menu's player table, and the latency report it last showed (#161) */
+  private netPlayers: HTMLElement | null = null;
+  private shownLat: unknown = null;
   /** background battle behind the menus */
   private demo: LocalSession | null = null;
   private screen: HTMLElement | null = null;
@@ -800,8 +803,11 @@ class App {
       quitLabel: 'Leave match',
       audio: this.sfx,
       teams: teamLayout(g.world, g.human).team ? teamsList(g.world, g.human) : undefined,
+      players: '<div class="players"></div>',
     });
     this.netNote = m.querySelector('.note');
+    this.netPlayers = m.querySelector('.players');
+    this.shownLat = null;
     this.setModal(m);
     this.updateNetNote();
   }
@@ -809,6 +815,7 @@ class App {
   private closeNetMenu(): void {
     this.netMenu = null;
     this.netNote = null;
+    this.netPlayers = null;
     this.setModal(null);
     this.input.enabled = true;
   }
@@ -836,6 +843,25 @@ class App {
     } else text = host ? 'Pausing…' : 'The match keeps going while this menu is open.';
     if (n.textContent !== text) n.textContent = text;
     n.hidden = false;
+    const lat = this.match?.session.lat;
+    if (this.netPlayers && lat && lat !== this.shownLat) {
+      this.shownLat = lat;
+      this.netPlayers.innerHTML = this.playersHtml();
+    }
+  }
+
+  /** Everyone in the match: who, connected or not, round trip and how long their orders take (#161). */
+  private playersHtml(): string {
+    const lat = this.match?.session.lat ?? [];
+    if (!lat.length) return '<p class="hint">Measuring…</p>';
+    const me = this.game?.human;
+    const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+    const rows = lat.map((r) => {
+      const tag = r.state === 'away' ? ' <small>away</small>' : r.state === 'bot' ? ' <small>bot playing</small>' : '';
+      const cls = r.delay >= 300 ? 'bad' : r.delay >= 150 ? 'warn' : '';
+      return `<tr><td><i style="background:${FACTION_HEX[r.seat]}"></i>${esc(this.seatName(r.seat))}${r.seat === me ? ' (you)' : ''}${tag}</td><td>${r.rtt} ms</td><td class="${cls}">${r.delay} ms</td></tr>`;
+    });
+    return `<table class="lat"><thead><tr><th></th><th>Round trip</th><th>Order delay</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }
 
   private startDemo(): void {
@@ -931,6 +957,7 @@ class App {
     this.match = null;
     this.netMenu = null;
     this.netNote = null;
+    this.netPlayers = null;
     this.demoOverlay?.destroy();
     this.demoOverlay = null;
     this.demoKey = '';
@@ -1157,6 +1184,7 @@ class App {
       if (this.netMenu) this.updateNetNote();
       if (g.result) this.saveRec(g.result, true);
       this.hud?.update(g, dt);
+      this.hud?.syncPending(g);
       this.applyInsets();
       this.updateDemo(g, dt);
       g.render(this.time);

@@ -1,4 +1,4 @@
-import type { TimedCommand, Session } from '../game/session';
+import { rejectedIn, type OrderFail, type Session, type TimedCommand } from '../game/session';
 import type { Command } from '../sim/commands';
 import { DT } from '../sim/constants';
 import { normalizeCommand } from '../sim/sanitize';
@@ -8,7 +8,7 @@ import { fullHash } from '../sim/snapshot';
 import { step } from '../sim/step';
 import type { World } from '../sim/world';
 import { decodeMsg, encodeMsg } from './codec';
-import { MAX_TURNS_PER_MSG, type Ctrl, type Msg, type Turn } from './protocol';
+import { MAX_TURNS_PER_MSG, type Ctrl, type LatRow, type Msg, type Turn } from './protocol';
 import type { Transport } from './transport';
 
 /**
@@ -104,6 +104,8 @@ export class NetSession implements Session {
   onLand: ((seq: number, tick: number) => void) | null = null;
   /** one of our orders ran: ms from issue to the step that ran it */
   onEffect: ((seq: number, ms: number) => void) | null = null;
+  /** one of our orders did nothing: the sim refused it, or it never reached a turn */
+  onReject: ((seq: number, why: OrderFail) => void) | null = null;
   /** each fullHash this client reports, as it reports it */
   onHash: ((tick: number, hash: number) => void) | null = null;
   /** a control entry applied (a pause, a resume, a seat going away or to a bot), as the step before `tick` runs */
@@ -111,6 +113,8 @@ export class NetSession implements Session {
 
   /** paused by a control entry (someone pressed pause), and the sequencer's latest word on it */
   private pausedBy = -1;
+  /** every human seat's latency, as the sequencer last reported it (#161) */
+  lat: LatRow[] = [];
   /** the sequencer's last word while paused; `at` is when it came (this session's clock), to count down from */
   status: { paused: boolean; by: number; resumeIn: number; auto: number; at: number } | null = null;
 
@@ -194,12 +198,16 @@ export class NetSession implements Session {
     return this.held_ - this.world.tick;
   }
 
-  /** what an order issued now should take to run, ms: the latest issue-to-turn time plus the buffer */
+  /**
+   * What an order issued now should take to run, ms: the recent issue-to-turn
+   * time plus the buffer. Before any order has landed: a round trip plus the
+   * minimum hold.
+   */
   expectedDelayMs(): number {
-    return this.landMs + this.target * DT_MS;
+    return (this.landMs || this.rtt + 2 * DT_MS) + this.target * DT_MS;
   }
 
-  issue(order: Command): void {
+  issue(order: Command): number {
     const cmd = normalizeCommand(order);
     const s = ++this.seq;
     const now = this.clock();
@@ -207,6 +215,7 @@ export class NetSession implements Session {
     this.issued++;
     this.onIssue?.(cmd);
     this.send({ k: 'cmd', seq: s, cmd });
+    return s;
   }
 
   private send(m: Msg): void {
@@ -229,6 +238,9 @@ export class NetSession implements Session {
         this.rttSeen = true;
         return;
       }
+      case 'lat':
+        this.lat = m.rows;
+        return;
       case 'status':
         this.status = { paused: m.paused, by: m.by, resumeIn: m.resumeIn, auto: m.auto, at: now };
         return;
@@ -316,18 +328,23 @@ export class NetSession implements Session {
       cmds.push(e.cmd);
       this.log.push({ tick: t, cmd: e.cmd });
     }
+    const fx = w.fx.length;
     const t0 = performance.now();
     step(w, cmds);
     this.lastStepMs = performance.now() - t0;
     if (this.opts.stepCostMs === undefined) this.stepCost = this.stepCost * 0.9 + this.lastStepMs * 0.1;
     const now = this.clock();
-    for (const e of turn.entries) {
-      if (e.seat !== this.localSeat) continue;
+    let failed: Map<number, OrderFail> | null = null;
+    turn.entries.forEach((e, i) => {
+      if (e.seat !== this.localSeat) return;
       const p = this.pending.get(e.seq);
-      if (!p) continue;
+      if (!p) return;
       this.pending.delete(e.seq);
-      this.onEffect?.(e.seq, now - p.issuedAt);
-    }
+      failed ??= rejectedIn(w, fx);
+      const why = failed.get(i);
+      if (why) this.onReject?.(e.seq, why);
+      else this.onEffect?.(e.seq, now - p.issuedAt);
+    });
     if (t % this.opts.hashTicks === 0) {
       const hash = fullHash(w);
       this.onHash?.(t, hash);
@@ -384,6 +401,7 @@ export class NetSession implements Session {
       if (p.tick >= 0 || now - p.sentAt < late) continue;
       if (p.resends >= this.opts.maxResends) {
         this.pending.delete(s); // the sequencer refused it (throttled, or our seat isn't ours right now)
+        this.onReject?.(s, 'lost');
         continue;
       }
       p.resends++;
