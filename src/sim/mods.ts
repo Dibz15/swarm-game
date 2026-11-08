@@ -86,7 +86,12 @@ export interface FactionMods {
   spawnRate: number;
   /** Feral: no powers */
   noPowers: boolean;
+  /** Powers this match doesn't allow yet (POWER_LOCK bits), e.g. the campaign's Nova before it's unlocked. Sim-side, so a remote peer can't cast them either. */
+  lockedPowers: number;
 }
+
+/** A bit per power, for `FactionMods.lockedPowers`. */
+export const POWER_LOCK = { surge: 1, nova: 2, fortify: 4, barrage: 8, blink: 16, lockdown: 32 } as const;
 
 export const defaultKindMods = (): KindMods => ({
   hp: 1,
@@ -136,5 +141,6 @@ export function defaultMods(): FactionMods {
     captureControl: 1,
     spawnRate: 1,
     noPowers: false,
+    lockedPowers: 0,
   };
 }

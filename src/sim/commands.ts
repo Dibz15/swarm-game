@@ -1,5 +1,7 @@
 import { Kind, LEVEL, MAX_LEVEL, NEUTRAL, PACTS, POWER, POWER_NEST, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, TICK_HZ, VARIANTS, type NestPower } from './constants';
 import { clamp } from './mathx';
+import { POWER_LOCK } from './mods';
+import { sanitizeCommand } from './sanitize';
 import { takeBoon } from './siege';
 import { queryRadius } from './spatial';
 import { inArmy, pushFx, removeUnit, spawnUnit, UNIT_FEEDING, type Nest, type World } from './world';
@@ -26,7 +28,8 @@ export type Command =
 
 /** True if p holds (fully controls) a nest that grants this power. */
 export function hasPower(w: World, p: number, power: NestPower): boolean {
-  if (w.factions[p].mods.noPowers) return false;
+  const mods = w.factions[p].mods;
+  if (mods.noPowers || mods.lockedPowers & POWER_LOCK[power]) return false;
   const type = POWER_NEST[power];
   if (!(w.factions[p].nestTypes & (1 << type))) return false;
   for (const n of w.nests) if (n.owner === p && n.type === type && n.control >= 1) return true;
@@ -203,13 +206,19 @@ function pay(w: World, p: number, cost: number, group: number[] | null, keep: nu
   return group ? rest : [];
 }
 
-const POWERS = new Set<Command['t']>(['surge', 'nova', 'fortify', 'barrage', 'blink', 'lockdown']);
+const isPower = (t: Command['t']): t is keyof typeof POWER_LOCK => t in POWER_LOCK;
 
-export function applyCommand(w: World, c: Command): void {
+/**
+ * Apply one command. It may come from a remote peer, so it is sanitized first
+ * (#154) and dropped if malformed; then it is checked against what p may do.
+ */
+export function applyCommand(w: World, cmd: Command): void {
+  const c = sanitizeCommand(w, cmd);
+  if (!c) return;
   const f = w.factions[c.p];
   if (!f || !f.active || f.eliminated || w.over) return;
-  // Feral (#60): no powers at all.
-  if (f.mods.noPowers && POWERS.has(c.t)) return;
+  // Feral (#60): no powers at all; and powers the match locks (the campaign's Nova before it's unlocked).
+  if (isPower(c.t) && (f.mods.noPowers || f.mods.lockedPowers & POWER_LOCK[c.t])) return;
 
   switch (c.t) {
     case 'move': {
