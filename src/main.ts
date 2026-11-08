@@ -31,6 +31,44 @@ import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
 import { buildSetup, campaignMenu, randomSetup, skirmishMenu, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
 import { creatureGrid } from './ui/creatures';
+import { BUILD } from './game/recording';
+import type { GuestLobby, HostGo, HostLobby, StartInfo } from './net/lobby';
+import type { NetMatch } from './net/match';
+import type { Router, Transport } from './net/transport';
+import { formatTime } from './ui/hud';
+import type { LobbyView } from './ui/lobby';
+import { FACTION_NAMES } from './content/factions';
+
+/** the multiplayer code, loaded on first use */
+type Mp = typeof import('./net/mp');
+let mpModule: Promise<Mp> | null = null;
+const loadMp = (): Promise<Mp> => (mpModule ??= import('./net/mp'));
+
+/** A multiplayer room this tab is in (#162): its lobby, and the screen showing it. */
+interface Room {
+  id: string;
+  secret: string;
+  host: boolean;
+  link: string;
+  view: LobbyView;
+  router: Router | null;
+  lobby: HostLobby | GuestLobby | null;
+}
+
+const ROOM_CHARS = 'abcdefghijkmnpqrstuvwxyz23456789';
+const roomCode = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => ROOM_CHARS[b % ROOM_CHARS.length]).join('');
+/** `#room=<id>.<secret>` anywhere in a link or hash */
+function parseRoom(s: string): { id: string; secret: string } | null {
+  const m = /#room=([a-z0-9]{6,32})\.([a-z0-9]{8,64})/.exec(s.trim());
+  return m ? { id: m[1], secret: m[2] } : null;
+}
+/** `?lag=400[&jitter=80&loss=0.02]` (#162): skirmishes run over a NetSession behind a simulated link */
+function lagLink(): { latency: number; jitter: number; loss: number } | null {
+  const q = new URLSearchParams(location.search);
+  const lag = Number(q.get('lag'));
+  if (!(lag > 0)) return null;
+  return { latency: lag / 2, jitter: Number(q.get('jitter')) || 0, loss: Math.min(0.5, Number(q.get('loss')) || 0) };
+}
 
 class App {
   private canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -46,6 +84,14 @@ class App {
 
   private game: GameView | null = null;
   private hud: Hud | null = null;
+  /** the networked match being played (#162), and the room it came from */
+  private match: NetMatch | null = null;
+  private room: Room | null = null;
+  /** the multiplayer module, once loaded (a room or a match implies it is) */
+  private mp: Mp | null = null;
+  /** the pause menu in a networked match: opened by us, or because the host paused */
+  private netMenu: 'user' | 'pause' | null = null;
+  private netNote: HTMLElement | null = null;
   /** background battle behind the menus */
   private demo: LocalSession | null = null;
   private screen: HTMLElement | null = null;
@@ -132,7 +178,13 @@ class App {
     else if (q.has('maps')) this.setScreen(mapGrid((setup) => this.startGame(setup, { scenario: 'maps (dev)' })));
     else if (q.has('heart')) this.startHeartDemo(Number(q.get('heart')) || 0);
     else if (q.has('playtest')) this.showPlaytests();
-    else this.showMenu();
+    else {
+      this.showMenu();
+      // a room link: straight into that room
+      this.joinFromHash();
+    }
+    // a room link opened in a tab that already has the game: only the hash changes
+    window.addEventListener('hashchange', () => this.joinFromHash());
     requestAnimationFrame((t) => this.loop(t));
   }
 
@@ -156,11 +208,13 @@ class App {
 
   private showMenu(): void {
     this.endGame();
+    this.closeRoom();
     this.startDemo();
     this.sfx.useTheme(null);
     this.setModal(null);
     const menu = mainMenu({
       skirmish: () => this.showSkirmish(),
+      multiplayer: () => void this.showMultiplayer(),
       campaign: () => this.showCampaign(),
       howto: () => this.setModal(howToPlay(() => this.setModal(null))),
       settings: () => this.setModal(settingsScreen(this.sfx, () => this.setModal(null))),
@@ -515,7 +569,9 @@ class App {
     this.setModal(
       skirmishMenu({
         quick: (difficulty) => {
-          this.startGame(randomSetup(difficulty));
+          const setup = randomSetup(difficulty);
+          if (lagLink()) return void this.startLagged(setup);
+          this.startGame(setup);
           this.quick = difficulty;
         },
         custom: () => this.showSetup(),
@@ -525,7 +581,261 @@ class App {
   }
 
   private showSetup(): void {
-    this.setModal(skirmishSetup((setup, scenario) => this.startGame(setup, { scenario }), () => this.showSkirmish()));
+    this.setModal(skirmishSetup((setup, scenario) => (lagLink() ? void this.startLagged(setup, scenario) : this.startGame(setup, { scenario })), () => this.showSkirmish()));
+  }
+
+  /** with `?lag=`, a skirmish runs over a NetSession behind a simulated link */
+  private async startLagged(setup: MatchSetup, scenario?: string): Promise<void> {
+    const mp = (this.mp = await loadMp());
+    const seat = setup.players.find((p) => p.human)?.faction ?? 0;
+    this.startGame(setup, { scenario, match: mp.NetMatch.local(setup, seat, lagLink()!) });
+  }
+
+  // ---- multiplayer (#162) ---------------------------------------------------
+
+  private async showMultiplayer(): Promise<void> {
+    const mp = (this.mp = await loadMp());
+    this.setModal(
+      mp.multiplayerMenu({
+        host: () => void this.openRoom(roomCode(10), roomCode(16), true),
+        join: (link) => {
+          const r = parseRoom(link);
+          if (r) void this.openRoom(r.id, r.secret, false);
+        },
+        back: () => this.setModal(null),
+      }),
+    );
+  }
+
+  /** Join the room in the URL's hash, unless already in it. */
+  private joinFromHash(): void {
+    const r = parseRoom(location.hash);
+    if (!r || this.room?.id === r.id) return;
+    if (this.game) {
+      this.endGame();
+      this.startDemo();
+      this.setScreen(null);
+    }
+    void this.openRoom(r.id, r.secret, false);
+  }
+
+  private async openTransport(mp: Mp, id: string, secret: string, onError: (e: string) => void): Promise<Transport> {
+    if (new URLSearchParams(location.search).get('net') === 'local') return mp.broadcastTransport(id);
+    return mp.webrtcTransport({ room: id, secret, onError });
+  }
+
+  /** Host a room, or join one: the lobby screen, then the transport, then the lobby on it. */
+  private async openRoom(id: string, secret: string, host: boolean): Promise<void> {
+    this.closeRoom();
+    const mp = (this.mp = await loadMp());
+    const hash = `#room=${id}.${secret}`;
+    history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
+    const link = `${location.origin}${location.pathname}${location.search}${hash}`;
+    const last = mp.loadCharacter();
+    const choices = mp.characterChoices(last ? 3 : 4, last ? [last.name] : []);
+    if (last) choices.unshift(last);
+    const pick = (seat: number, team: number, char: number) => {
+      mp.saveCharacter(mp.playerCharacter(char));
+      const l = room.lobby;
+      if (l instanceof mp.HostLobby) l.pickOwn(seat, team, char);
+      else l?.pick(seat, team, char);
+    };
+    const hostLobby = () => (room.lobby instanceof mp.HostLobby ? room.lobby : null);
+    const view = mp.lobbyScreen(link, choices, {
+      leave: () => this.leaveRoom(),
+      pick,
+      host: host
+        ? {
+            map: (patch) => hostLobby()?.setMap(patch),
+            teams: (on) => hostLobby()?.setTeams(on),
+            seed: (text) => hostLobby()?.setSeed(text),
+            row: (seat, row) => hostLobby()?.setRow(seat, row),
+            kick: (seat) => hostLobby()?.kick(seat),
+            start: () => hostLobby()?.start(),
+          }
+        : undefined,
+    });
+    const room: Room = { id, secret, host, link, view, router: null, lobby: null };
+    this.room = room;
+    this.setModal(view.el);
+    view.render(null, '', false);
+    view.status(host ? 'Opening the room…' : 'Looking for the host…');
+    let t: Transport;
+    try {
+      t = await this.openTransport(mp, id, secret, () => view.status('A player was found but couldn’t connect. One of your networks may need a relay.', true));
+    } catch {
+      view.status('Couldn’t open the room. Check your connection and try again.', true);
+      return;
+    }
+    if (this.room !== room) return t.close(); // left while it opened
+    const router = new mp.Router(t);
+    room.router = router;
+    const clock = () => performance.now();
+    if (host) {
+      const lobby = new mp.HostLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, prefs: loadPrefs(), seed: randomSeed(), clock });
+      lobby.onChange = () => this.renderRoom();
+      lobby.onGo = (go) => this.hostGo(go);
+      room.lobby = lobby;
+      view.status('Send the link to your friends, then start when everyone is in.');
+    } else {
+      const lobby = new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), clock });
+      lobby.onChange = (s) => {
+        view.status(s.phase === 'lobby' ? 'Waiting for the host to start the match.' : 'The match is starting…');
+        this.renderRoom();
+        // the host brought everyone back after a match
+        if (s.phase === 'lobby' && this.match) this.backToRoom();
+      };
+      lobby.onRefused = (why) => view.status(why, true);
+      lobby.onNoHost = (why) => this.roomLost(why);
+      lobby.onStart = (s) => this.guestGo(s);
+      room.lobby = lobby;
+    }
+    this.renderRoom();
+  }
+
+  private renderRoom(): void {
+    const r = this.room;
+    if (!r?.lobby || !r.router) return;
+    const l = r.lobby;
+    r.view.render(l.state, r.router.transport.self, r.host && (l as HostLobby).canStart());
+  }
+
+  /** The host's lobby says go: every guest is ready. */
+  private hostGo(go: HostGo): void {
+    const r = this.room;
+    if (!r?.router || !this.mp) return;
+    this.startGame(go.setup, { seat: go.hostSeat, match: this.mp.NetMatch.host(r.router.view(this.mp.MATCH_KINDS), go), record: false });
+  }
+
+  private guestGo(s: StartInfo): void {
+    const r = this.room;
+    const mp = this.mp;
+    if (!r?.router || r.host || !mp) return;
+    try {
+      this.startGame(s.setup, { seat: s.seat, match: mp.NetMatch.guest(r.router.view(mp.MATCH_KINDS), s.setup, s.seat, s.host), record: false });
+    } catch {
+      r.view.status('The host sent a match this version can’t play.', true);
+      return;
+    }
+    (r.lobby as GuestLobby).ready();
+  }
+
+  /** After a match: back to the room's lobby (the host brings everyone). */
+  private backToRoom(): void {
+    const r = this.room;
+    if (!r) return this.showMenu();
+    if (r.host) (r.lobby as HostLobby | null)?.backToLobby();
+    this.endGame();
+    this.startDemo();
+    this.setScreen(null);
+    this.setModal(r.view.el);
+    this.renderRoom();
+  }
+
+  /** Who sits in a seat: their character's name in a room, else the colour's. */
+  private seatName(seat: number): string {
+    const row = this.room?.lobby?.state?.rows[seat];
+    return row?.k === 'human' && this.mp ? this.mp.playerCharacter(row.char).name : FACTION_NAMES[seat];
+  }
+
+  /** The host left or never answered. */
+  private roomLost(why: 'none' | 'left'): void {
+    const r = this.room;
+    if (!r) return;
+    if (this.game && this.match) {
+      this.input.enabled = false;
+      this.netMenu = null;
+      this.setModal(
+        this.mp!.messageCard(why === 'left' ? 'The host left' : 'Lost the host', 'The match can’t go on without the host, who runs it for everyone.', [{ label: 'Menu', primary: true, on: () => this.leaveRoom() }]),
+      );
+      return;
+    }
+    r.view.status(why === 'left' ? 'The host left the room.' : 'No one is hosting this room. Check the link, or ask the host to open it again.', true);
+  }
+
+  /** Leave the room for good, and go back to the menu. */
+  private leaveRoom(): void {
+    this.closeRoom();
+    this.showMenu();
+  }
+
+  private closeRoom(): void {
+    const r = this.room;
+    if (!r) return;
+    this.room = null;
+    this.match?.close();
+    this.match = null;
+    r.lobby?.close();
+    r.router?.close();
+    if (parseRoom(location.hash)) history.replaceState(null, '', `${location.pathname}${location.search}`);
+  }
+
+  // ---- networked pause menu (#162): only the host stops the match --------
+
+  private toggleNetMenu(): void {
+    const g = this.game;
+    const m = this.match;
+    if (!g || !m) return;
+    if (this.netMenu) {
+      if (m.host) g.session.setPaused(false);
+      this.closeNetMenu();
+      return;
+    }
+    if (m.host) g.session.setPaused(true);
+    this.openNetMenu('user');
+  }
+
+  private openNetMenu(kind: 'user' | 'pause'): void {
+    const g = this.game!;
+    const host = !!this.match?.host;
+    this.netMenu = kind;
+    this.input.enabled = false;
+    this.input.reset();
+    const m = pauseMenu({
+      title: host || g.session.paused ? 'Paused' : 'Menu',
+      note: ' ',
+      resume: () => this.toggleNetMenu(),
+      resumeLabel: host ? 'Resume' : 'Back to the match',
+      quit: () => this.leaveRoom(),
+      quitLabel: 'Leave match',
+      audio: this.sfx,
+      teams: teamLayout(g.world, g.human).team ? teamsList(g.world, g.human) : undefined,
+    });
+    this.netNote = m.querySelector('.note');
+    this.setModal(m);
+    this.updateNetNote();
+  }
+
+  private closeNetMenu(): void {
+    this.netMenu = null;
+    this.netNote = null;
+    this.setModal(null);
+    this.input.enabled = true;
+  }
+
+  /** The host paused or resumed: guests' menus follow. */
+  private netPaused(paused: boolean): void {
+    if (!this.game || this.match?.host) return;
+    if (paused && !this.netMenu) this.openNetMenu('pause');
+    else if (!paused && this.netMenu === 'pause') this.closeNetMenu();
+  }
+
+  private updateNetNote(): void {
+    const n = this.netNote;
+    const g = this.game;
+    if (!n || !g) return;
+    const host = !!this.match?.host;
+    const st = this.match?.session.status ?? null;
+    const since = st ? performance.now() - st.at : 0;
+    const secs = (ms: number) => formatTime(Math.max(0, Math.ceil((ms - since) / 1000)) * TICK_HZ);
+    let text: string;
+    if (g.session.paused) {
+      if (st?.paused && st.resumeIn >= 0) text = `Resuming in ${Math.max(1, Math.ceil((st.resumeIn - since) / 1000))}…`;
+      else if (st?.paused) text = `${host ? 'The match is paused for everyone' : 'The host paused the match'}. It resumes by itself in ${secs(st.auto)}.`;
+      else text = host ? 'The match is paused for everyone.' : 'The host paused the match.';
+    } else text = host ? 'Pausing…' : 'The match keeps going while this menu is open.';
+    if (n.textContent !== text) n.textContent = text;
+    n.hidden = false;
   }
 
   private startDemo(): void {
@@ -557,9 +867,13 @@ class App {
     this.rings.list = [];
   }
 
-  /** `opts.seat`: the local seat (#156), one of the setup's human factions; default: the first human. */
-  private startGame(setup: MatchSetup, opts: { scenario?: string; record?: boolean; seat?: number } = {}, prevEnd: EndReason = 'quit'): void {
+  /**
+   * `opts.seat`: the local seat (#156), one of the setup's human factions; default: the first human.
+   * `opts.match`: a networked match (#162), which brings its own session.
+   */
+  private startGame(setup: MatchSetup, opts: { scenario?: string; record?: boolean; seat?: number; match?: NetMatch } = {}, prevEnd: EndReason = 'quit'): void {
     this.endGame(prevEnd);
+    this.match = opts.match ?? null;
     this.demo = null;
     this.setModal(null);
     this.setScreen(null);
@@ -568,7 +882,21 @@ class App {
     this.quick = null;
     this.run = null;
     const record = opts.record !== false && recordingEnabled();
-    this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null, { seat: opts.seat });
+    this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null, { seat: opts.seat, session: this.match?.session });
+    if (this.match) {
+      this.match.events = {
+        onSeat: (seat, state) => {
+          if (seat === this.game?.human) return;
+          const who = this.seatName(seat);
+          if (state === 'away') this.hud?.toast(`${who} lost connection`, '#8aa0b8');
+          else if (state === 'bot') this.hud?.toast(`${who} dropped: an Easy bot took over`, '#ffb627');
+          else this.hud?.toast(`${who} is back`, '#8aa0b8');
+        },
+        onPause: (p) => this.netPaused(p),
+        onHostLost: () => this.roomLost('left'),
+        onDesync: (t) => this.hud?.toast(`Desync at ${formatTime(t)}: players’ games may differ from here`, '#ff3cac'),
+      };
+    }
     this.sfx.useTheme(setup.seed);
     this.input.game = this.game;
     this.input.enabled = true;
@@ -599,6 +927,10 @@ class App {
 
   private endGame(reason: EndReason = 'quit'): void {
     this.saveRec(reason, true);
+    this.match?.close();
+    this.match = null;
+    this.netMenu = null;
+    this.netNote = null;
     this.demoOverlay?.destroy();
     this.demoOverlay = null;
     this.demoKey = '';
@@ -620,6 +952,7 @@ class App {
   private togglePause(): void {
     const g = this.game;
     if (!g || g.result) return;
+    if (this.match && this.room) return this.toggleNetMenu();
     g.rec?.pause(g.world, !g.session.paused, performance.now() / 1000);
     if (g.session.paused) {
       g.session.setPaused(false);
@@ -685,6 +1018,15 @@ class App {
           easy: () => this.playSuggested('easy1v1'),
         }),
       );
+      return;
+    }
+    if (this.match && this.room) {
+      const room = this.room;
+      const names: Record<number, string> = {};
+      room.lobby?.state?.rows.forEach((_, i) => (names[i] = this.seatName(i)));
+      const buttons = [{ label: 'Leave room', on: () => this.leaveRoom() }];
+      if (room.host) buttons.push({ label: 'Back to lobby', primary: true, on: () => this.backToRoom() } as { label: string; on: () => void; primary?: boolean });
+      this.setModal(endScreen(g.world, g.human, won, { rematch: () => undefined, newMap: () => undefined, quit: () => this.leaveRoom() }, { names, buttons, note: room.host ? undefined : 'The host can bring everyone back to the lobby.' }));
       return;
     }
     this.setModal(
@@ -806,10 +1148,13 @@ class App {
     r.beginFrame();
     this.frame++;
 
+    this.room?.lobby?.update();
     if (this.game) {
       const g = this.game;
       this.input.update(dt);
+      this.match?.update();
       g.update(dt, this.time);
+      if (this.netMenu) this.updateNetNote();
       if (g.result) this.saveRec(g.result, true);
       this.hud?.update(g, dt);
       this.applyInsets();

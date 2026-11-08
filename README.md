@@ -34,6 +34,15 @@ Dev URL flags:
 - `?bench=5000` runs a stress battle with about 5,000 units.
 - `?eventdemo` starts a small match where the wild swarm, a supply drop and the Colossus all arrive in the first seconds.
 - `?theme=<id>` forces one music theme everywhere, to audition it (ids in `src/audio/themes.ts`, e.g. `f-lydian`). Settings > Sound > Theme does the same without the URL, and with `?debug` you can call `swarm.sfx.setTheme(id)`.
+- `?lag=400[&jitter=80&loss=0.02]` runs skirmishes on a networked session behind a simulated link (round trip in ms), to feel and tune multiplayer latency alone.
+- `?net=local` makes multiplayer rooms use a BroadcastChannel instead of WebRTC: host in one tab, open the room link in others in the same browser. No internet needed.
+
+### Multiplayer
+Menu > Multiplayer > **Host a game** opens a room and gives you a link (`…#room=<id>.<secret>`). Anyone who opens it joins the lobby: they pick a character, a colour and a team, and the host fills the other seats with bots and starts.
+- **No server of ours.** Peers find each other through public Nostr relays ([Trystero](https://github.com/dmotz/trystero)) and then talk directly over WebRTC. The secret in the link encrypts that signaling, so only people with the link can join.
+- **The host runs the match** (the Sequencer) for everyone, and only the host can pause it. If the host leaves, the match ends (host migration is #166).
+- A guest who drops is shown as away, and after a minute an Easy bot takes their seat.
+- The room link must open the same build: a player on another version is asked to refresh.
 
 ### Working offline
 Everything for day-to-day work runs without a network:
@@ -204,7 +213,8 @@ src/sim/      deterministic simulation — no DOM, no Math.random, no clock
   mathx.ts      table-based deterministic sin/cos
   hash.ts       state checksum
 src/game/     Session: LocalSession (fixed-timestep driver + command log); GameView (match + feedback)
-src/net/      multiplayer core (#152): wire codec, Sequencer (host turn clock), NetSession (jitter buffer, catch-up), transports
+src/net/      multiplayer (#152): wire codec, Sequencer (host turn clock), NetSession (jitter buffer, catch-up), lobby, transports
+              (WebRTC via Trystero, BroadcastChannel for local tests, a fake network for the net-sim); loaded only when used
 src/render/   WebGL2: instanced units, beams, SDF nest shapes, terrain baked to a distance texture; particles; camera
 src/input/    mouse / touch / keyboard → actions; client-only selection
 src/ui/       DOM HUD, menus, settings, end screen; mobile mode (body.mobile: touch layout + wording)

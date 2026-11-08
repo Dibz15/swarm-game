@@ -66,14 +66,22 @@ export function randomSeed(): string {
   return `${r()}-${r()}-${Math.floor(Math.random() * 100)}`;
 }
 
-export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
-  const seed = hashString(seedText.trim() || 'swarm');
-  // Resolve "random" personalities deterministically from the seed.
+/** The match seed for a seed text. */
+export const seedOf = (seedText: string): number => hashString(seedText.trim() || 'swarm');
+
+/** Resolves "random" personalities in order, deterministically from the seed. */
+export function personalityPicker(seed: number): (p: Personality | 'random') => Personality {
   let s = seed;
-  const nextPers = (): Personality => {
+  return (p) => {
+    if (p !== 'random') return p;
     s = (Math.imul(s ^ (s >>> 13), 0x5bd1e995) + 0x6b43a9b5) >>> 0;
     return PERSONALITIES[s % PERSONALITIES.length];
   };
+}
+
+export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
+  const seed = seedOf(seedText);
+  const pick = personalityPicker(seed);
   return {
     seed,
     size: p.size,
@@ -87,7 +95,7 @@ export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
         faction: b.faction,
         team: p.teams ? b.team : i + 1,
         human: false,
-        bot: { difficulty: b.difficulty, personality: b.personality === 'random' ? nextPers() : b.personality },
+        bot: { difficulty: b.difficulty, personality: pick(b.personality) },
       })),
     ],
   };

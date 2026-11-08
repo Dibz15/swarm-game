@@ -173,12 +173,34 @@ describe('Sequencer (#158)', () => {
   });
 
   it('resumes by itself when the pauser’s pause time runs out', () => {
-    const { seq, advance } = rig({ pauseMs: 4000, resumeMs: 1000 });
+    const { seq, advance, inbox } = rig({ pauseMs: 4000, resumeMs: 1000 });
     advance(100);
     seq.onMessage('b', { k: 'pause', on: true });
-    advance(4500);
+    advance(1500);
+    // everyone hears when play will come back by itself: what's left of the allowance, plus the countdown
+    const st = inbox.get('a')!.filter((m) => m.k === 'status').at(-1)!;
+    expect(st.k === 'status' && st.auto).toBeGreaterThan(3000);
+    expect(st.k === 'status' && st.auto).toBeLessThanOrEqual(5000);
+    advance(3000);
     expect(seq.paused).toBe(true);
     advance(1000);
+    expect(seq.paused).toBe(false);
+  });
+
+  it('with pausers set, only those seats can pause or resume (#162: the host)', () => {
+    const { seq, advance } = rig({ pausers: [0], resumeMs: 1000 });
+    advance(200);
+    seq.onMessage('b', { k: 'pause', on: true });
+    advance(300);
+    expect(seq.paused).toBe(false);
+    seq.onMessage('a', { k: 'pause', on: true });
+    advance(300);
+    expect(seq.paused).toBe(true);
+    seq.onMessage('b', { k: 'pause', on: false });
+    advance(2000);
+    expect(seq.paused).toBe(true);
+    seq.onMessage('a', { k: 'pause', on: false });
+    advance(1200);
     expect(seq.paused).toBe(false);
   });
 

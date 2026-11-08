@@ -106,10 +106,13 @@ export class NetSession implements Session {
   onEffect: ((seq: number, ms: number) => void) | null = null;
   /** each fullHash this client reports, as it reports it */
   onHash: ((tick: number, hash: number) => void) | null = null;
+  /** a control entry applied (a pause, a resume, a seat going away or to a bot), as the step before `tick` runs */
+  onCtrl: ((tick: number, ctrl: Ctrl) => void) | null = null;
 
   /** paused by a control entry (someone pressed pause), and the sequencer's latest word on it */
   private pausedBy = -1;
-  status: { paused: boolean; by: number; resumeIn: number } | null = null;
+  /** the sequencer's last word while paused; `at` is when it came (this session's clock), to count down from */
+  status: { paused: boolean; by: number; resumeIn: number; auto: number; at: number } | null = null;
 
   /** round-trip estimate to the sequencer, ms */
   rtt = 0;
@@ -227,7 +230,7 @@ export class NetSession implements Session {
         return;
       }
       case 'status':
-        this.status = { paused: m.paused, by: m.by, resumeIn: m.resumeIn };
+        this.status = { paused: m.paused, by: m.by, resumeIn: m.resumeIn, auto: m.auto, at: now };
         return;
       default:
         return;
@@ -339,6 +342,7 @@ export class NetSession implements Session {
     else if (c.k === 'resume') this.pausedBy = -1;
     else if (c.state === 'bot') seatToBot(w, c.seat, { difficulty: c.bot?.difficulty ?? 0, personality: c.bot?.personality ?? 'expander' });
     else if (seatHasBot(w, c.seat)) seatToHuman(w, c.seat);
+    this.onCtrl?.(tick, c);
   }
 
   // ---- upkeep ----------------------------------------------------------------

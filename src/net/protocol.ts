@@ -14,7 +14,7 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;
@@ -31,6 +31,8 @@ export const MAX_REASON = 256;
 export const MAX_BUILD = 64;
 /** Largest setup a `start` carries, as JSON. */
 export const MAX_SETUP = 256 * 1024;
+/** Largest lobby state a `lobby` carries, as JSON. */
+export const MAX_LOBBY = 16 * 1024;
 
 /** Who drives a human seat right now. */
 export type SeatState = 'human' | 'away' | 'bot';
@@ -70,14 +72,20 @@ export interface SeatInfo {
 }
 
 export type Msg =
-  /** client → host, first thing on a connection */
-  | { k: 'hello'; proto: number; build: string; mobile: boolean; name: string }
+  /** client → host, first thing on a connection; `char` is the seed of the character it plays as (#162) */
+  | { k: 'hello'; proto: number; build: string; mobile: boolean; char: number }
   /** host → client: not accepted (version or build mismatch, room full) */
   | { k: 'refuse'; reason: string }
   /** host → clients: the seat table, and which row is yours (-1: none) */
   | { k: 'seats'; you: number; table: SeatInfo[] }
   /** host → client: the match begins (or resumes) with this setup; turns from `tick` on follow */
   | { k: 'start'; setup: string; seat: number; tick: number }
+  /** host → clients: the whole lobby (`LobbyState` as JSON, #162) */
+  | { k: 'lobby'; state: string }
+  /** client → host, in the lobby: the seat, team and character it wants */
+  | { k: 'pick'; seat: number; team: number; char: number }
+  /** client → host: built the world from `start`, ready for turns */
+  | { k: 'ready' }
   /** client → sequencer: one order (no `p`; the decoder gives it p = -1) */
   | { k: 'cmd'; seq: number; cmd: Command }
   /** sequencer → clients: closed turns first .. first + list.length - 1 */
@@ -96,8 +104,12 @@ export type Msg =
   | { k: 'snap'; tick: number; part: number; of: number; bytes: Uint8Array }
   /** client → sequencer: ask to pause (on) or resume (off) */
   | { k: 'pause'; on: boolean }
-  /** sequencer → clients, while no turns flow: who paused, and ms until play resumes (-1: not resuming yet) */
-  | { k: 'status'; paused: boolean; by: number; resumeIn: number }
+  /**
+   * sequencer → clients, while no turns flow: who paused, ms until play
+   * resumes (-1: nobody has resumed yet), and ms until it resumes by itself
+   * when the pauser's allowance runs out (#162)
+   */
+  | { k: 'status'; paused: boolean; by: number; resumeIn: number; auto: number }
   /** client → sequencer: take my seat back from its bot */
   | { k: 'reclaim' };
 
