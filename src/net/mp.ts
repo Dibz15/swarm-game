@@ -5,6 +5,7 @@
  */
 export { characterChoices, loadCharacter, playerCharacter, saveCharacter } from '../game/character';
 export { broadcastTransport } from './broadcast';
+export { fetchTurn } from './ice';
 export { GuestLobby, HostLobby } from './lobby';
 export { NetMatch } from './match';
 export { LOBBY_KINDS, MATCH_KINDS, Router } from './transport';

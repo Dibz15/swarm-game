@@ -43,6 +43,27 @@ Menu > Multiplayer > **Host a game** opens a room and gives you a link (`…#roo
 - **The host runs the match** (the Sequencer) for everyone, and only the host can pause it. If the host leaves, the match ends (host migration is #166).
 - A guest who drops is shown as away, and after a minute an Easy bot takes their seat.
 - The room link must open the same build: a player on another version is asked to refresh.
+- **Hide my IP** (Settings, or the Multiplayer card): connect only through the relay, so other players never see your address.
+
+#### The relay (TURN)
+Some pairs of players can't reach each other directly: strict NATs, and often mobile carrier CGNAT. A TURN relay carries their traffic instead, still end-to-end encrypted. A tiny Cloudflare Worker in [`workers/turn/`](workers/turn) hands out short-lived credentials for [Cloudflare's TURN service](https://developers.cloudflare.com/realtime/turn/). Without it, the game still works for everyone who can connect directly.
+
+To deploy it:
+1. In the Cloudflare dashboard, go to **Realtime > TURN Server** and create a TURN key. Note its **key ID** and **API token**.
+2. In `workers/turn/`, run `npm install`, then `npx wrangler login`.
+3. Store the two values as Worker secrets (they never go in the repo):
+   ```bash
+   npx wrangler secret put TURN_KEY_ID
+   npx wrangler secret put TURN_KEY_API_TOKEN
+   ```
+4. Run `npx wrangler deploy`. It prints the Worker's URL, e.g. `https://swarm-turn.<you>.workers.dev`.
+5. In the GitHub repo, go to **Settings > Secrets and variables > Actions > Variables** and add `TURN_URL` with that URL. CI builds pass it to the game as `VITE_TURN_URL`. For local dev, put `VITE_TURN_URL=…` in `.env.local`.
+
+What it does and doesn't do:
+- `GET /ice?room=<id>` returns ICE servers whose credentials last 4 hours. Only the game's origins may call it (`ALLOWED_ORIGINS` in `wrangler.toml`), and calls are rate-limited to 10 a minute per IP and 30 per room.
+- It logs nothing of its own (`observability` is off). Cloudflare keeps its usual request metrics.
+- **Free tier:** Cloudflare TURN includes 1,000 GB of relayed traffic a month, and a relayed player uses about 1 MB in a 10-minute match (the turn stream is under 1 KB/s). Workers' free plan allows 100,000 requests a day, and a player asks once per room.
+- If the Worker can't be reached (or isn't set up), players fall back to direct connections. With Hide my IP on, they can't connect at all until it's back.
 
 ### Working offline
 Everything for day-to-day work runs without a network:

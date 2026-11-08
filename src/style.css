@@ -160,6 +160,8 @@ kbd {
 .field .seed { width: 160px; }
 label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .check { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 14px; cursor: pointer; }
+.field > label.check { display: flex; margin-bottom: 4px; text-transform: none; letter-spacing: 0; font-size: 14px; }
+.check input:disabled + * , .check:has(input:disabled) { cursor: default; opacity: 0.6; }
 
 .swatches { display: flex; gap: 8px; }
 .sw {

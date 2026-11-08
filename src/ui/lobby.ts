@@ -9,7 +9,8 @@ import { characterCreature, playerCharacter, type Character } from '../game/char
 import { randomSeed } from '../game/matchSetup';
 import type { LobbyState, SeatRow } from '../net/lobby';
 import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
-import { mapFields, type MapChoice } from './screens';
+import { relayOnly } from '../net/ice';
+import { mapFields, relayField, type MapChoice } from './screens';
 
 function el(html: string): HTMLDivElement {
   const t = document.createElement('template');
@@ -51,9 +52,11 @@ export function multiplayerMenu(h: { host: () => void; join: (link: string) => v
           <label>Join a game <small>paste the link your host sent</small></label>
           <div class="row"><input class="join" spellcheck="false" placeholder="https://…#room=…"><button class="small" data-a="join">Join</button></div>
         </div>
+        <div class="relay-field"></div>
         <div class="row end"><button data-a="back">Back</button></div>
       </div>
     </div>`);
+  m.querySelector('.relay-field')!.replaceWith(relayField());
   const input = m.querySelector('.join') as HTMLInputElement;
   m.querySelector('[data-a=host]')!.addEventListener('click', h.host);
   m.querySelector('[data-a=join]')!.addEventListener('click', () => h.join(input.value));
@@ -94,7 +97,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
         <h2>${isHost ? 'Your room' : 'Joining a room'}</h2>
         <p class="status hint"></p>
         <div class="field">
-          <label>Invite friends <small>anyone with this link can join</small></label>
+          <label>Invite friends <small>anyone with this link can join${relayOnly() ? ' · your IP stays hidden (relay only)' : ''}</small></label>
           <div class="row"><input class="link" readonly spellcheck="false"><button class="small" data-a="copy">Copy</button>${'share' in navigator ? '<button class="small" data-a="share">Share</button>' : ''}</div>
         </div>
         <div class="field">

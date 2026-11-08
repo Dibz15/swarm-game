@@ -38,6 +38,7 @@ import type { Router, Transport } from './net/transport';
 import { formatTime } from './ui/hud';
 import type { LobbyView } from './ui/lobby';
 import { FACTION_NAMES } from './content/factions';
+import { relayOnly } from './net/ice';
 
 /** the multiplayer code, loaded on first use */
 type Mp = typeof import('./net/mp');
@@ -622,9 +623,25 @@ class App {
     void this.openRoom(r.id, r.secret, false);
   }
 
-  private async openTransport(mp: Mp, id: string, secret: string, onError: (e: string) => void): Promise<Transport> {
+  /**
+   * The room's transport. Over WebRTC, ask our Worker for relay (TURN)
+   * credentials first (#163); without them only direct connections work.
+   */
+  private async openTransport(mp: Mp, id: string, secret: string, view: LobbyView): Promise<Transport> {
     if (new URLSearchParams(location.search).get('net') === 'local') return mp.broadcastTransport(id);
-    return mp.webrtcTransport({ room: id, secret, onError });
+    const relay = relayOnly();
+    const turn = await mp.fetchTurn(id);
+    if (relay && !turn) throw new Error('Hide my IP is on, but the relay can’t be reached right now, so you can’t connect. Turn it off in Settings, or try again later.');
+    return mp.webrtcTransport({
+      room: id,
+      secret,
+      ice: { turn: turn ?? undefined, relayOnly: relay },
+      onError: () =>
+        view.status(
+          turn ? 'A player was found but couldn’t connect, even through the relay. Check your connection and try again.' : 'A player was found but couldn’t connect directly, and the relay isn’t available. One of your networks may be blocking it.',
+          true,
+        ),
+    });
   }
 
   /** Host a room, or join one: the lobby screen, then the transport, then the lobby on it. */
@@ -665,9 +682,9 @@ class App {
     view.status(host ? 'Opening the room…' : 'Looking for the host…');
     let t: Transport;
     try {
-      t = await this.openTransport(mp, id, secret, () => view.status('A player was found but couldn’t connect. One of your networks may need a relay.', true));
-    } catch {
-      view.status('Couldn’t open the room. Check your connection and try again.', true);
+      t = await this.openTransport(mp, id, secret, view);
+    } catch (e) {
+      view.status(e instanceof Error && e.message.startsWith('Hide my IP') ? e.message : 'Couldn’t open the room. Check your connection and try again.', true);
       return;
     }
     if (this.room !== room) return t.close(); // left while it opened

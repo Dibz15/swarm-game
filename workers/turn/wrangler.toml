@@ -1,0 +1,25 @@
+# SWARM's TURN credentials Worker (#163). Deploy steps: README > Multiplayer > TURN.
+name = "swarm-turn"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# Log nothing beyond Cloudflare's own request metrics.
+[observability]
+enabled = false
+
+[vars]
+# Pages (main and PR previews share this origin) and local dev.
+ALLOWED_ORIGINS = "https://dibz15.github.io,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173"
+
+# Rate limits (approximate, per Cloudflare location): each IP, and each room.
+[[ratelimits]]
+name = "LIMIT_IP"
+namespace_id = "16301"
+simple = { limit = 10, period = 60 }
+
+[[ratelimits]]
+name = "LIMIT_ROOM"
+namespace_id = "16302"
+simple = { limit = 30, period = 60 }
+
+# Secrets (never in this file): wrangler secret put TURN_KEY_ID / TURN_KEY_API_TOKEN

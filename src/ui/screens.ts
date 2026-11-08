@@ -9,6 +9,7 @@ import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
 import { buildSetup, loadPrefs, randomSeed, savePrefs, type SetupPrefs } from '../game/matchSetup';
+import { relayOnly, setRelayOnly, TURN_URL } from '../net/ice';
 import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
@@ -398,10 +399,12 @@ export function settingsScreen(audio: AudioEngine, onBack: () => void): HTMLDivE
       <div class="card">
         <h2>Settings</h2>
         <div class="fields"></div>
+        <div class="relay-field"></div>
         <div class="row end"><button class="primary" data-a="back">Done</button></div>
       </div>
     </div>`);
   m.querySelector('.fields')!.replaceWith(settingsFields(audio, () => {}));
+  m.querySelector('.relay-field')!.replaceWith(relayField());
   m.querySelector('[data-a=back]')!.addEventListener('click', onBack);
   return m;
 }
@@ -513,6 +516,28 @@ const SCENARIOS: Scenario[] = [
   { name: '6 players, large', seed: 'rec-ffa-6', size: 'large', caves: 'off', bots: ['random', 'random', 'random', 'random', 'random'] },
   { name: '3-player FFA, domination', seed: 'rec-dom-3', size: 'medium', caves: 'off', bots: ['random', 'random'], domShare: 0.5 },
 ];
+
+/**
+ * Multiplayer's "Hide my IP" (#163): connect only through the relay, so other
+ * players never see your address. Off when this build has no relay.
+ */
+export function relayField(): HTMLDivElement {
+  const f = el(`
+    <div class="field">
+      <label>Multiplayer</label>
+      <label class="check"><input type="checkbox" data-a="relay"> Hide my IP from other players (relay only)</label>
+      <p class="hint"></p>
+    </div>`);
+  const box = f.querySelector('[data-a=relay]') as HTMLInputElement;
+  const hint = f.querySelector('.hint') as HTMLParagraphElement;
+  box.checked = relayOnly();
+  box.disabled = !TURN_URL;
+  hint.textContent = TURN_URL
+    ? 'Everything goes through a relay server instead of straight between players: a little more delay. Takes effect the next time you join a room.'
+    : 'This version of the game has no relay, so players connect directly.';
+  box.addEventListener('change', () => setRelayOnly(box.checked));
+  return f;
+}
 
 /** The map's choices, as the skirmish screen and the multiplayer lobby (#162) show them. */
 export interface MapChoice {

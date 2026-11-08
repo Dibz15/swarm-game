@@ -43,6 +43,9 @@ jobs:
           diff hash-node.txt hash-bun.txt
 
       - run: npm run build
+        env:
+          # The TURN credentials Worker (#163); unset: players connect directly only.
+          VITE_TURN_URL: ${{ vars.TURN_URL }}
 
       # Hand the built site to the deploy jobs.
       - uses: actions/upload-artifact@v4

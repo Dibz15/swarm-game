@@ -1,0 +1,12 @@
+{
+  "name": "swarm-turn",
+  "private": true,
+  "description": "Mints short-lived Cloudflare TURN credentials for SWARM multiplayer (#163)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.36.0"
+  }
+}
