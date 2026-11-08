@@ -255,6 +255,11 @@ export class NetSession implements Session {
     const now = this.clock();
     this.timers(now);
     this.retarget(now);
+    if (this.world.over) {
+      // the match is decided: step() no longer advances, so neither do we
+      this.alpha = 1;
+      return 0;
+    }
     const buffered = this.buffered;
     this.bufferHist[Math.min(buffered, this.bufferHist.length - 1)]++;
     if (!this.started) {
@@ -268,7 +273,7 @@ export class NetSession implements Session {
     if (buffered > this.target + this.opts.catchupLag) {
       // far behind: as many steps as the budget allows, down to the target
       const most = Math.max(1, Math.floor(this.opts.catchupMs / Math.max(0.05, this.stepCost)));
-      while (steps < most && this.buffered > this.target) {
+      while (steps < most && this.buffered > this.target && !this.world.over) {
         this.stepOne();
         steps++;
       }
@@ -277,7 +282,7 @@ export class NetSession implements Session {
     } else {
       const rate = Math.min(1.25, Math.max(0.9, 1 + 0.05 * (buffered - this.target)));
       this.acc += dt * rate;
-      while (this.acc >= DT && steps < 6 && this.turns.has(this.world.tick + 1)) {
+      while (this.acc >= DT && steps < 6 && this.turns.has(this.world.tick + 1) && !this.world.over) {
         this.stepOne();
         this.acc -= DT;
         steps++;

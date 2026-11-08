@@ -192,6 +192,23 @@ describe('NetSession (#159)', () => {
     expect(seatCtrl(b)).toEqual(seatCtrl(a));
   });
 
+  it('stops stepping once the match is decided', () => {
+    const { clock, seq, nets } = table(setup([0]), [0]);
+    const run = (ms: number) => {
+      for (const end = clock.now + ms; clock.now < end; ) {
+        clock.now += FRAME;
+        seq.update();
+        for (const n of nets) n.update(FRAME / 1000);
+      }
+    };
+    run(1000);
+    const net = nets[0];
+    net.world.over = true; // as step() sets it when a team wins
+    const t = net.world.tick;
+    expect(() => run(2000)).not.toThrow();
+    expect(net.world.tick).toBe(t);
+  });
+
   it('pauses and resumes through the sequencer', () => {
     const s = setup([0, 2]);
     const { clock, seq, nets } = table(s, [0, 2], { resumeMs: 2000 });
