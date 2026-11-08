@@ -157,6 +157,8 @@ export class Sequencer {
   onTurn: ((tick: number, turn: Turn) => void) | null = null;
   /** clients disagree about the world after `tick` */
   onDesync: ((tick: number, hashes: Map<number, number>) => void) | null = null;
+  /** every tick whose hash reports were compared, agreeing or not (for the net-sim) */
+  onHashes: ((tick: number, hashes: Map<number, number>) => void) | null = null;
   /** commands dropped, by reason (for tests and the debug overlay) */
   readonly dropped = { seat: 0, dup: 0, rate: 0, invalid: 0 };
 
@@ -348,6 +350,7 @@ export class Sequencer {
 
   private judge(tick: number, m: Map<number, number>): void {
     this.hashes.delete(tick);
+    this.onHashes?.(tick, m);
     if (new Set(m.values()).size > 1) this.onDesync?.(tick, m);
   }
 

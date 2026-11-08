@@ -3,12 +3,14 @@
 // friend's link varies. Prints order-to-effect latency, buffer and stalls
 // for co-op and PvP, and whether every hash matched.
 //   npx vite-node scripts/netsim.ts [secs=120]
-//   npx vite-node scripts/netsim.ts 300 --only=300   (just the 300 ms rows)
+//   npx vite-node scripts/netsim.ts --only=300 [secs]   (just the 300 ms rows)
 import { runNetMatch, type NetMatchReport } from '../src/net/harness';
 import type { MatchSetup } from '../src/sim/setup';
 
-const secs = Number(process.argv[2] ?? 120);
-const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7);
+const args = process.argv.slice(2);
+const secs = Number(args.find((a) => !a.startsWith('--')) ?? 120);
+const only = args.find((a) => a.startsWith('--only='))?.slice(7);
+if (!(secs > 0)) throw new Error(`netsim: bad match length ${secs}`);
 
 function setup(pvp: boolean, seed: number): MatchSetup {
   return {
@@ -28,7 +30,7 @@ const JITTERS = [20, 80];
 const LOSSES = [0, 0.02, 0.05];
 
 const pad = (v: unknown, n: number) => String(v).padStart(n);
-const ok = (r: NetMatchReport) => (r.desyncs.length || r.mismatches.length || !r.finalAgree ? 'DESYNC' : 'ok');
+const ok = (r: NetMatchReport) => (r.desyncs.length || !r.finalAgree || r.hashTicks === 0 ? 'DESYNC' : 'ok');
 
 console.log(`${secs} s matches, host + one friend; latencies are order-to-effect ms (p50/p95); stall is the friend's, s per minute\n`);
 console.log('  rtt  jit  loss | co-op host  friend   buf stall | pvp host   friend   buf stall |  hashes');

@@ -2,7 +2,6 @@ import { Proxy } from '../proxy/proxy';
 import { limitsOf } from '../sim/sanitize';
 import { createWorld, type MatchSetup } from '../sim/setup';
 import { fullHash } from '../sim/snapshot';
-import { decodeMsg } from './codec';
 import { FakeNetwork, VirtualClock, type LinkSpec } from './fakeTransport';
 import { NetSession, type NetSessionOptions } from './netSession';
 import type { SequencerOptions } from './sequencer';
@@ -62,14 +61,15 @@ export interface SeatReport {
 
 export interface NetMatchReport {
   seats: SeatReport[];
-  /** ticks at which at least two clients reported a hash, and how many of those disagreed */
+  /** ticks at which the sequencer compared hashes from at least two clients */
   hashTicks: number;
-  mismatches: number[];
+  /** ticks at which they disagreed */
   desyncs: number[];
   /** after the last turn, every client ends on the same tick with the same fullHash */
   finalAgree: boolean;
   /** bytes the host sent per client per second */
   downBps: number;
+  /** turns closed by the end of the match (before the drain) */
   closed: number;
 }
 
@@ -88,17 +88,9 @@ export function runNetMatch(o: NetMatchOptions): NetMatchReport {
   });
   const desyncs: number[] = [];
   seq.onDesync = (t) => desyncs.push(t);
-  // watch the hash reports on their way in
-  const reports = new Map<number, Map<number, number>>();
-  const inner = hostT.onMessage!;
-  hostT.onMessage = (peer, bytes) => {
-    const m = decodeMsg(bytes);
-    if (m?.k === 'hash') {
-      let r = reports.get(m.tick);
-      if (!r) reports.set(m.tick, (r = new Map()));
-      r.set(Number(peer.slice(1)), m.hash);
-    }
-    inner(peer, bytes);
+  let hashTicks = 0;
+  seq.onHashes = (_t, m) => {
+    if (m.size >= 2) hashTicks++;
   };
 
   const clients = o.peers.map((p) => {
@@ -115,29 +107,40 @@ export function runNetMatch(o: NetMatchOptions): NetMatchReport {
     const effects: number[] = [];
     session.onEffect = (_s, ms) => effects.push(ms);
     for (const [a, b] of p.freeze ?? []) clock.at(a, () => net.freeze(id, b));
-    return { spec: p, id, session, effects, proxy: new Proxy(p.seat, { skill: p.skill ?? 1 }) };
+    return { spec: p, id, session, effects, proxy: new Proxy(p.seat, { skill: p.skill ?? 1 }), thought: -1 };
   });
 
-  const end = o.secs * 1000;
-  while (clock.now < end) {
+  const frameAll = (play: boolean) => {
     clock.advance(frame);
     seq.update();
     for (const c of clients) {
       if (net.isFrozen(c.id)) continue;
       const w = c.session.world;
-      if (!w.over) for (const cmd of c.proxy.think(w)) c.session.issue(cmd);
+      // the Proxy decides once per sim tick, as it does in front of step()
+      if (play && !w.over && w.tick !== c.thought) {
+        c.thought = w.tick;
+        for (const cmd of c.proxy.think(w)) c.session.issue(cmd);
+      }
       c.session.update(frame / 1000);
       w.fx = [];
       w.deaths = [];
     }
-  }
+  };
+
+  const end = o.secs * 1000;
+  while (clock.now < end) frameAll(true);
 
   const seconds = clock.now / 1000;
+  const closed = seq.closed;
   const stats = clients.map((c) => ({ stallMs: c.session.stallMs, caughtUp: c.session.caughtUp, target: c.session.target, bufferHist: c.session.bufferHist.slice() }));
   const downBytes = net.sent.get('host')?.bytes ?? 0;
 
-  // Drain: no new turns; everyone steps what it holds (or still has on the way) up to the last closed tick.
-  for (let k = 0; k < 2000 && clients.some((c) => !c.session.world.over && c.session.world.tick < seq.closed); k++) {
+  // Drain, part 1: no new orders, but turns keep closing until every order
+  // still on its way (a retransmit, a long PvP hold) has a place in one.
+  const live = () => clients.filter((c) => !c.session.world.over);
+  for (let k = 0; k < 60 * 60 && live().some((c) => c.session.queued > 0); k++) frameAll(false);
+  // Part 2: the clock stops; everyone steps what it holds, or still has on the way, up to the last closed turn.
+  for (let k = 0; k < 60 * 60 && live().some((c) => c.session.world.tick < seq.closed); k++) {
     clock.advance(frame);
     for (const c of clients) {
       if (net.isFrozen(c.id)) continue;
@@ -147,14 +150,6 @@ export function runNetMatch(o: NetMatchOptions): NetMatchReport {
     }
   }
   const finals = new Set(clients.map((c) => `${c.session.world.tick}:${fullHash(c.session.world)}`));
-
-  let hashTicks = 0;
-  const mismatches: number[] = [];
-  for (const [t, r] of [...reports].sort((x, y) => x[0] - y[0])) {
-    if (r.size < 2) continue;
-    hashTicks++;
-    if (new Set(r.values()).size > 1 && mismatches.length < 20) mismatches.push(t);
-  }
 
   return {
     seats: clients.map((c, i) => {
@@ -172,10 +167,9 @@ export function runNetMatch(o: NetMatchOptions): NetMatchReport {
       };
     }),
     hashTicks,
-    mismatches,
     desyncs,
     finalAgree: finals.size === 1,
     downBps: downBytes / clients.length / seconds,
-    closed: seq.closed,
+    closed,
   };
 }

@@ -10,22 +10,29 @@ import type { Transport } from './transport';
 /** Time that only moves when told to, running whatever falls due in order. */
 export class VirtualClock {
   now = 0;
+  /** a binary min-heap on (at, n): ties run in the order they were scheduled */
   private q: { at: number; n: number; fn: () => void }[] = [];
   private n = 0;
 
   /** run fn at time t (or at the next advance if t has passed) */
   at(t: number, fn: () => void): void {
+    const q = this.q;
     const e = { at: t, n: this.n++, fn };
-    // keep the queue sorted by (at, n): inserts are near the end in practice
-    let i = this.q.length;
-    while (i > 0 && (this.q[i - 1].at > t || (this.q[i - 1].at === t && this.q[i - 1].n > e.n))) i--;
-    this.q.splice(i, 0, e);
+    let i = q.length;
+    q.push(e);
+    while (i > 0) {
+      const up = (i - 1) >> 1;
+      if (!this.before(e, q[up])) break;
+      q[i] = q[up];
+      i = up;
+    }
+    q[i] = e;
   }
 
   /** move to t, running everything due on the way, in time order */
   advanceTo(t: number): void {
     while (this.q.length && this.q[0].at <= t) {
-      const e = this.q.shift()!;
+      const e = this.pop();
       this.now = Math.max(this.now, e.at);
       e.fn();
     }
@@ -34,6 +41,29 @@ export class VirtualClock {
 
   advance(ms: number): void {
     this.advanceTo(this.now + ms);
+  }
+
+  private before(a: { at: number; n: number }, b: { at: number; n: number }): boolean {
+    return a.at < b.at || (a.at === b.at && a.n < b.n);
+  }
+
+  private pop(): { at: number; n: number; fn: () => void } {
+    const q = this.q;
+    const top = q[0];
+    const last = q.pop()!;
+    if (q.length) {
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1;
+        if (l >= q.length) break;
+        const c = l + 1 < q.length && this.before(q[l + 1], q[l]) ? l + 1 : l;
+        if (!this.before(q[c], last)) break;
+        q[i] = q[c];
+        i = c;
+      }
+      q[i] = last;
+    }
+    return top;
   }
 }
 
@@ -46,6 +76,8 @@ export class VirtualClock {
  *   round trip), and everything behind it waits (head-of-line blocking).
  * - `hostile`: losses drop the message, `dup` sends it twice, and each
  *   copy takes its own delay, so messages overtake each other.
+ *
+ * A `loss` of 1 is a dead link: nothing arrives, in either mode.
  */
 export interface LinkSpec {
   latency: number;
@@ -102,9 +134,9 @@ export class FakeNetwork {
     this.dir(b, a).cuts.push([from, to]);
   }
 
-  /** the peer runs nothing until `until`; what reaches it waits in order */
+  /** the peer runs nothing until `until`; what reaches it waits in order (a later call can extend it) */
   freeze(peer: string, until: number): void {
-    this.frozen.set(peer, until);
+    this.frozen.set(peer, Math.max(until, this.frozen.get(peer) ?? -1));
   }
 
   isFrozen(peer: string): boolean {
@@ -126,6 +158,7 @@ export class FakeNetwork {
         for (const p of net.peers.values()) p.onPeer?.(self, false);
       },
     };
+    for (const p of this.peers.values()) p.onPeer?.(self, true);
     this.peers.set(self, t);
     return t;
   }
@@ -143,13 +176,14 @@ export class FakeNetwork {
     this.sent.set(from, stat);
     const d = this.dir(from, to);
     const s = d.spec;
+    if (s.loss >= 1) return;
     const now = this.clock.now;
     const copy = bytes.slice();
     if (s.mode === 'reliable') {
       let at = now + this.delay(s);
       // each loss costs a retransmit timeout, at least 200 ms like SCTP's floor
       while (this.rng.next() < s.loss) at += Math.max(200, 2 * s.latency);
-      at = this.afterCuts(d, at);
+      at = this.afterCuts(d, now, at);
       at = Math.max(at, d.last);
       d.last = at;
       this.schedule(to, from, copy, at);
@@ -159,36 +193,62 @@ export class FakeNetwork {
     for (let c = 0; c < copies; c++) {
       if (this.rng.next() < s.loss) continue;
       const at = now + this.delay(s);
-      if (d.cuts.some(([a, b]) => at >= a && at < b) || d.cuts.some(([a, b]) => now >= a && now < b)) continue;
+      if (d.cuts.some(([a, b]) => (at >= a && at < b) || (now >= a && now < b))) continue;
       this.schedule(to, from, copy, at);
     }
   }
 
-  private afterCuts(d: Dir, at: number): number {
-    for (const [a, b] of d.cuts) if (at >= a && at < b) at = b + (at - a);
+  /**
+   * Reliable traffic waits out the cuts: one sent during a cut leaves when it
+   * ends, and one that would land in a cut is retransmitted after it. Shifting
+   * past one cut can land in another, so this repeats until nothing moves.
+   */
+  private afterCuts(d: Dir, sent: number, at: number): number {
+    for (let moved = true; moved; ) {
+      moved = false;
+      for (const [a, b] of d.cuts) {
+        if (sent >= a && sent < b) {
+          at += b - sent;
+          sent = b;
+          moved = true;
+        }
+        if (at >= a && at < b) {
+          at = b + (at - a);
+          moved = true;
+        }
+      }
+    }
     return at;
   }
 
+  /** what reaches a frozen peer, waiting in arrival order */
+  private thawQueue = new Map<string, [string, Uint8Array][]>();
+
   private schedule(to: string, from: string, bytes: Uint8Array, at: number): void {
     this.clock.at(at, () => {
+      // anything already waiting goes first, even if this one is due right at the thaw
+      const waiting = this.thawQueue.get(to);
+      if (waiting) {
+        waiting.push([from, bytes]);
+        return;
+      }
       const until = this.frozen.get(to) ?? -1;
       if (until > this.clock.now) {
-        // frozen: wait in line until it thaws (keeping order, after anything already waiting)
-        const thaw = this.thawQueue.get(to) ?? [];
-        thaw.push([from, bytes]);
-        if (thaw.length === 1) {
-          this.thawQueue.set(to, thaw);
-          this.clock.at(until, () => this.thaw(to));
-        }
+        this.thawQueue.set(to, [[from, bytes]]);
+        this.clock.at(until, () => this.thaw(to));
         return;
       }
       this.peers.get(to)?.onMessage?.(from, bytes);
     });
   }
 
-  private thawQueue = new Map<string, [string, Uint8Array][]>();
-
   private thaw(to: string): void {
+    // frozen again for longer since this was scheduled: wait for the new end
+    const until = this.frozen.get(to) ?? -1;
+    if (until > this.clock.now) {
+      this.clock.at(until, () => this.thaw(to));
+      return;
+    }
     const q = this.thawQueue.get(to) ?? [];
     this.thawQueue.delete(to);
     for (const [from, b] of q) this.peers.get(to)?.onMessage?.(from, b);
