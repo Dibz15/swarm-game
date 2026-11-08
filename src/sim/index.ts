@@ -4,7 +4,8 @@ export { step, dominationStatus, keyTarget, type DominationStatus } from './step
 export { bastionRange, supplyCap } from './nests';
 export { bloodCost, siphonWait, surgeCost } from './commands';
 export { defaultMods, type FactionMods, type KindMods } from './mods';
-export { createWorld, type MatchSetup, type PlayerSetup } from './setup';
+export { createWorld, validateSetup, MAX_HUMANS, type MatchSetup, type PlayerSetup } from './setup';
+export { seatToBot, seatToHuman, seatHasBot } from './seats';
 export type { Command } from './commands';
 export { worldHash } from './hash';
 export { fullHash, restoreWorld, serializeWorld, snapshotWorld, type WorldSnap } from './snapshot';

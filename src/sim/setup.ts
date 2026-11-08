@@ -65,8 +65,22 @@ export interface MatchSetup {
   };
 }
 
+/** Most human seats a match can hold: one per player color (#156). */
+export const MAX_HUMANS = NEUTRAL;
+
+/**
+ * Reject setups the sim can't run (#156). Several human seats are fine in
+ * FFA or teams; a Hold the line siege is built around a single human.
+ */
+export function validateSetup(setup: MatchSetup): void {
+  const humans = setup.players.filter((p) => p.human).length;
+  if (humans > MAX_HUMANS) throw new Error(`MatchSetup: ${humans} human seats, at most ${MAX_HUMANS}`);
+  if (setup.siege && humans > 1) throw new Error(`MatchSetup: a siege (Hold the line) takes one human seat, not ${humans}`);
+}
+
 /** The generator's params for a setup's map (thumbnails use this too, so they match the battle). */
 export function mapParamsOf(setup: MatchSetup): MapParams {
+  validateSetup(setup);
   return {
     seed: setup.seed,
     size: setup.size,
@@ -85,6 +99,7 @@ export function mapParamsOf(setup: MatchSetup): MapParams {
 export const START_UNITS = 10;
 
 export function createWorld(setup: MatchSetup): World {
+  validateSetup(setup);
   const map = setup.map ?? generateMap(mapParamsOf(setup));
   const w = new World(setup.seed, map.width, map.height, map.terrain);
   w.domShare = setup.domShare ?? DOMINATION.share[setup.size] ?? 0.7;
@@ -95,6 +110,8 @@ export function createWorld(setup: MatchSetup): World {
   for (const p of setup.players) {
     const f = w.factions[p.faction];
     f.active = true;
+    // A human seat stays `human` even while a bot drives it (#156: a dropped
+    // player's Easy bot, see seats.ts), so win rules keep it the player's faction.
     f.human = p.human;
     f.energy = p.energy ?? 0;
     f.unitCap = p.unitCap ?? 0;
