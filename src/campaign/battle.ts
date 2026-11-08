@@ -2,7 +2,7 @@ import { creature, type Creature } from '../art/creature';
 import { DIFFICULTY, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { PlayerSetup } from '../sim/setup';
 import type { SiegeSetup } from '../sim/siege';
-import { defaultMods } from '../sim/mods';
+import { defaultMods, POWER_LOCK, type FactionMods } from '../sim/mods';
 import type { EventParams } from '../sim/mapgen';
 import { Rng, hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
@@ -39,6 +39,12 @@ export function armyFor(run: RunState, fielded: number[]): { kind: number; count
   const lone = run.perks.includes('lone-wolf');
   const scale = lone ? LONE_WOLF : 1;
   return out.length ? out.map((b) => ({ kind: b.kind, count: Math.round(b.size * scale), vet: lone || veteran(b), brood: b.id })) : [MILITIA];
+}
+
+/** Nova stays locked in the sim until the run unlocks it (#154): the HUD's lock alone wouldn't stop a remote peer. */
+function lockNova(run: RunState, m: FactionMods): FactionMods {
+  if (!run.unlocks.nova) m.lockedPowers |= POWER_LOCK.nova;
+  return m;
 }
 
 /** The match for a run node. Same node, same battle (its seed is fixed). */
@@ -84,7 +90,7 @@ export function nodeSetup(run: RunState, id: number, fielded: number[] = []): Ma
         human: true,
         army: armyFor(run, fielded),
         nestTypes: run.unlocks.nests,
-        mods: modsFor(run.perks, fighters(run.broods, fielded, maxFielded(run))),
+        mods: lockNova(run, modsFor(run.perks, fighters(run.broods, fielded, maxFielded(run)))),
       },
       ...factions.slice(0, n.rivals).map((faction, i): PlayerSetup => {
         const personality = rng.pick(PERSONALITIES);
