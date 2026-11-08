@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { fetchTurn } from '../src/net/ice';
-import { cleanServers, handle, TTL_SECONDS, type Env } from '../workers/turn/src/index';
+import { Budget, CHECK_MS, GRAPHQL_URL, monthRange, STALE_MS } from '../workers/turn/src/budget';
+import { cleanServers, handle as handleWith, TTL_SECONDS, type Env } from '../workers/turn/src/index';
 
 const ORIGIN = 'https://dibz15.github.io';
-const env = (over: Partial<Env> = {}): Env => ({ TURN_KEY_ID: 'key123', TURN_KEY_API_TOKEN: 'tok456', ALLOWED_ORIGINS: `${ORIGIN},http://localhost:5173`, ...over });
+const ACCOUNT = 'a'.repeat(32);
+const env = (over: Partial<Env> = {}): Env => ({
+  TURN_KEY_ID: 'key123',
+  TURN_KEY_API_TOKEN: 'tok456',
+  ALLOWED_ORIGINS: `${ORIGIN},http://localhost:5173`,
+  BUDGET_GB: '800',
+  CF_ACCOUNT_ID: ACCOUNT,
+  CF_ANALYTICS_TOKEN: 'ana789',
+  ...over,
+});
+/** each call with a fresh budget, so nothing is remembered between tests */
+const handle = (r: Request, e: Env, f: typeof fetch) => handleWith(r, e, f, new Budget());
 const req = (path: string, o: { origin?: string | null; method?: string; ip?: string } = {}) => {
   const headers: Record<string, string> = {};
   if (o.origin !== null) headers.Origin = o.origin ?? ORIGIN;
@@ -23,13 +35,22 @@ const UPSTREAM = {
   ],
 };
 
-function upstream(status = 201, body: unknown = UPSTREAM) {
+/** the analytics' answer: this month's egress, as Cloudflare groups it */
+const usage = (...bytes: number[]) => ({ data: { viewer: { accounts: [{ callsTurnUsageAdaptiveGroups: bytes.map((b) => ({ sum: { egressBytes: b } })) }] } }, errors: null });
+
+/** Cloudflare: the TURN API (`calls`), and the analytics (`asked`), 10 GB used unless told otherwise */
+function upstream(status = 201, body: unknown = UPSTREAM, analytics: () => Response | Promise<Response> = () => new Response(JSON.stringify(usage(10e9)))) {
   const calls: { url: string; init: RequestInit }[] = [];
+  const asked: { url: string; init: RequestInit }[] = [];
   const f = (async (url: string, init: RequestInit) => {
+    if (url === GRAPHQL_URL) {
+      asked.push({ url, init });
+      return analytics();
+    }
     calls.push({ url, init });
     return new Response(JSON.stringify(body), { status });
   }) as unknown as typeof fetch;
-  return { f, calls };
+  return { f, calls, asked };
 }
 
 const limiter = (allow: boolean) => ({ limit: async () => ({ success: allow }) });
@@ -82,7 +103,8 @@ describe('TURN credentials Worker (#163)', () => {
     const down = (async () => {
       throw new Error('offline');
     }) as unknown as typeof fetch;
-    expect((await handle(req('/ice?room=abc123def4'), env(), down)).status).toBe(502);
+    // (the budget guard is off here: it would refuse first, analytics unreachable too)
+    expect((await handle(req('/ice?room=abc123def4'), env({ BUDGET_GB: 'off' }), down)).status).toBe(502);
     expect((await handle(req('/ice?room=abc123def4'), env({ TURN_KEY_ID: '' }), upstream().f)).status).toBe(503);
   });
 
@@ -90,6 +112,93 @@ describe('TURN credentials Worker (#163)', () => {
     expect(cleanServers({ iceServers: { urls: ['turn:a:3478', 'turn:a:53'], username: 'u', credential: 'c' } })).toEqual([{ urls: ['turn:a:3478'], username: 'u', credential: 'c' }]);
     expect(cleanServers(null)).toEqual([]);
     expect(cleanServers({ iceServers: [{ urls: 'stun:a:53' }] })).toEqual([]);
+  });
+});
+
+describe('the relay budget (#163)', () => {
+  const at = (iso: string) => Date.parse(iso);
+
+  it('counts the whole account’s TURN egress since the 1st of the month, UTC', async () => {
+    expect(monthRange(at('2026-11-08T23:59:00Z'))).toEqual({ from: '2026-11-01', to: '2026-11-08' });
+    expect(monthRange(at('2026-12-01T00:00:01Z'))).toEqual({ from: '2026-12-01', to: '2026-12-01' });
+    const { f, asked } = upstream(201, UPSTREAM, () => new Response(JSON.stringify(usage(300e9, 450e9))));
+    const v = await new Budget(() => at('2026-11-08T12:00:00Z')).check(env(), f);
+    expect(v).toEqual({ ok: true, usedGB: 750 });
+    const init = asked[0].init;
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer ana789');
+    const q = JSON.parse(init.body as string).query as string;
+    expect(q).toContain(`accountTag: "${ACCOUNT}"`);
+    expect(q).toContain('callsTurnUsageAdaptiveGroups(filter: { date_geq: "2026-11-01", date_leq: "2026-11-08" }');
+    expect(q).toContain('egressBytes');
+  });
+
+  it('stops minting once the month passes the budget, and says when to come back', async () => {
+    const { f, calls } = upstream(201, UPSTREAM, () => new Response(JSON.stringify(usage(801e9))));
+    const res = await handle(req('/ice?room=abc123def4'), env(), f);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Retry-After')).toBe('3600');
+    expect(((await res.json()) as { error: string }).error).toMatch(/budget/);
+    expect(calls.length).toBe(0);
+    // an empty month (no groups yet) is zero, and fine
+    const empty = upstream(201, UPSTREAM, () => new Response(JSON.stringify(usage())));
+    expect((await handle(req('/ice?room=abc123def4'), env(), empty.f)).status).toBe(200);
+  });
+
+  it('a missing or mistyped guard refuses, rather than quietly guarding nothing; "off" turns it off', async () => {
+    for (const over of [{ BUDGET_GB: undefined }, { BUDGET_GB: 'lots' }, { BUDGET_GB: '0' }, { CF_ACCOUNT_ID: '' }, { CF_ACCOUNT_ID: 'not-an-id' }, { CF_ANALYTICS_TOKEN: '' }]) {
+      const { f, calls, asked } = upstream();
+      expect((await handle(req('/ice?room=abc123def4'), env(over), f)).status).toBe(503);
+      expect(calls.length + asked.length).toBe(0);
+    }
+    const { f, asked } = upstream();
+    expect((await handle(req('/ice?room=abc123def4'), env({ BUDGET_GB: 'off', CF_ACCOUNT_ID: undefined, CF_ANALYTICS_TOKEN: undefined }), f)).status).toBe(200);
+    expect(asked.length).toBe(0);
+  });
+
+  it('asks the analytics at most every few minutes, and again in a new month', async () => {
+    let now = at('2026-11-30T23:50:00Z');
+    let used = 100e9;
+    const { f, asked } = upstream(201, UPSTREAM, () => new Response(JSON.stringify(usage(used))));
+    const b = new Budget(() => now);
+    await b.check(env(), f);
+    used = 900e9;
+    now += CHECK_MS - 1;
+    expect(await b.check(env(), f)).toEqual({ ok: true, usedGB: 100 });
+    expect(asked.length).toBe(1);
+    now += 1;
+    expect((await b.check(env(), f)).ok).toBe(false);
+    expect(asked.length).toBe(2);
+    // December: November's 900 GB doesn't count, even before the cache would expire
+    used = 0;
+    now = at('2026-12-01T00:00:30Z');
+    expect(await b.check(env(), f)).toEqual({ ok: true, usedGB: 0 });
+    // many requests at once share one analytics call
+    now += CHECK_MS;
+    await Promise.all([b.check(env(), f), b.check(env(), f), b.check(env(), f)]);
+    expect(asked.length).toBe(4);
+  });
+
+  it('when the analytics fail, trusts a recent answer for a while, then refuses', async () => {
+    let now = at('2026-11-08T12:00:00Z');
+    let fail: 'http' | 'errors' | 'throw' | null = null;
+    const analytics = (): Response | Promise<Response> => {
+      if (fail === 'http') return new Response('{}', { status: 500 });
+      if (fail === 'errors') return new Response(JSON.stringify({ data: null, errors: [{ message: 'not authorized' }] }));
+      if (fail === 'throw') throw new Error('offline');
+      return new Response(JSON.stringify(usage(50e9)));
+    };
+    const { f } = upstream(201, UPSTREAM, analytics);
+    const b = new Budget(() => now);
+    expect((await b.check(env(), f)).ok).toBe(true);
+    for (const how of ['http', 'errors', 'throw'] as const) {
+      fail = how;
+      now += CHECK_MS;
+      expect(await b.check(env(), f)).toEqual({ ok: true, usedGB: 50 });
+    }
+    now = at('2026-11-08T12:00:00Z') + STALE_MS + 1;
+    expect(await b.check(env(), f)).toEqual({ ok: false, reason: 'unknown', usedGB: null });
+    // never heard from at all: refuse
+    expect((await new Budget(() => now).check(env(), f)).ok).toBe(false);
   });
 });
 

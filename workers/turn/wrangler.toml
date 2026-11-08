@@ -11,6 +11,11 @@ enabled = false
 # Pages (main and PR previews share this origin) and local dev.
 ALLOWED_ORIGINS = "https://dibz15.github.io,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173"
 
+# Stop minting credentials once the account's TURN egress this month passes
+# this many GB (Cloudflare's free tier is 1,000 GB; see src/budget.ts). "off"
+# disables the guard.
+BUDGET_GB = "800"
+
 # Rate limits (approximate, per Cloudflare location): each IP, and each room.
 [[ratelimits]]
 name = "LIMIT_IP"
@@ -22,4 +27,6 @@ name = "LIMIT_ROOM"
 namespace_id = "16302"
 simple = { limit = 30, period = 60 }
 
-# Secrets (never in this file): wrangler secret put TURN_KEY_ID / TURN_KEY_API_TOKEN
+# Secrets (never in this file), each set with `wrangler secret put <NAME>`:
+#   TURN_KEY_ID, TURN_KEY_API_TOKEN: the TURN key
+#   CF_ACCOUNT_ID, CF_ANALYTICS_TOKEN: the account, and a token that can read its analytics (budget guard)

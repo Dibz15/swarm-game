@@ -51,18 +51,28 @@ Some pairs of players can't reach each other directly: strict NATs, and often mo
 To deploy it:
 1. In the Cloudflare dashboard, go to **Realtime > TURN Server** and create a TURN key. Note its **key ID** and **API token**.
 2. In `workers/turn/`, run `npm install`, then `npx wrangler login`.
-3. Store the two values as Worker secrets (they never go in the repo):
+3. For the budget guard (below), create an API token that can read usage: **My Profile > API Tokens > Create Token > Custom token**, with the permission **Account > Account Analytics > Read**, limited to your account. Also note your **account ID** (Account home > the account's menu > Copy account ID).
+4. Store all four values as Worker secrets (they never go in the repo):
    ```bash
    npx wrangler secret put TURN_KEY_ID
+   ```
+   ```bash
    npx wrangler secret put TURN_KEY_API_TOKEN
    ```
-4. Run `npx wrangler deploy`. It prints the Worker's URL, e.g. `https://swarm-turn.<you>.workers.dev`.
-5. In the GitHub repo, go to **Settings > Secrets and variables > Actions > Variables** and add `TURN_URL` with that URL. CI builds pass it to the game as `VITE_TURN_URL`. For local dev, put `VITE_TURN_URL=…` in `.env.local`.
+   ```bash
+   npx wrangler secret put CF_ACCOUNT_ID
+   ```
+   ```bash
+   npx wrangler secret put CF_ANALYTICS_TOKEN
+   ```
+5. Run `npx wrangler deploy`. It prints the Worker's URL, e.g. `https://swarm-turn.<you>.workers.dev`.
+6. In the GitHub repo, go to **Settings > Secrets and variables > Actions > Variables** and add `TURN_URL` with that URL. CI builds pass it to the game as `VITE_TURN_URL`. For local dev, put `VITE_TURN_URL=…` in `.env.local`.
 
 What it does and doesn't do:
-- `GET /ice?room=<id>` returns ICE servers whose credentials last 4 hours. Only the game's origins may call it (`ALLOWED_ORIGINS` in `wrangler.toml`), and calls are rate-limited to 10 a minute per IP and 30 per room.
+- `GET /ice?room=<id>` returns ICE servers whose credentials last 2 hours, long enough for a lobby and a match. Only the game's origins may call it (`ALLOWED_ORIGINS` in `wrangler.toml`), and calls are rate-limited to 10 a minute per IP and 30 per room.
 - It logs nothing of its own (`observability` is off). Cloudflare keeps its usual request metrics.
-- **Free tier:** Cloudflare TURN includes 1,000 GB of relayed traffic a month, and a relayed player uses about 1 MB in a 10-minute match (the turn stream is under 1 KB/s). Workers' free plan allows 100,000 requests a day, and a player asks once per room.
+- **Cost:** Cloudflare bills only what the relay sends down to a relayed player, $0.05/GB after a free 1,000 GB a month per account. A relayed player receives about 4 KB/s, almost all of it packet overhead on 30 tiny turn messages a second: about 14 MB an hour, so the free tier covers about 70,000 relayed player-hours a month. Players who can connect directly cost nothing. Workers' free plan allows 100,000 requests a day, and a player asks once per room.
+- **Budget guard:** Cloudflare TURN has no spending cap, and anyone holding a credential could relay anything through it. So the Worker checks the account's TURN egress for the calendar month (UTC) through Cloudflare's analytics, at most every 5 minutes, and stops handing out credentials once it passes `BUDGET_GB` (800 in `wrangler.toml`). Players then fall back to direct connections. Credentials already handed out keep working until they expire, hence the margin below 1,000. If the analytics can't be read for an hour, or the guard isn't configured, it refuses too; set `BUDGET_GB = "off"` to run without it. The analytics are an estimate, not the bill, and Cloudflare's billing month may not start on the 1st, so check the dashboard now and then.
 - If the Worker can't be reached (or isn't set up), players fall back to direct connections. With Hide my IP on, they can't connect at all until it's back.
 
 ### Working offline

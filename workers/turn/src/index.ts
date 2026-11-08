@@ -11,16 +11,20 @@
  *   or the client.
  * - Only the game's own origins may call it (CORS), and calls are
  *   rate-limited per IP and per room.
+ * - It stops minting once the month's relay traffic passes a budget
+ *   (budget.ts): Cloudflare TURN has no spending cap of its own.
  * - It logs nothing of its own.
  *
  * It is the seed of the relay sequencer later (#167).
  */
 
+import { Budget, type BudgetEnv } from './budget';
+
 interface RateLimit {
   limit(o: { key: string }): Promise<{ success: boolean }>;
 }
 
-export interface Env {
+export interface Env extends BudgetEnv {
   TURN_KEY_ID: string;
   TURN_KEY_API_TOKEN: string;
   /** comma-separated origins allowed to ask */
@@ -29,8 +33,12 @@ export interface Env {
   LIMIT_ROOM?: RateLimit;
 }
 
-/** Credentials outlive any match (Cloudflare allows up to 48 h). */
-export const TTL_SECONDS = 4 * 60 * 60;
+/**
+ * Long enough for a lobby and a match, short enough that a leaked credential
+ * is worth little: each one keeps relaying until it expires, budget or not
+ * (Cloudflare allows up to 48 h).
+ */
+export const TTL_SECONDS = 2 * 60 * 60;
 const ROOM = /^[a-z0-9]{6,32}$/;
 
 export interface IceServer {
@@ -62,7 +70,10 @@ export function cleanServers(body: unknown): IceServer[] {
   return out;
 }
 
-export async function handle(req: Request, env: Env, fetchImpl: typeof fetch = fetch): Promise<Response> {
+/** this Worker instance's view of the month's usage */
+const BUDGET = new Budget();
+
+export async function handle(req: Request, env: Env, fetchImpl: typeof fetch = fetch, budget: Budget = BUDGET): Promise<Response> {
   const url = new URL(req.url);
   const origin = req.headers.get('Origin') ?? '';
   const allowed = (env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -78,6 +89,11 @@ export async function handle(req: Request, env: Env, fetchImpl: typeof fetch = f
   if (byIp?.success === false || byRoom?.success === false) return json({ error: 'slow down' }, 429, { ...h, 'Retry-After': '60' });
 
   if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) return json({ error: 'not configured' }, 503, h);
+  const spend = await budget.check(env, fetchImpl);
+  if (!spend.ok) {
+    const error = spend.reason === 'over' ? 'relay budget reached for this month' : spend.reason === 'unknown' ? 'relay usage unknown' : 'budget guard not configured';
+    return json({ error }, 503, spend.reason === 'over' ? { ...h, 'Retry-After': '3600' } : h);
+  }
   let res: Response;
   try {
     res = await fetchImpl(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(env.TURN_KEY_ID)}/credentials/generate-ice-servers`, {
