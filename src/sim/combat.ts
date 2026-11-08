@@ -5,7 +5,12 @@ import { pushFx, removeUnit, UNIT_RETREAT, WILD_HEART, type World } from './worl
 import { colossusSlain } from './events';
 import { heartSlain, heartWard } from './heart';
 
-const MAX_SCAN = 420;
+/**
+ * Most in-range enemies one scan weighs before taking the nearest so far.
+ * Real matches never reach it (the most seen in 50 bot matches was 106);
+ * it only bounds the cost of absurdly dense crowds.
+ */
+const MAX_SCAN = 160;
 
 const TAUNT2 = TRAITS.taunt * TRAITS.taunt;
 const pierceScratch: number[] = [];
