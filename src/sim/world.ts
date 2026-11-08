@@ -473,6 +473,7 @@ export function spawnUnit(
   w.oy[i] = oy;
   w.arrive[i] = arrive;
   w.owner[i] = owner;
+  w.grid.touch(i, owner);
   w.kind[i] = kind;
   w.alive[i] = 1;
   w.state[i] = 0;
