@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Proxy, knobsFor, EXPERT } from '../src/proxy/proxy';
 import { TICK_HZ } from '../src/sim/constants';
 import { worldHash } from '../src/sim/hash';
@@ -32,6 +32,26 @@ function minute(skill = 1) {
 }
 
 describe('human proxy (#29, #37)', () => {
+  it('decides once per period even when ticks are skipped or repeated (a net client catching up)', () => {
+    // how often the once-a-second power decision runs, calling think every `stride` ticks (`twice`: two calls each time)
+    const powers = (stride: number, twice = false) => {
+      const w = createWorld(setup());
+      const p = new Proxy(0, { skill: 1 });
+      const spy = vi.spyOn(p as unknown as { powers: () => void }, 'powers');
+      while (w.tick < 10 * TICK_HZ) {
+        p.think(w);
+        if (twice) p.think(w);
+        for (let k = 0; k < stride; k++) step(w, []);
+      }
+      return spy.mock.calls.length;
+    };
+    const every = powers(1);
+    expect(every).toBe(10); // ticks 0, 30, ..., 270: every stride below passes each of them
+    expect(powers(1, true)).toBe(every);
+    expect(powers(7)).toBe(every);
+    expect(powers(8, true)).toBe(every);
+  });
+
   it('expands like the recordings: a second nest inside the first 30 s, more by a minute', () => {
     const { w, kinds } = minute();
     expect(w.nests.filter((n) => n.owner === 0).length).toBeGreaterThanOrEqual(3);

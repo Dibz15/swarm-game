@@ -304,14 +304,14 @@ class App {
     this.setModal(playtestMenu({ play: (p) => this.startPlaytest(p), back: () => this.showMenu() }));
   }
 
-  // Dev playtests write straight into the world: fine while nothing is networked (#156); gating them for networked sessions is #159.
+  // Dev playtests write straight into the world, outside the sim's command stream: never in a networked match (#159).
   private startPlaytest(p: Playtest): void {
     const scene = p.make(loadPrefs().color);
     if (scene.kind === 'map') return this.showRunMap(scene.run);
     const run = scene.run;
     this.runMove(run, scene.node, run.broods.map((b) => b.id));
     const w = this.game?.world;
-    if (!w) return;
+    if (!w || this.game?.session.net) return;
     if (w.siege && scene.extra === 'ending') {
       // The clock nearly out, and no waves left to come.
       w.siege.until = w.tick + 15 * TICK_HZ;
@@ -622,11 +622,11 @@ class App {
     if (!g || g.result) return;
     g.rec?.pause(g.world, !g.session.paused, performance.now() / 1000);
     if (g.session.paused) {
-      g.session.paused = false;
+      g.session.setPaused(false);
       this.input.enabled = true;
       this.setModal(null);
     } else {
-      g.session.paused = true;
+      g.session.setPaused(true);
       this.input.enabled = false;
       this.input.reset();
       this.setModal(

@@ -14,7 +14,7 @@ import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, 
 import { inArmy, type Nest, type World } from '../sim/world';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
-import { LocalSession } from './session';
+import { LocalSession, type Session } from './session';
 import type { Hint, Lock, MissionRun } from './tutorial';
 
 export interface Services {
@@ -42,7 +42,7 @@ export function localSeat(setup: MatchSetup, seat?: number): number {
 
 /** A match in progress: owns the session, selection and event feedback. */
 export class GameView {
-  readonly session: LocalSession;
+  readonly session: Session;
   /**
    * The local seat (#156): the faction this client plays. With several human
    * seats it is whichever one was passed in; it defaults to the first human.
@@ -115,10 +115,11 @@ export class GameView {
     readonly setup: MatchSetup,
     private readonly s: Services,
     record: { scenario?: string; mobile: boolean } | null = null,
-    opts: { seat?: number } = {},
+    opts: { seat?: number; session?: Session } = {},
   ) {
-    this.session = new LocalSession(setup);
-    this.human = localSeat(setup, opts.seat);
+    // a networked match brings its own session (#159); otherwise play locally
+    this.session = opts.session ?? new LocalSession(setup, localSeat(setup, opts.seat));
+    this.human = this.session.localSeat;
     this.rec = record
       ? new Recorder(setup, this.human, { mobile: record.mobile, touch: matchMedia('(pointer: coarse)').matches, w: innerWidth, h: innerHeight }, record.scenario)
       : null;
