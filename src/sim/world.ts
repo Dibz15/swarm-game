@@ -386,6 +386,10 @@ export class World {
   siege: SiegeState | null = null;
   bots: Bot[] = [];
 
+  /** Swarm-call rings drawn this tick (combat.ts): per world, so restored or parallel worlds don't share it */
+  callFxTick = -1;
+  callFx = 0;
+
   /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
   readonly beams = new Int32Array(MAX_UNITS * 2 + 512);
   beamCount = 0;

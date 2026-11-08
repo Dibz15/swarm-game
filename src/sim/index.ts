@@ -7,4 +7,5 @@ export { defaultMods, type FactionMods, type KindMods } from './mods';
 export { createWorld, type MatchSetup, type PlayerSetup } from './setup';
 export type { Command } from './commands';
 export { worldHash } from './hash';
+export { fullHash, restoreWorld, serializeWorld, snapshotWorld, type WorldSnap } from './snapshot';
 export { queryRadius } from './spatial';

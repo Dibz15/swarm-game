@@ -170,6 +170,14 @@ interface Staged {
   until: number;
 }
 
+/** A bot's mutable state (see `Bot.exportState`). */
+export interface BotState {
+  rng: number;
+  focus: number;
+  staged: Staged[];
+  seen: number[];
+}
+
 /**
  * FFA pile-ons: a rival other players are already attacking is worth less to
  * us. Without this every bot sees the same undefended nests and jumps the same
@@ -221,6 +229,24 @@ export class Bot {
     this.d = cfg.powers === false ? { ...d, powers: false } : d;
     this.p = PERSONALITY[cfg.personality];
     this.choke = cfg.choke ?? this.d.choke;
+  }
+
+  /** Everything that changes as the bot plays, for World snapshots (#155). */
+  exportState(): BotState {
+    return {
+      rng: this.rng.s,
+      focus: this.focus,
+      staged: this.staged.map((s) => ({ ...s, uids: s.uids.slice() })),
+      seen: [...this.seen],
+    };
+  }
+
+  /** Restore what `exportState` saved (the bot must have been built with the same faction and cfg). */
+  importState(s: BotState): void {
+    this.rng.s = s.rng;
+    this.focus = s.focus;
+    this.staged = s.staged.map((st) => ({ ...st, uids: st.uids.slice() }));
+    this.seen = new Set(s.seen);
   }
 
   /** Roll for choke play. Certain odds draw nothing, so bots that never roll keep their rng stream. */

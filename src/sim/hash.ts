@@ -1,6 +1,10 @@
 import type { World } from './world';
 
-/** Checksum of simulation state, for desync detection and tests. */
+/**
+ * Checksum of the main simulation state, for tests and recordings (which
+ * store it, so it must not change). For desync detection use `fullHash` in
+ * snapshot.ts, which covers everything a snapshot holds (RNGs, bots, timers).
+ */
 export function worldHash(w: World): number {
   let h = 2166136261;
   const mix = (v: number) => {
