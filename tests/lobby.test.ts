@@ -8,6 +8,10 @@ import { encodeMsg } from '../src/net/codec';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, PeerGrace, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
 import { DT } from '../src/sim/constants';
+import { fullHash } from '../src/sim/snapshot';
+import { createWorld } from '../src/sim/setup';
+import { ordinal, placingOf } from '../src/game/standing';
+import { removeUnit, type World } from '../src/sim/world';
 
 const FRAME = 1000 / 60;
 
@@ -79,6 +83,12 @@ function room() {
 }
 
 const occupant = (s: LobbyState) => s.rows.map((r) => (r.k === 'human' ? r.peer : r.k));
+
+/** Knock a faction out: its dots gone, its nests unclaimed (the sim then marks it eliminated). */
+function wipe(w: World, f: number): void {
+  for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === f) removeUnit(w, i);
+  for (const n of w.nests) if (n.owner === f) n.owner = -1;
+}
 
 describe('lobby (#162)', () => {
   it('seats guests in open rows, and every guest sees the host’s state', () => {
@@ -326,6 +336,67 @@ describe('lobby to match (#162)', () => {
     expect(lostB).toEqual(['left']);
   });
 
+  it('defeated players watch the rest: they keep stepping and hashing, never go to a bot, and the host keeps running the match (#183)', () => {
+    const { matches, run, h, gs } = play();
+    const seatOf = (id: string) => matches.get(id)!.session.localSeat;
+    const [sH, sA, sB] = [seatOf('H'), seatOf('A'), seatOf('B')];
+    // the same wipe on every peer at the same tick, as a real defeat would be
+    const plan = new Map([[300, sA], [600, sH], [900, 5]]);
+    for (const m of matches.values()) m.session.beforeStep = (t, w) => plan.has(t) && wipe(w, plan.get(t)!);
+    const seen: [number, string][] = [];
+    matches.get('B')!.events.onSeat = (seat, state) => seen.push([seat, state]);
+    const phases = new Set<string>();
+    for (const g of gs) g.lobby.onChange = (s) => phases.add(s.phase);
+    run(1000);
+    const seq = matches.get('H')!.seq!;
+    const judged: number[][] = [];
+    seq.onHashes = (t, m) => judged.push([t, ...[...m.keys()].sort()]);
+
+    run(12_000); // past tick 300: A is out
+    expect(matches.get('A')!.session.world.factions[sA].eliminated).toBe(true);
+    expect(seq.seatState(sA)).toBe('spectating');
+    // still checked: A's hashes are judged with everyone's
+    expect(judged.some(([t, ...seats]) => t > 330 && seats.includes(sA))).toBe(true);
+    // A goes quiet for 10 s (a hidden tab): no away, no Easy bot for a faction that's out
+    const tickA = matches.get('A')!.session.world.tick;
+    run(10_000, ['A']);
+    run(2000);
+    expect(matches.get('A')!.session.world.tick).toBeGreaterThan(tickA);
+    expect(seen.filter(([s]) => s === sA)).toEqual([]);
+
+    // past tick 600 the host is out too, and keeps running the match
+    const closed = seq.closed;
+    run(10_000);
+    expect(seq.seatState(sH)).toBe('spectating');
+    expect(seq.closed).toBeGreaterThan(closed);
+    expect(h.lobby.state.phase).toBe('playing');
+
+    // past 900 B is the last one standing; nobody went back to the lobby on the way
+    run(15_000);
+    const worlds = [...matches.values()].map((m) => m.session.world);
+    for (const w of worlds) expect(w.over).toBe(true);
+    expect(worlds[0].winnerTeam).toBe(worlds[0].teamOf[sB]);
+    expect(phases.has('lobby')).toBe(false);
+    expect(new Set(worlds.map((w) => w.tick)).size).toBe(1);
+    expect(new Set(worlds.map((w) => fullHash(w))).size).toBe(1);
+  });
+
+  it('the host ends the match for everyone, changes a setting, and starts the next one (#183)', () => {
+    const { matches, run, h, gs } = play();
+    run(3000);
+    // End match: the host's room goes back to the lobby; every guest's state follows
+    h.lobby.backToLobby();
+    for (const g of gs) expect(g.lobby.state!.phase).toBe('lobby');
+    for (const m of matches.values()) m.close();
+    h.lobby.setMap({ ...h.lobby.state.map, size: 'medium' });
+    const starts: StartInfo[] = [];
+    for (const g of gs) g.lobby.onStart = (s) => starts.push(s);
+    const setup = h.lobby.start()!;
+    expect(setup.size).toBe('medium');
+    expect(starts.length).toBe(2);
+    for (const s of starts) expect(s.setup).toEqual(setup);
+  });
+
   it('a guest who never says ready doesn’t hold up the start for long', () => {
     const rm = room();
     const h = rm.host();
@@ -421,5 +492,15 @@ describe('holding dropped links (PeerGrace)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('where you finished (#183)', () => {
+  it('places a faction knocked out behind everyone still in', () => {
+    const w = createWorld({ seed: 3, size: 'small', players: [0, 1, 2, 3].map((f) => ({ faction: f, team: f, human: f === 0, ...(f ? { bot: { difficulty: 1, personality: 'expander' as const } } : {}) })) });
+    w.factions[2].eliminated = true; // out earlier
+    w.factions[0].eliminated = true; // out now
+    expect(placingOf(w, 0)).toEqual({ place: 3, of: 4 });
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 103].map(ordinal)).toEqual(['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '103rd']);
   });
 });

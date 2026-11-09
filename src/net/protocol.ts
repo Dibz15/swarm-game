@@ -14,7 +14,7 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;
@@ -34,9 +34,15 @@ export const MAX_SETUP = 256 * 1024;
 /** Largest lobby state a `lobby` carries, as JSON. */
 export const MAX_LOBBY = 16 * 1024;
 
-/** Who drives a human seat right now. */
-export type SeatState = 'human' | 'away' | 'bot';
-export const SEAT_STATES: readonly SeatState[] = ['human', 'away', 'bot'];
+/**
+ * Who drives a human seat right now. `spectating`: its faction is out and
+ * the player watches the rest (#183); it changes nothing in the sim, so it
+ * never travels in a control entry, only in the latency table.
+ */
+export type SeatState = 'human' | 'away' | 'bot' | 'spectating';
+export const SEAT_STATES: readonly SeatState[] = ['human', 'away', 'bot', 'spectating'];
+/** The seat states a control entry can carry: the ones that change who drives the faction. */
+export type CtrlSeatState = Exclude<SeatState, 'spectating'>;
 
 /** One command in a closed turn. `cmd.p === seat`. */
 export interface Entry {
@@ -54,7 +60,7 @@ export interface Entry {
 export type Ctrl =
   | { k: 'pause'; seat: number }
   | { k: 'resume'; seat: number }
-  | { k: 'seat'; seat: number; state: SeatState; bot?: SeatBot };
+  | { k: 'seat'; seat: number; state: CtrlSeatState; bot?: SeatBot };
 
 /** The bot a dropped seat gets: only difficulty and personality travel. */
 export type SeatBot = Pick<BotConfig, 'difficulty' | 'personality'>;

@@ -1,7 +1,7 @@
 import type { Command } from '../sim/commands';
 import { DT } from '../sim/constants';
 import { normalizeCommand, sanitizeCommand, type CommandLimits } from '../sim/sanitize';
-import { MAX_ENTRIES_PER_TURN, MAX_TURNS_PER_MSG, type Ctrl, type Entry, type LatRow, type Msg, type SeatBot, type SeatState, type Turn } from './protocol';
+import { MAX_ENTRIES_PER_TURN, MAX_TURNS_PER_MSG, type Ctrl, type CtrlSeatState, type Entry, type LatRow, type Msg, type SeatBot, type SeatState, type Turn } from './protocol';
 
 /**
  * The Sequencer (#158): the one place that decides which tick each command
@@ -338,7 +338,17 @@ export class Sequencer {
     this.broadcastStatus(now);
   }
 
-  private setState(rec: SeatRec, state: SeatState, now: number): void {
+  /**
+   * This seat's faction is out (#183): the player watches the rest. No
+   * control entry (nothing in the sim changes), no away/bot timers, no
+   * commands; its hashes are still compared while it's heard from.
+   */
+  setSpectating(seat: number): void {
+    const rec = this.seats.get(seat);
+    if (rec) rec.state = 'spectating';
+  }
+
+  private setState(rec: SeatRec, state: CtrlSeatState, now: number): void {
     if (rec.state === state) return;
     rec.state = state;
     if (state === 'away') rec.awayAt = now;
@@ -351,8 +361,10 @@ export class Sequencer {
     let m = this.hashes.get(tick);
     if (!m) this.hashes.set(tick, (m = new Map()));
     m.set(seat, h);
+    // humans, and spectators still here: a defeated player's world is checked too
+    const now = this.clock();
     let expected = 0;
-    for (const r of this.seats.values()) if (r.state === 'human') expected++;
+    for (const r of this.seats.values()) if (r.state === 'human' || (r.state === 'spectating' && now - r.heardAt <= this.opts.awayMs)) expected++;
     if (m.size >= expected) this.judge(tick, m);
   }
 

@@ -153,6 +153,25 @@ export class NetMatch {
       this.seq_.onDesync = (t) => this.events.onDesync?.(t);
     }
     this.seq_?.update();
+    this.markSpectators();
+  }
+
+  /** seats already marked spectating */
+  private out = new Set<number>();
+
+  /**
+   * Host: a seat whose faction is out watches the rest (#183). Read from the
+   * host's own world: every world agrees on who is eliminated, so the
+   * sequencer can stay world-less.
+   */
+  private markSpectators(): void {
+    const seq = this.seq_;
+    if (!seq) return;
+    for (const f of this.session.world.factions) {
+      if (!f.eliminated || this.out.has(f.id) || seq.seatState(f.id) === undefined) continue;
+      this.out.add(f.id);
+      seq.setSpectating(f.id);
+    }
   }
 
   private startHeartbeat(): void {

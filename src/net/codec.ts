@@ -310,7 +310,7 @@ function writeCtrl(w: Writer, c: Ctrl): void {
   seat(w, c.seat);
   if (c.k !== 'seat') return;
   const st = SEAT_STATES.indexOf(c.state);
-  if (st < 0) throw new Error(`codec: bad seat state ${c.state}`);
+  if (st < 0 || c.state === ('spectating' as string)) throw new Error(`codec: bad seat state ${c.state}`);
   // state in the low bits, a has-bot flag above
   w.u8(st | (c.bot ? 4 : 0));
   if (c.bot) {
@@ -327,7 +327,7 @@ function readCtrl(r: Reader): Ctrl {
   if (k !== 'seat') return { k, seat: s };
   const b = r.u8();
   const state = SEAT_STATES[b & 3];
-  if (!state || b > 7) throw new Bad();
+  if (!state || state === 'spectating' || b > 7) throw new Bad();
   if (!(b & 4)) return { k, seat: s, state };
   const bb = r.u8();
   const personality = PERSONALITIES[bb & 3];

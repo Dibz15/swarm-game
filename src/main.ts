@@ -6,6 +6,7 @@ import { GameView, type Services } from './game/gameView';
 import type { EndReason } from './game/recording';
 import { recordingEnabled, saveRecording } from './game/recordStore';
 import { LocalSession } from './game/session';
+import { ordinal } from './game/standing';
 import { loadProgress, MISSIONS, MissionRun, nextMission, saveProgress } from './game/tutorial';
 import { InputController } from './input/controller';
 import { Camera } from './render/camera';
@@ -700,7 +701,9 @@ class App {
     } else {
       const lobby = new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), clock });
       lobby.onChange = (s) => {
-        view.status(s.phase === 'lobby' ? 'Waiting for the host to start the match.' : 'The match is starting…');
+        // back in the lobby while the match was still on: the host ended it (#183)
+        const ended = s.phase === 'lobby' && !!this.match && !this.game?.world.over;
+        view.status(s.phase === 'lobby' ? (ended ? 'The host ended the match. Waiting for the host to start the next one.' : 'Waiting for the host to start the match.') : 'The match is starting…');
         this.renderRoom();
         // the host brought everyone back after a match
         if (s.phase === 'lobby' && this.match) this.backToRoom();
@@ -811,27 +814,80 @@ class App {
     const g = this.game;
     const m = this.match;
     if (!g || !m) return;
+    // only the host stops the match, and not once out of it (#183)
+    const pauses = m.host && !g.spectating;
     if (this.netMenu) {
-      if (m.host) g.session.setPaused(false);
+      if (pauses) g.session.setPaused(false);
       this.closeNetMenu();
       return;
     }
-    if (m.host) g.session.setPaused(true);
+    if (pauses) g.session.setPaused(true);
     this.openNetMenu('user');
+  }
+
+  /** The line that stays on screen while you watch after your defeat (#183). */
+  private updateBanner(g: GameView): void {
+    const h = this.hud;
+    if (!h) return;
+    if (!g.spectating || g.result) return h.banner(null);
+    const p = g.placing;
+    h.banner(`You've been defeated${p ? ` · ${ordinal(p.place)} of ${p.of}` : ''}. Watching the rest of the match.`, [{ label: 'Leave', on: () => this.leaveMatch() }]);
+  }
+
+  /**
+   * Leave a room match. The host runs it for everyone: until hosting can
+   * pass to another player (#166), leaving ends it for all, so ask first.
+   */
+  private leaveMatch(): void {
+    const g = this.game;
+    if (!this.match?.host || !g || g.world.over) return this.leaveRoom();
+    this.confirmNet('Leave the match?', 'You’re hosting: leaving ends the match for everyone. To stop it and keep the room, use End match instead.', 'Leave and end it', () => this.leaveRoom());
+  }
+
+  /** Host (#183): stop the match for everyone and bring them back to the room, to change settings or let someone in. */
+  private endMatch(): void {
+    this.confirmNet('End the match for everyone?', 'Everyone goes back to the room, where you can change the settings or let someone new join, then start again.', 'End match', () => this.backToRoom());
+  }
+
+  /** Host (#183): the same room and settings, from the start. */
+  private restartMatch(): void {
+    this.confirmNet('Restart the match for everyone?', 'Same room, same settings, from the start.', 'Restart', () => {
+      this.backToRoom();
+      (this.room?.lobby as HostLobby | null)?.start();
+    });
+  }
+
+  /** A yes/no card over the match; no goes back to the menu it came from. */
+  private confirmNet(title: string, text: string, yes: string, on: () => void): void {
+    if (!this.mp || !this.game) return;
+    this.netMenu = 'user';
+    this.netNote = null;
+    this.netPlayers = null;
+    this.input.enabled = false;
+    this.setModal(
+      this.mp.messageCard(title, text, [
+        { label: yes, primary: true, on },
+        { label: 'Back', on: () => this.openNetMenu('user') },
+      ]),
+    );
   }
 
   private openNetMenu(kind: 'user' | 'pause'): void {
     const g = this.game!;
     const host = !!this.match?.host;
+    const pauses = host && !g.spectating;
     this.netMenu = kind;
     this.input.enabled = false;
     this.input.reset();
     const m = pauseMenu({
-      title: host || g.session.paused ? 'Paused' : 'Menu',
+      title: pauses || g.session.paused ? 'Paused' : 'Menu',
       note: ' ',
       resume: () => this.toggleNetMenu(),
-      resumeLabel: host ? 'Resume' : 'Back to the match',
-      quit: () => this.leaveRoom(),
+      resumeLabel: pauses ? 'Resume' : 'Back to the match',
+      // the host can stop or restart the match without leaving the room (#183)
+      restart: host ? () => this.restartMatch() : undefined,
+      more: host ? [{ label: 'End match', on: () => this.endMatch() }] : undefined,
+      quit: () => this.leaveMatch(),
       quitLabel: 'Leave match',
       audio: this.sfx,
       teams: teamLayout(g.world, g.human).team ? teamsList(g.world, g.human) : undefined,
@@ -872,7 +928,8 @@ class App {
       if (st?.paused && st.resumeIn >= 0) text = `Resuming in ${Math.max(1, Math.ceil((st.resumeIn - since) / 1000))}…`;
       else if (st?.paused) text = `${host ? 'The match is paused for everyone' : 'The host paused the match'}. It resumes by itself in ${secs(st.auto)}.`;
       else text = host ? 'The match is paused for everyone.' : 'The host paused the match.';
-    } else text = host ? 'Pausing…' : 'The match keeps going while this menu is open.';
+    } else if (g.spectating) text = 'You’re out. The match keeps going while this menu is open.';
+    else text = host ? 'Pausing…' : 'The match keeps going while this menu is open.';
     if (n.textContent !== text) n.textContent = text;
     n.hidden = false;
     const lat = this.match?.session.lat;
@@ -889,7 +946,7 @@ class App {
     const me = this.game?.human;
     const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
     const rows = lat.map((r) => {
-      const tag = r.state === 'away' ? ' <small>away</small>' : r.state === 'bot' ? ' <small>bot playing</small>' : '';
+      const tag = r.state === 'away' ? ' <small>away</small>' : r.state === 'bot' ? ' <small>bot playing</small>' : r.state === 'spectating' ? ' <small>watching</small>' : '';
       const cls = r.delay >= 300 ? 'bad' : r.delay >= 150 ? 'warn' : '';
       return `<tr><td><i style="background:${FACTION_HEX[r.seat]}"></i>${esc(this.seatName(r.seat))}${r.seat === me ? ' (you)' : ''}${tag}</td><td>${r.rtt} ms</td><td class="${cls}">${r.delay} ms</td></tr>`;
     });
@@ -940,7 +997,7 @@ class App {
     this.quick = null;
     this.run = null;
     const record = opts.record !== false && recordingEnabled();
-    this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null, { seat: opts.seat, session: this.match?.session });
+    this.game = new GameView(setup, this.services, record ? { scenario: opts.scenario, mobile: isMobile() } : null, { seat: opts.seat, session: this.match?.session, spectate: !!(this.match && this.room) });
     if (this.match) {
       this.match.events = {
         onSeat: (seat, state) => {
@@ -978,6 +1035,7 @@ class App {
       next: () => this.game?.nextStep(),
     });
     this.hud.setMuted(this.sfx.muted);
+    if (this.room) this.hud.names = (f) => this.seatName(f);
     this.applyInsets();
     if (record) this.hud.toast(opts.scenario ? `Recording: ${opts.scenario}` : 'Recording this match', '#8aa0b8');
     // Open on the player's home, zoomed in a little.
@@ -1218,6 +1276,7 @@ class App {
       if (g.result) this.saveRec(g.result, true);
       this.hud?.update(g, dt);
       this.hud?.syncPending(g);
+      this.updateBanner(g);
       this.applyInsets();
       this.updateDemo(g, dt);
       g.render(this.time);

@@ -108,6 +108,12 @@ export class NetSession implements Session {
   onReject: ((seq: number, why: OrderFail) => void) | null = null;
   /** each fullHash this client reports, as it reports it */
   onHash: ((tick: number, hash: number) => void) | null = null;
+  /**
+   * Called just before tick `tick` steps, after its control entries: tests
+   * (and dev flags) change every peer's world the same way at the same tick,
+   * or one peer's to force a desync.
+   */
+  beforeStep: ((tick: number, w: World) => void) | null = null;
   /** a control entry applied (a pause, a resume, a seat going away or to a bot), as the step before `tick` runs */
   onCtrl: ((tick: number, ctrl: Ctrl) => void) | null = null;
 
@@ -328,6 +334,7 @@ export class NetSession implements Session {
       cmds.push(e.cmd);
       this.log.push({ tick: t, cmd: e.cmd });
     }
+    this.beforeStep?.(t, w);
     const fx = w.fx.length;
     const t0 = performance.now();
     step(w, cmds);

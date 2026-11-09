@@ -805,6 +805,8 @@ export function pauseMenu(h: {
   note?: string;
   resumeLabel?: string;
   players?: string;
+  /** more buttons after Restart (a room host's End match, #183) */
+  more?: { label: string; on: () => void }[];
 }): HTMLDivElement {
   const m = el(`
     <div class="screen modal dim">
@@ -814,6 +816,7 @@ export function pauseMenu(h: {
         <div class="menu-buttons">
           <button class="primary" data-a="resume">${h.resumeLabel ?? 'Resume'}</button>
           ${h.restart ? '<button data-a="restart">Restart match</button>' : ''}
+          ${(h.more ?? []).map((b, i) => `<button data-more="${i}">${b.label}</button>`).join('')}
           <button data-a="quit">${h.quitLabel ?? 'Quit to menu'}</button>
         </div>
         ${h.players ? `<h3>Players</h3>${h.players}` : ''}
@@ -829,6 +832,7 @@ export function pauseMenu(h: {
   showControls();
   m.querySelector('[data-a=resume]')!.addEventListener('click', h.resume);
   if (h.restart) m.querySelector('[data-a=restart]')!.addEventListener('click', h.restart);
+  (h.more ?? []).forEach((b, i) => m.querySelector(`[data-more="${i}"]`)!.addEventListener('click', b.on));
   m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
   return m;
 }
