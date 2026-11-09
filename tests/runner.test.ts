@@ -82,6 +82,13 @@ describe('ranking by links (#190)', () => {
     expect(worthMoving(400, 330)).toBe(true);
   });
 
+  it('never hands off to a player it doesn’t know', () => {
+    const { matches, run } = uneven();
+    run(1000);
+    expect(matches.get('H')!.handOff({ to: 'nobody', stay: true })).toBe(false);
+    expect(matches.get('H')!.runner).toBe(true);
+  });
+
   it('gives each seat its own takeover epoch, so two claimants never tie', () => {
     const e = new Set([0, 1, 2, 3, 4, 5].map((s) => epochFor(3, s)));
     expect(e.size).toBe(6);
@@ -227,5 +234,87 @@ describe('the host keeps the controls (#190)', () => {
     const { common, bad } = agree();
     expect(common).toBeGreaterThan(3);
     expect(bad).toBe(0);
+  });
+
+  it('a host frozen without its connection dropping hands the host role to whoever runs the match', () => {
+    const { matches, run } = uneven();
+    run(10_000);
+    const b = matches.get('B')!;
+    expect(b.runner).toBe(true);
+    run(8000, ['H']);
+    expect(b.host).toBe(true);
+    expect(matches.get('A')!.ownerSeat).toBe(b.session.localSeat);
+  });
+
+  it('a host who also runs the match and goes silent (its connection never reported down): the one elected takes both', () => {
+    const r = play({ guests: ['A', 'B'], bot: false });
+    r.run(5000);
+    expect(r.matches.get('H')!.runner).toBe(true);
+    r.kill('H');
+    r.matches.delete('H');
+    r.run(10_000);
+    const next = ['A', 'B'].map((id) => r.matches.get(id)!).find((m) => m.runner)!;
+    expect(next).toBeDefined();
+    expect(next.host).toBe(true);
+  });
+
+  it('a host who resyncs before the report is in: done once it is', () => {
+    const { matches, run } = uneven();
+    run(10_000);
+    const c = matches.get('C')!, h = matches.get('H')!;
+    const t0 = c.session.world.tick + 30;
+    c.session.beforeStep = (t, w) => void (t === t0 && nudgeWorld(w));
+    for (let i = 0; i < 400 && h.session.halted < 0; i++) run(50);
+    expect(h.session.halted).toBeGreaterThan(0);
+    h.requestResync();
+    run(15_000);
+    for (const m of matches.values()) {
+      expect(m.session.halted).toBe(-1);
+      expect(m.session.paused).toBe(false);
+    }
+  });
+});
+
+describe('moving the sequencer (#190)', () => {
+  it('doesn’t mark the player who handed it over away', () => {
+    const { matches, run } = uneven();
+    const seen: [number, string][] = [];
+    matches.get('A')!.events.onSeat = (seat, state) => seen.push([seat, state]);
+    run(15_000);
+    expect(matches.get('B')!.runner).toBe(true);
+    expect(seen).toEqual([]);
+  });
+
+  it('tries again when the player the host chose can’t take it yet', () => {
+    const { matches, run } = uneven({ runner: 'A' });
+    const a = matches.get('A')!;
+    a.setHidden(true);
+    run(12_000);
+    expect(a.runner).toBe(false);
+    a.setHidden(false);
+    run(5000);
+    expect(a.runner).toBe(true);
+  });
+
+  it('after a takeover by election, moves on to whoever is now best placed', () => {
+    const r = uneven();
+    r.run(10_000);
+    expect(r.matches.get('B')!.runner).toBe(true);
+    // the links change, then the runner vanishes before a new ranking is out
+    r.lag('H', 'A', 40);
+    r.lag('H', 'C', 300);
+    r.lag('A', 'C', 40);
+    r.kill('B');
+    r.matches.delete('B');
+    r.run(20_000);
+    expect(r.matches.get('A')!.runner).toBe(true);
+  });
+
+  it('a rejoiner whose snapshot request beats the host’s word to the runner is served at once', () => {
+    const { matches, run, reload } = uneven();
+    run(10_000);
+    reload('A', 'A2');
+    run(1500);
+    expect(matches.get('A2')!.session.syncing).toBe(false);
   });
 });

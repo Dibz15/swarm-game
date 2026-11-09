@@ -155,11 +155,20 @@ export const RANK_MS = 10_000;
 export const SETTLE_MS = 3000;
 /** …and how long it waits for everyone's measurements before deciding without them */
 export const SETTLE_WAIT_MS = 8000;
+/** …and how long after that it keeps trying to hand over, when the one it chose can't take it yet (hidden, syncing) */
+export const SETTLE_TRY_MS = 30_000;
+/**
+ * The host silent this long, page not hidden (a frozen tab, a link the
+ * transport never reports down): whoever runs the match becomes host (#190)
+ */
+export const OWNER_QUIET_MS = 5000;
 /** a better runner must beat the current one's worst round trip by this much, ms, and by RANK_GAIN of it (#190) */
 export const RANK_MARGIN_MS = 20;
 export const RANK_GAIN = 0.15;
 /** scores within about this of each other count as a tie, ms (#190): measurement noise never reorders the ranking */
 const RANK_STEP_MS = 25;
+/** a desync report with no agreed world to resync from */
+const NO_WORLD = 'no world to compare with came in';
 /** what an unmeasured link counts as, ms (#190) */
 const UNKNOWN_MS = 1000;
 /** what a phone, and a link on mobile data, add to a runner's score, ms (#190) */
@@ -273,12 +282,17 @@ export class NetMatch {
   /** round-trip samples to each peer, ms, newest last */
   private samples = new Map<string, number[]>();
   private linksAt = -Infinity;
-  /** runner: each seat's reported round trips to the others, and when */
+  /** runner: each seat's reported round trips to the others*/
   private reports = new Map<number, { at: number; rtt: Map<number, number> }>();
   private rankAt = -Infinity;
   /** runner, at the start: when to look for a better-placed runner (-1: done), and the latest we wait for everyone's links */
   private settleAt = -1;
   private settleBy = -1;
+  private settleEnd = -1;
+  /** runner: the host asked for a resync before the desync report was ready (#190) */
+  private resyncAsked = false;
+  /** runner: rejoiners who asked for a snapshot before the host told us their new connection (#190) */
+  private snapWait = new Set<string>();
 
   // ---- desyncs (#165)
   private readonly snaps: SnapAssembler;
@@ -372,8 +386,7 @@ export class NetMatch {
     if (cfg.leader === remote.self) {
       // a few seconds in, once links are measured: is someone better placed to run it? (#190)
       if (!cfg.resume) {
-        m.settleAt = m.started + SETTLE_MS;
-        m.settleBy = m.started + SETTLE_WAIT_MS;
+        m.settleFrom(m.started);
       }
       m.leading_ = true;
       m.makeSeq = () =>
@@ -535,6 +548,8 @@ export class NetMatch {
       this.seq_?.bindPeer(seat, peer);
       // they missed the ranking in the log before their snapshot
       if (this.rank) this.seq_?.addCtrl({ k: 'rank', seats: this.rank.slice() });
+      // their snapshot request may have beaten the host's word here (another channel)
+      if (this.snapWait.delete(peer)) this.serveSnap(peer, 0);
     } else if (this.host) this.remote.send(this.leaderId, encodeMsg({ k: 'rebind', seat, peer }));
   }
 
@@ -561,9 +576,10 @@ export class NetMatch {
     if (!this.leading_ || !seq || !remote) return false;
     const now = this.clock();
     const succ = o.to ?? this.successor(now);
-    if (!succ || succ === this.self || this.gone.has(succ) || !this.canHost(succ, now)) return false;
+    const seat = succ ? this.seatOf(succ) : -1;
+    if (!succ || seat < 0 || succ === this.self || this.gone.has(succ) || !this.canHost(succ, now)) return false;
     seq.sendRange(succ, seq.ackOf(succ) + 1, seq.closed);
-    const epoch = epochFor(Math.floor(this.epoch / 8) + 1, this.seatOf(succ));
+    const epoch = epochFor(Math.floor(this.epoch / 8) + 1, seat);
     const state = JSON.stringify(seq.exportState());
     // no longer ours before it goes out: whatever answers it finds us a follower
     this.stepDown();
@@ -738,7 +754,9 @@ export class NetMatch {
   private serveSnap(peer: string, tick: number): void {
     const seq = this.seq_;
     const seat = seq?.seatOfPeer(peer) ?? -1;
-    if (!seq || seat < 0 || tick !== 0) return;
+    if (!seq || tick !== 0) return;
+    // a rejoiner the host hasn't told us about yet (#190): served once it does
+    if (seat < 0) return void (this.remote && this.snapWait.add(peer));
     const w = this.session.world;
     const meta = { tick: w.tick, pausedBy: this.session.pausedSeat, seqBase: seq.seatSeq(seat) };
     settle(
@@ -802,10 +820,31 @@ export class NetMatch {
     const report = analyzeDesync(c.tick, c.hashes, c.odd, c.got, this.mySeat);
     this.report = report;
     this.events.onDesyncReport?.(report);
-    const text = report.first ?? (report.ref < 0 ? 'no world to compare with came in' : 'no field differs (only the hash)');
+    const text = report.first ?? (report.ref < 0 ? NO_WORLD : 'no field differs (only the hash)');
     for (const s of c.seats) {
       const peer = this.seq_?.peerOfSeat(s);
       if (peer && peer !== HOST_SELF) this.seqSend(peer, { k: 'desync', tick: c.tick, text });
+    }
+    // the host asked while we were still collecting (#190)
+    if (this.resyncAsked) {
+      const host = this.peers.find((p) => p.seat === this.owner)?.peer;
+      if (host) this.askedResync(host);
+    }
+  }
+
+  /**
+   * Runner: the host asked for a resync (#190). Done now if we can; if the
+   * report is still coming, once it's in; if there's no agreed world, the
+   * host is told why (on its card), and can resume instead.
+   */
+  private askedResync(host: string): void {
+    this.resyncAsked = false;
+    if (this.resync()) return;
+    const r = this.report;
+    if (!r && this.collect) this.resyncAsked = true;
+    else if (host !== this.self) {
+      const tick = r?.tick ?? this.session.halted;
+      this.remote?.send(host, encodeMsg({ k: 'desync', tick, text: r ? NO_WORLD : 'nothing to resync from' }));
     }
   }
 
@@ -874,35 +913,65 @@ export class NetMatch {
   }
 
   /**
-   * Runner (#190): publish the ranking when it changes (at most every
-   * RANK_MS), and a few seconds into the match, hand the sequencer to a
-   * better-placed player; take over as host when the host left.
+   * Runner (#190): take over as host when the host left; publish the
+   * ranking when it changes (looked at every RANK_MS); and, a few seconds
+   * after taking over, hand the sequencer to a better-placed player.
    */
   private runnerChores(now: number): void {
     const seq = this.seq_;
     if (!seq) return;
-    const host = this.peers.find((p) => p.seat === this.owner);
-    const hostLeft = !host || (this.gone.has(host.peer) && now - (this.goneAt.get(host.peer) ?? now) >= BYE_WAIT_MS);
-    if (this.owner !== this.mySeat && hostLeft) {
+    if (this.owner !== this.mySeat && this.hostLeft(now)) {
       // ours at once (a halted or paused match closes no turns: someone must be able to resume it); the rest hear it in the log
       seq.addCtrl({ k: 'owner', seat: this.mySeat });
       this.setOwner(this.mySeat);
     }
-    const settling = this.settleAt >= 0 && now >= this.settleAt;
-    if (!settling && now - this.rankAt < RANK_MS) return;
-    const { order, live } = this.measuredRank(now);
-    if (settling) {
-      const others = live.filter((p) => p.peer !== this.self);
-      const measured = others.every((p) => this.rttBetween(this.mySeat, p.seat, now) !== undefined && this.reports.has(p.seat));
-      if (!measured && now < this.settleBy) return;
-      this.settleAt = -1;
-    }
-    if (!this.rank || order.some((s, i) => s !== this.rank![i])) {
-      this.rankAt = now;
-      seq.addCtrl({ k: 'rank', seats: order });
-    }
-    if (!settling) return;
-    // the host's choice, if they're here; else the best-placed, if it's worth the move
+    if (now - this.rankAt >= RANK_MS) this.publishRank(now);
+    if (this.settleAt >= 0 && now >= this.settleAt) this.settle(now);
+  }
+
+  /**
+   * The host is gone (#190): its connection dropped, or it has been silent
+   * a while with its page shown (frozen, or a link the transport never
+   * reports down). A hidden host stays host.
+   */
+  private hostLeft(now: number): boolean {
+    const host = this.peers.find((p) => p.seat === this.owner);
+    if (!host) return true;
+    if (host.peer === this.self) return false;
+    if (this.gone.has(host.peer)) return now - (this.goneAt.get(host.peer) ?? now) >= BYE_WAIT_MS;
+    const b = this.beats.get(host.peer);
+    return !b?.hidden && now - (b?.at ?? this.started) >= OWNER_QUIET_MS;
+  }
+
+  /** Rank the players by their links and publish it if it changed (#190). */
+  private publishRank(now: number): { order: number[]; live: MatchPeer[] } {
+    this.rankAt = now;
+    const r = this.measuredRank(now);
+    if (!this.rank || r.order.some((s, i) => s !== this.rank![i])) this.seq_?.addCtrl({ k: 'rank', seats: r.order });
+    return r;
+  }
+
+  /** Look for a better-placed runner from `at` on: a match's start, or a takeover (#190). */
+  private settleFrom(at: number): void {
+    this.settleAt = at + SETTLE_MS;
+    this.settleBy = at + SETTLE_WAIT_MS;
+    this.settleEnd = this.settleBy + SETTLE_TRY_MS;
+  }
+
+  /**
+   * Runner (#190): the host's choice runs the match, if they're here; else
+   * the best-placed player, if it's worth the move. Once everyone's links
+   * are in (or we've waited long enough); tried again while the one chosen
+   * can't take it yet, until SETTLE_TRY_MS.
+   */
+  private settle(now: number): void {
+    this.settleAt = now + BEAT_MS;
+    if (now >= this.settleEnd) return void (this.settleAt = -1);
+    if (this.session.halted >= 0) return;
+    const others = this.peers.filter((p) => p.peer !== this.self && !this.gone.has(p.peer));
+    const measured = others.every((p) => this.rttBetween(this.mySeat, p.seat, now) !== undefined && this.reports.has(p.seat));
+    if (!measured && now < this.settleBy) return;
+    const { order, live } = this.publishRank(now);
     const pinned = this.pin !== undefined ? live.find((p) => p.seat === this.pin) : undefined;
     let to: MatchPeer | undefined;
     if (pinned) to = pinned.peer === this.self ? undefined : pinned;
@@ -912,7 +981,8 @@ export class NetMatch {
       const rtt: RttOf = (a, b) => this.rttBetween(a, b, now);
       if (best && best.peer !== this.self && worthMoving(runnerScore(me, live, rtt), runnerScore(best, live, rtt))) to = best;
     }
-    if (to) this.handOff({ to: to.peer, stay: true });
+    // nobody better: done. Else done once it's handed over; until then, again shortly
+    if (!to || this.handOff({ to: to.peer, stay: true })) this.settleAt = -1;
   }
 
   /** The match has a new host (#190): only they may pause now. */
@@ -1002,7 +1072,7 @@ export class NetMatch {
         return;
       }
       case 'ask':
-        if (this.leading_ && this.seatOf(peer) === this.owner && m.what === 'resync') this.resync();
+        if (this.leading_ && this.seatOf(peer) === this.owner && m.what === 'resync') this.askedResync(peer);
         return;
       case 'rebind':
         if (this.leading_ && this.seatOf(peer) === this.owner && m.seat !== this.owner) this.rebind(m.seat, m.peer);
@@ -1102,12 +1172,17 @@ export class NetMatch {
     this.leading_ = true;
     this.leaderId = this.self;
     this.rankAt = this.clock();
+    // taken over by election (#190): whoever claimed first may not be the best placed (two claimed at once, or
+    // rankings differed): look again a few seconds in, as at a match's start. Handed over: chosen already
+    if (handed) this.settleAt = -1;
+    else this.settleFrom(this.clock());
     this.epoch = epoch;
     this.forkAt = next;
     this.adoptSeq(seq);
     this.out.clear();
-    // the old host's seat: away now, then the room's bot policy
-    if (old !== this.self) seq.peerLost(old);
+    // the old host's seat: away now, then the room's bot policy; unless it handed over and plays on (#190).
+    // One that handed over on its way out drops off the mesh, and that's when its seat goes away
+    if (old !== this.self && (!handed || this.gone.has(old))) seq.peerLost(old);
     this.session.follow(this.self, epoch, next);
     // our own turns come in-process now: no network jitter to buffer against (#198)
     this.session.setFixedBuffer(HOST_BUFFER);
@@ -1148,6 +1223,8 @@ export class NetMatch {
     // turns come over the network again: measure the buffer from their jitter
     this.session.setFixedBuffer(null);
     this.collect = null;
+    this.resyncAsked = false;
+    this.snapWait.clear();
     this.beat?.terminate();
     this.beat = null;
   }

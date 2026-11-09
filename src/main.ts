@@ -756,7 +756,7 @@ class App {
           seed: hosted?.seed ?? randomSeed(),
           clock,
           mobile: isMobile(),
-      cell: onCellData(),
+          cell: onCellData(),
           ownToken: seatToken(id),
           takeOver: hosted ? { state: hosted, connected: [], reclaim: true } : undefined,
         }),
@@ -916,7 +916,7 @@ class App {
       seed: st.seed,
       clock: () => performance.now(),
       mobile: isMobile(),
-      cell: onCellData(),
+          cell: onCellData(),
       ownToken: seatToken(r.id),
       takeOver: { state: st, connected, tokens },
     });
@@ -979,7 +979,7 @@ class App {
       seed: old.state!.seed,
       clock: () => performance.now(),
       mobile: isMobile(),
-      cell: onCellData(),
+          cell: onCellData(),
       takeOver: { state: old.state!, connected: m.livePeers() },
     });
     r.lobby = this.wireHostLobby(lobby);
