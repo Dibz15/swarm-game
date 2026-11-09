@@ -29,6 +29,8 @@ export interface PeerSpec {
   skill?: number;
   /** [from, to) ms windows where this peer runs nothing (a background tab) */
   freeze?: [number, number][];
+  /** this peer's own session options, over the match's `net` (the host's own client: a fixed buffer, #198) */
+  net?: Partial<NetSessionOptions>;
 }
 
 export interface NetMatchOptions {
@@ -104,7 +106,7 @@ export function runNetMatch(o: NetMatchOptions): NetMatchReport {
       transport: net.transport(id),
       host: 'host',
       clock: () => clock.now,
-      opts: { stepCostMs: o.stepCostMs ?? 1, ...o.net },
+      opts: { stepCostMs: o.stepCostMs ?? 1, ...o.net, ...p.net },
     });
     const effects: number[] = [];
     session.onEffect = (_s, ms) => effects.push(ms);

@@ -1297,10 +1297,20 @@ class App {
     const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
     const rows = lat.map((r) => {
       const tag = r.state === 'away' ? ' <small>away</small>' : r.state === 'bot' ? ' <small>bot playing</small>' : r.state === 'spectating' ? ' <small>watching</small>' : '';
-      const cls = r.delay >= 300 ? 'bad' : r.delay >= 150 ? 'warn' : '';
-      return `<tr><td><i style="background:${FACTION_HEX[r.seat]}"></i>${esc(this.seatName(r.seat))}${r.seat === me ? ' (you)' : ''}${tag}</td><td>${r.rtt} ms</td><td class="${cls}">${r.delay} ms</td></tr>`;
+      const cls = r.delay >= 350 ? 'bad' : r.delay >= 200 ? 'warn' : '';
+      // what the delay is made of (#198): the network, the turn it's scheduled for, evening out PvP, smoothing out jitter
+      const tick = 1000 / TICK_HZ;
+      const ms = (ticks: number) => Math.round(ticks * tick);
+      const parts = `${r.rtt} ms network + ${ms(r.d - r.hold)} ms scheduling + ${ms(r.buffer)} ms smoothing${r.hold ? ` + ${ms(r.hold)} ms evening out (PvP)` : ''}`;
+      return `<tr><td><i style="background:${FACTION_HEX[r.seat]}"></i>${esc(this.seatName(r.seat))}${r.seat === me ? ' (you)' : ''}${tag}</td><td>${r.rtt} ms</td><td class="${cls}" title="${parts}">${r.delay} ms</td></tr>`;
     });
-    return `<table class="lat"><thead><tr><th></th><th>Round trip</th><th>Order delay</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    // phones can't hover: say what our own delay is made of under the table
+    const mine = lat.find((r) => r.seat === me);
+    const tick = 1000 / TICK_HZ;
+    const why = mine
+      ? `<p class="hint lat-why">Your orders: ${mine.rtt} ms network, ${Math.round((mine.d - mine.hold) * tick)} ms scheduling, ${Math.round(mine.buffer * tick)} ms smoothing${mine.hold ? `, ${Math.round(mine.hold * tick)} ms evening out with a slower rival` : ''}.</p>`
+      : '';
+    return `<table class="lat"><thead><tr><th></th><th>Round trip</th><th>Order delay</th></tr></thead><tbody>${rows.join('')}</tbody></table>${why}`;
   }
 
   private startDemo(): void {

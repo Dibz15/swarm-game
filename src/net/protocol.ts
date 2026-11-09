@@ -14,7 +14,7 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;
@@ -82,12 +82,20 @@ export interface Turn {
   ctrl?: Ctrl[];
 }
 
-/** One seat's connection, as the sequencer sees it (#161): round trip, and order-to-effect delay, ms. */
+/**
+ * One seat's connection, as the sequencer sees it (#161): round trip, and
+ * order-to-effect delay, ms; and what the delay is made of (#198), ticks:
+ * scheduling `d` (of which `hold` evens out PvP delays), and the seat's
+ * jitter buffer.
+ */
 export interface LatRow {
   seat: number;
   state: SeatState;
   rtt: number;
   delay: number;
+  d: number;
+  hold: number;
+  buffer: number;
 }
 
 export interface SeatInfo {

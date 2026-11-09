@@ -60,7 +60,7 @@ describe('wire codec (#157)', () => {
       { k: 'lead', epoch: 23, next: 12346 },
       { k: 'handoff', epoch: 22, state: JSON.stringify({ epoch: 22, next: 900, pending: [], ctrlNext: [], seats: [], pause: null }) },
       { k: 'snap', tick: 900, part: 3, of: 40, bytes: new Uint8Array([1, 2, 3]) },
-      { k: 'lat', rows: [{ seat: 0, state: 'human', rtt: 12, delay: 145 }, { seat: 4, state: 'away', rtt: 340, delay: 610 }, { seat: 2, state: 'spectating', rtt: 80, delay: 200 }] },
+      { k: 'lat', rows: [{ seat: 0, state: 'human', rtt: 12, delay: 145, d: 3, hold: 2, buffer: 1 }, { seat: 4, state: 'away', rtt: 340, delay: 610, d: 1, hold: 0, buffer: 8 }, { seat: 2, state: 'spectating', rtt: 80, delay: 200, d: 1, hold: 0, buffer: 2 }] },
       { k: 'lat', rows: [] },
       { k: 'refuse', reason: 'build mismatch: refresh the page' },
       { k: 'seats', you: 1, table: [{ seat: 0, team: 0, name: 'host', state: 'human' }, { seat: 3, team: 1, name: '', state: 'bot' }] },

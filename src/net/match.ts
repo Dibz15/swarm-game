@@ -95,6 +95,19 @@ const MESH = new Set<MsgKind>(['beat', 'claim', 'lead', 'handoff']);
 const SEQ_OUT = new Set<MsgKind>(['turns', 'status', 'lat', 'pong', 'snap', 'snapreq', 'desync']);
 
 export const BEAT_MS = 500;
+/**
+ * The host's own session holds one turn (#198): its turns come in-process,
+ * with no network jitter, so it never needs more; with none, its steps fall
+ * out of phase with the turn clock and stutter.
+ */
+const HOST_BUFFER = 1;
+/**
+ * The heartbeat that closes turns while hosting, ms (#198): often enough
+ * that a turn goes out within a few ms of its time, even when frames are
+ * slow; a beat with nothing due costs next to nothing.
+ */
+const CLOCK_MS = 8;
+
 /** a player beat within this is alive */
 export const ALIVE_MS = 2000;
 /** no word from the host this long: suspect it */
@@ -236,7 +249,8 @@ export class NetMatch {
   static create(remote: Transport, cfg: MatchConfig): NetMatch {
     const clock = cfg.clock ?? (() => performance.now());
     const m = new NetMatch({
-      session: (port) => new NetSession({ setup: cfg.setup, seat: cfg.seat, transport: port, host: cfg.leader, clock, opts: cfg.net, resume: cfg.resume }),
+      session: (port) =>
+        new NetSession({ setup: cfg.setup, seat: cfg.seat, transport: port, host: cfg.leader, clock, opts: { ...cfg.net, ...(cfg.leader === remote.self ? { fixedBuffer: HOST_BUFFER } : {}) }, resume: cfg.resume }),
       remote,
       seat: cfg.seat,
       peers: cfg.peers,
@@ -526,7 +540,7 @@ export class NetMatch {
   private startHeartbeat(): void {
     if (this.beat || typeof Worker === 'undefined' || typeof Blob === 'undefined') return;
     try {
-      const url = URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 33);'], { type: 'text/javascript' }));
+      const url = URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${CLOCK_MS});`], { type: 'text/javascript' }));
       this.beat = new Worker(url);
       URL.revokeObjectURL(url);
       this.beat.onmessage = () => this.tick();
@@ -805,6 +819,8 @@ export class NetMatch {
     // the old host's seat: away now, then the room's bot policy
     if (old !== this.self) seq.peerLost(old);
     this.session.follow(this.self, epoch, next);
+    // our own turns come in-process now: no network jitter to buffer against (#198)
+    this.session.setFixedBuffer(HOST_BUFFER);
     this.broadcast({ k: 'lead', epoch, next });
     if (this.heartbeat) this.startHeartbeat();
     this.suspect = false;
@@ -839,6 +855,8 @@ export class NetMatch {
   private stepDown(): void {
     this.leading_ = false;
     this.seq_ = null;
+    // turns come over the network again: measure the buffer from their jitter
+    this.session.setFixedBuffer(null);
     this.collect = null;
     this.beat?.terminate();
     this.beat = null;
