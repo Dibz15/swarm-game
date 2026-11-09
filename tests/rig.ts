@@ -66,10 +66,11 @@ export function room() {
   const arrived = (id: string) => {
     for (const other of routers.keys()) if (other !== id) routers.get(id)!.transport.onPeer?.(other, true);
   };
-  const host = (o: Partial<{ prefs: SetupPrefs; char: number; build: string; mobile: boolean }> = {}) => {
-    const r = link('H');
-    const lobby = new HostLobby(r.view(LOBBY_KINDS), { build: o.build ?? 'test', char: o.char ?? 1, prefs: o.prefs ?? prefs(), seed: 'ember-tide-7', clock: () => clock.now, readyMs: 5000, mobile: o.mobile });
-    arrived('H');
+  const host = (o: Partial<{ prefs: SetupPrefs; char: number; build: string; mobile: boolean; id: string }> = {}) => {
+    const id = o.id ?? 'H';
+    const r = link(id);
+    const lobby = new HostLobby(r.view(LOBBY_KINDS), { build: o.build ?? 'test', char: o.char ?? 1, prefs: o.prefs ?? prefs(), seed: 'ember-tide-7', clock: () => clock.now, readyMs: 5000, mobile: o.mobile, ownToken: tokenOf(id) });
+    arrived(id);
     return { r, lobby };
   };
   const guest = (id: string, o: Partial<{ char: number; build: string; token: string; mobile: boolean }> = {}) => {
@@ -108,7 +109,7 @@ export function room() {
     }
     return setup;
   };
-  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow };
+  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow, tokenOf };
 }
 
 export type Guest = ReturnType<ReturnType<typeof room>['guest']>;

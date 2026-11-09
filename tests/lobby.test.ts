@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { playerCharacter } from '../src/game/character';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
+import { buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { PROTOCOL_VERSION } from '../src/net/protocol';
 import { encodeMsg } from '../src/net/codec';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, PeerGrace, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
 import { DT } from '../src/sim/constants';
-import { FRAME, play, prefs, room, wipe } from './rig';
+import { FRAME, play, prefs, room, wipe, type Guest } from './rig';
 import { fullHash } from '../src/sim/snapshot';
 import { createWorld } from '../src/sim/setup';
 import { ordinal, placingOf } from '../src/game/standing';
@@ -571,5 +571,111 @@ describe('the room, start to rematch (#184)', () => {
     const { locked: _, ...noLock } = s;
     expect(parseLobby(JSON.stringify(noLock))).toBeNull();
     expect(parseLobby(JSON.stringify({ ...s, rows: s.rows.map((r) => (r.k === 'human' ? { ...r, ready: 1 } : r)) }))).toBeNull();
+  });
+
+  /** what main.ts does when a guest's lobby says the room is ours now */
+  const takeOverAs = (rm: ReturnType<typeof room>, g: Guest, tokens: string[]) => {
+    const st = g.lobby.state!;
+    g.lobby.close();
+    const connected = st.rows.flatMap((r) => (r.k === 'human' && r.peer !== g.id && r.peer !== st.host ? [r.peer] : []));
+    const lobby = new HostLobby(g.r.view(LOBBY_KINDS), { build: 'test', char: 9, prefs: prefs(), seed: st.seed, clock: () => rm.clock.now, takeOver: { state: st, connected, tokens } });
+    lobby.announce();
+    return lobby;
+  };
+
+  it('a host leaving the room hands it to the next player (desktops first); everyone stays, and the lock still knows them', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A', { mobile: true });
+    const b = rm.guest('B');
+    h.lobby.setLocked(true);
+    expect(nextHost(h.lobby.state, () => true, 'H')).toBe('B');
+    let passed: { to: string; mine: boolean; tokens: string[] } | null = null;
+    let promoted: HostLobby | null = null;
+    b.lobby.onPass = (to, mine, tokens) => {
+      passed = { to, mine, tokens };
+      if (mine) promoted = takeOverAs(rm, b, tokens);
+    };
+    const aHeard: string[] = [];
+    a.lobby.onPass = (to) => aHeard.push(to);
+    expect(h.lobby.handOff()).toBe('B');
+    rm.leave('H');
+    expect(passed).toMatchObject({ to: 'B', mine: true });
+    expect(passed!.tokens).toEqual(expect.arrayContaining([rm.tokenOf('A'), rm.tokenOf('B'), rm.tokenOf('H')]));
+    expect(aHeard).toEqual(['B']);
+    // A follows B's room: the old host's seat is open, the lock and the rest as they were
+    expect(a.lobby.host).toBe('B');
+    expect(a.lobby.state!.host).toBe('B');
+    expect(a.lobby.state!.locked).toBe(true);
+    expect(occupant(a.lobby.state!)).toEqual(['open', 'A', 'B', 'open', 'open', 'open']);
+    // the old host reloads: a closed room still lets it back, as a player
+    const h2 = rm.guest('H2');
+    expect(h2.refused).toEqual([]);
+    expect(h2.lobby.host).toBe('B');
+    expect(h2.lobby.mySeat).toBe(0);
+    // and a stranger is still turned away
+    expect(rm.guest('Z').refused[0]).toMatch(/closed/);
+    // the new host runs it to a match
+    let go: HostGo | null = null;
+    promoted!.onGo = (g) => (go = g);
+    rm.startNow({ lobby: promoted! });
+    a.lobby.ready();
+    h2.lobby.ready();
+    expect(go).not.toBeNull();
+  });
+
+  it('nobody to hand the room to: no pass; a host back from a reload runs its room again, alone in it', () => {
+    const rm = room();
+    const h = rm.host();
+    h.lobby.fillBots();
+    h.lobby.setLocked(true);
+    expect(h.lobby.handOff()).toBeNull();
+    const saved = structuredClone(h.lobby.state);
+    rm.leave('H');
+    // the reloaded page: a new peer id
+    const h2 = rm.host({ id: 'H2' });
+    h2.lobby.close();
+    const back = new HostLobby(rm.routerOf('H2').view(LOBBY_KINDS), { build: 'test', char: 1, prefs: prefs(), seed: saved.seed, clock: () => rm.clock.now, takeOver: { state: saved, connected: [], reclaim: true } });
+    expect(back.mySeat).toBe(0);
+    expect(back.state.host).toBe('H2');
+    expect(back.state.locked).toBe(true);
+    expect(occupant(back.state)).toEqual(['H2', 'bot', 'bot', 'bot', 'bot', 'bot']);
+    expect(back.canStart()).toBe(true);
+  });
+
+  it('after a match the map is new (a new seed), unless the host restarts it', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    const seed0 = h.lobby.state.seed;
+    rm.startNow(h);
+    h.lobby.backToLobby({ sameMap: true });
+    expect(h.lobby.state.seed).toBe(seed0);
+    rm.startNow(h);
+    h.lobby.backToLobby();
+    expect(h.lobby.state.seed).not.toBe(seed0);
+  });
+
+  it('Quick match rolls a new map at each Start, everyone sees it in the countdown, and it’s never small for five or more', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A');
+    h.lobby.fillBots();
+    h.lobby.setRandomMap(true);
+    expect(a.lobby.state!.randomMap).toBe(true);
+    const seen = new Set<string>();
+    for (let k = 0; k < 20; k++) {
+      const setup = h.lobby.start()!;
+      expect(a.lobby.state!.phase).toBe('starting');
+      expect(a.lobby.state!.map).toEqual(h.lobby.state.map);
+      expect(setup.size).not.toBe('small');
+      seen.add(h.lobby.state.seed);
+      h.lobby.cancelStart();
+    }
+    expect(seen.size).toBeGreaterThan(1);
+    // off: the host's settings stand
+    h.lobby.setRandomMap(false);
+    h.lobby.setMap({ size: 'small' });
+    expect(h.lobby.start()!.size).toBe('small');
   });
 });

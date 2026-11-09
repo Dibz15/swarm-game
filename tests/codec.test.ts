@@ -48,6 +48,8 @@ describe('wire codec (#157)', () => {
       { k: 'ready' },
       { k: 'mark', ready: true },
       { k: 'mark', ready: false },
+      { k: 'pass', to: 'peer-xyz', tokens: JSON.stringify(['a1b2']) },
+      { k: 'pass', to: 'p', tokens: '' },
       { k: 'away' },
       { k: 'snapreq', tick: 0 },
       { k: 'snapreq', tick: 54321 },

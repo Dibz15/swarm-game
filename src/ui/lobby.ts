@@ -136,6 +136,8 @@ export interface LobbyHandlers {
     /** "Everyone's here" (true), or let newcomers in again (#184) */
     lock: (on: boolean) => void;
     fillBots: () => void;
+    /** Quick match: a new random map at each Start (#184) */
+    randomMap: (on: boolean) => void;
   };
 }
 
@@ -216,6 +218,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
           </section>
           <section data-pane="match">
             ${isHost ? '' : '<p class="hint">The host chooses the map.</p>'}
+            <label class="check quick"><input type="checkbox" data-a="random"${isHost ? '' : ' disabled'}> Quick match <small class="hint">a new random map at each start, sized for the players</small></label>
             <div class="mapfields"></div>
             <label class="check"><input type="checkbox" data-a="teams"${isHost ? '' : ' disabled'}> Teams <small class="hint">choose each colour’s team in the roster</small></label>
             <div class="field">
@@ -252,6 +255,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
   const seats = $<HTMLDivElement>('.seats');
   const seedInput = $<HTMLInputElement>('.seed');
   const teamsBox = $<HTMLInputElement>('[data-a=teams]');
+  const randomBox = $<HTMLInputElement>('[data-a=random]');
   const botBox = m.querySelector('[data-a=botsecs]') as HTMLSelectElement | null;
   const toasts = $<HTMLDivElement>('.toasts');
   const countdown = $<HTMLDivElement>('.countdown');
@@ -342,6 +346,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
 
   // ---- host controls
   teamsBox.addEventListener('change', () => h.host?.teams(teamsBox.checked));
+  randomBox.addEventListener('change', () => h.host?.randomMap(randomBox.checked));
   botBox?.addEventListener('change', () => h.host?.botSecs(Number(botBox.value) as BotSecs));
   seedInput.addEventListener('change', () => h.host?.seed(seedInput.value));
   m.querySelector('[data-a=dice]')?.addEventListener('click', () => {
@@ -527,7 +532,11 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
       if (r.k === 'human') slot.replaceChildren(creatureCanvas(characterCreature(playerCharacter(r.char), Number(slot.dataset.p)), 28));
     });
     renderChars();
-    fields.render(s.map, !isHost || s.phase !== 'lobby');
+    // Quick match rolls the map at Start: the fields show it, but there's nothing to choose
+    fields.render(s.map, !isHost || s.phase !== 'lobby' || s.randomMap);
+    randomBox.checked = s.randomMap;
+    m.classList.toggle('random-map', s.randomMap);
+    seedInput.readOnly = !isHost || s.randomMap;
     teamsBox.checked = s.teams;
     if (botBox && document.activeElement !== botBox) botBox.value = String(s.botSecs);
     if (document.activeElement !== seedInput) seedInput.value = s.seed;

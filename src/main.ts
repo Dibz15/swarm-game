@@ -91,6 +91,27 @@ function seatToken(room: string): string {
   return t;
 }
 
+/**
+ * The room this tab hosts, as it last was before a match (#184): a reload
+ * finds it here and runs the room again, unless hosting was passed on.
+ */
+const hostedKey = (room: string) => `swarm-hosted:${room}`;
+function saveHosted(room: string, state: LobbyState | null): void {
+  try {
+    if (state) sessionStorage.setItem(hostedKey(room), JSON.stringify(state));
+    else sessionStorage.removeItem(hostedKey(room));
+  } catch {
+    /* no storage: a reload joins as a player */
+  }
+}
+function loadHosted(room: string): string | null {
+  try {
+    return sessionStorage.getItem(hostedKey(room));
+  } catch {
+    return null;
+  }
+}
+
 function parseRoom(s: string): { id: string; secret: string } | null {
   const m = /#room=([a-z0-9]{6,32})\.([a-z0-9]{8,64})/.exec(s.trim());
   return m ? { id: m[1], secret: m[2] } : null;
@@ -201,7 +222,10 @@ class App {
     });
     // Closing the page while hosting: hand hosting to the next player first (#166).
     window.addEventListener('pagehide', (e) => {
-      if (!e.persisted && this.match?.host && !this.game?.world.over) this.match.handOff();
+      if (e.persisted) return;
+      if (this.match?.host && !this.game?.world.over) this.match.handOff();
+      // in the room before a match: the next player runs it (#184); with nobody to take it, a reload runs it again
+      else if (!this.match && this.room?.host && this.mp && this.room.lobby instanceof this.mp.HostLobby && this.room.lobby.handOff()) saveHosted(this.room.id, null);
     });
     window.addEventListener('keydown', (e) => {
       this.sfx.unlock();
@@ -695,6 +719,9 @@ class App {
   private async openRoom(id: string, secret: string, host: boolean): Promise<void> {
     this.closeRoom();
     const mp = (this.mp = await loadMp());
+    // this tab ran this room before a reload, and nobody took it over: run it again (#184)
+    const hosted = host ? null : mp.parseLobby(loadHosted(id) ?? '');
+    if (hosted?.phase === 'lobby' || hosted?.phase === 'starting') host = true;
     const hash = `#room=${id}.${secret}`;
     history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
     const link = `${location.origin}${location.pathname}${location.search}${hash}`;
@@ -719,7 +746,19 @@ class App {
     room.router = router;
     const clock = () => performance.now();
     if (host) {
-      room.lobby = this.wireHostLobby(new mp.HostLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, prefs: loadPrefs(), seed: randomSeed(), clock, mobile: isMobile() }));
+      room.lobby = this.wireHostLobby(
+        new mp.HostLobby(router.view(mp.LOBBY_KINDS), {
+          build: BUILD,
+          char: choices[0].seed,
+          prefs: loadPrefs(),
+          seed: hosted?.seed ?? randomSeed(),
+          clock,
+          mobile: isMobile(),
+          ownToken: seatToken(id),
+          takeOver: hosted ? { state: hosted, connected: [], reclaim: true } : undefined,
+        }),
+      );
+      if (hosted) room.lobby.announce();
       room.seen = structuredClone(room.lobby.state);
       view.status('Send the link to your friends. They appear here as they join.');
     } else {
@@ -788,6 +827,7 @@ class App {
             cancel: () => hostLobby()?.cancelStart(),
             lock: (on) => hostLobby()?.setLocked(on),
             fillBots: () => hostLobby()?.fillBots(),
+            randomMap: (on) => hostLobby()?.setRandomMap(on),
           }
         : undefined,
     });
@@ -798,6 +838,8 @@ class App {
       this.rosterNews(st);
       this.renderRoom();
       this.peersChanged();
+      // kept for a reload (#184); a match moves hosting its own way
+      if (this.room) saveHosted(this.room.id, st.phase === 'playing' ? null : st);
     };
     lobby.onGo = (go) => this.hostGo(go);
     // a guest reloaded mid-match and proved their seat: it answers to their new connection (#164)
@@ -841,7 +883,43 @@ class App {
       else status(lobby.state?.phase === 'playing' ? 'The match is starting…' : '');
     };
     lobby.onStart = (st) => this.guestGo(st);
+    // the host left the room before a match, and passed it on (#184)
+    lobby.onPass = (to, mine, tokens) => {
+      if (mine) return this.becomeLobbyHost(tokens);
+      const row = lobby.state?.rows.find((r) => r.k === 'human' && r.peer === to);
+      if (row?.k === 'human' && this.mp) this.room?.view.notice(`${this.mp.playerCharacter(row.char).name} is hosting the room now`);
+    };
     return lobby;
+  }
+
+  /** The host left the room before a match, and it's ours to run now (#184): its state, everyone still in it, its seat tokens. */
+  private becomeLobbyHost(tokens: string[]): void {
+    const r = this.room, mp = this.mp;
+    if (!r?.router || !mp || r.host || !(r.lobby instanceof mp.GuestLobby) || !r.lobby.state) return;
+    const old = r.lobby;
+    const st = old.state!;
+    old.close();
+    const self = r.router.transport.self;
+    const connected = st.rows.flatMap((row) => (row.k === 'human' && row.peer !== self && row.peer !== st.host ? [row.peer] : []));
+    r.host = true;
+    r.view = this.roomView(mp, r);
+    const lobby = new mp.HostLobby(r.router.view(mp.LOBBY_KINDS), {
+      build: BUILD,
+      char: this.ownChar(st),
+      prefs: loadPrefs(),
+      seed: st.seed,
+      clock: () => performance.now(),
+      mobile: isMobile(),
+      ownToken: seatToken(r.id),
+      takeOver: { state: st, connected, tokens },
+    });
+    r.lobby = this.wireHostLobby(lobby);
+    r.seen = structuredClone(lobby.state);
+    if (!this.game) this.setModal(r.view.el);
+    lobby.announce();
+    r.view.notice('You’re hosting the room now');
+    r.view.status('The host left, so the room is yours to run.');
+    this.renderRoom();
   }
 
   /**
@@ -934,10 +1012,10 @@ class App {
   }
 
   /** After a match: back to the room's lobby (the host brings everyone). */
-  private backToRoom(): void {
+  private backToRoom(sameMap = false): void {
     const r = this.room;
     if (!r) return this.showMenu();
-    if (r.host) (r.lobby as HostLobby | null)?.backToLobby();
+    if (r.host) (r.lobby as HostLobby | null)?.backToLobby({ sameMap });
     this.endGame();
     // nothing runs behind the room (#184): the menu starts the demo again when we leave it
     this.setScreen(null);
@@ -974,19 +1052,33 @@ class App {
 
   /** Leave the room for good, and go back to the menu. */
   private leaveRoom(): void {
-    this.closeRoom();
+    const r = this.room, mp = this.mp;
+    let linger = 0;
+    if (r) {
+      saveHosted(r.id, null); // leaving on purpose: a reload doesn't bring the room back
+      // the host leaving before a match: the next player runs the room (#184); give the word a moment to get out
+      if (!this.match && r.host && mp && r.lobby instanceof mp.HostLobby && r.lobby.handOff()) linger = 150;
+    }
+    this.closeRoom(linger);
     this.showMenu();
   }
 
-  private closeRoom(): void {
+  private closeRoom(linger = 0): void {
     const r = this.room;
     if (!r) return;
     this.room = null;
     if (r.linkPoll) clearInterval(r.linkPoll);
     this.match?.close();
     this.match = null;
-    r.lobby?.close();
-    r.router?.close();
+    if (linger > 0) {
+      setTimeout(() => {
+        r.lobby?.close();
+        r.router?.close();
+      }, linger);
+    } else {
+      r.lobby?.close();
+      r.router?.close();
+    }
     if (parseRoom(location.hash)) history.replaceState(null, '', `${location.pathname}${location.search}`);
   }
 
@@ -1109,7 +1201,7 @@ class App {
   /** Host (#183): the same room and settings, from the start. */
   private restartMatch(): void {
     this.confirmNet('Restart the match for everyone?', 'Same room, same settings, from the start.', 'Restart', () => {
-      this.backToRoom();
+      this.backToRoom(true);
       (this.room?.lobby as HostLobby | null)?.start();
     });
   }

@@ -1,5 +1,5 @@
 import { playerCharacter } from '../game/character';
-import { personalityPicker, seedOf, type SetupPrefs } from '../game/matchSetup';
+import { personalityPicker, randomMap, randomSeed, seedOf, type SetupPrefs } from '../game/matchSetup';
 import { PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
 import type { MatchSetup } from '../sim/setup';
@@ -41,6 +41,8 @@ export interface LobbyState {
   /** "Everyone's here": no newcomers until the host reopens the room (#184) */
   locked: boolean;
   map: LobbyMap;
+  /** Quick match (#184): a new random map, sized for the players, at each Start */
+  randomMap: boolean;
   teams: boolean;
   seed: string;
   rows: SeatRow[];
@@ -93,6 +95,7 @@ export function parseLobby(json: string): LobbyState | null {
       PHASES.includes(o.phase) &&
       typeof o.locked === 'boolean' &&
       typeof o.teams === 'boolean' &&
+      typeof o.randomMap === 'boolean' &&
       typeof o.seed === 'string' &&
       o.seed.length <= MAX_SEED_TEXT &&
       m &&
@@ -106,7 +109,7 @@ export function parseLobby(json: string): LobbyState | null {
       o.rows.every(validRow) &&
       BOT_SECS.includes(o.botSecs);
     if (!ok) return null;
-    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs };
+    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs };
   } catch {
     return null;
   }
@@ -182,11 +185,35 @@ export interface HostLobbyOptions {
   readyMs?: number;
   /** the host plays on a phone (#166: phones take over hosting last) */
   mobile?: boolean;
+  /** our own seat token for this room: passed on with hosting, so a reload gets back in (#184) */
+  ownToken?: string;
   /**
    * Taking over a room whose host left mid-match (#166): its last state (the
    * rows, map and settings), and the players still connected.
    */
-  takeOver?: { state: LobbyState; connected: string[] };
+  takeOver?: {
+    state: LobbyState;
+    connected: string[];
+    /** the seat tokens the room has seen (#184: passed on with hosting in the lobby) */
+    tokens?: string[];
+    /**
+     * We ran this room before a reload, and nobody took it over (#184): the
+     * old host's seat is ours again, on our new connection.
+     */
+    reclaim?: boolean;
+  };
+}
+
+/**
+ * Who takes over a room: the same order as hosting a match (#166), desktops
+ * before phones, then by seat. `exclude`: the one leaving.
+ */
+export function nextHost(s: LobbyState, connected: (peer: string) => boolean, exclude: string): string | null {
+  const cands = s.rows
+    .map((r, i) => ({ r, i }))
+    .filter((x): x is { r: Extract<SeatRow, { k: 'human' }>; i: number } => x.r.k === 'human' && x.r.peer !== exclude && connected(x.r.peer))
+    .sort((a, b) => Number(a.r.mobile) - Number(b.r.mobile) || a.i - b.i);
+  return cands[0]?.r.peer ?? null;
 }
 
 /** The match is go: who plays where. `seats` are the human seats and their peers (the host's is `null`: its own client). */
@@ -236,6 +263,7 @@ export class HostLobby {
       phase: 'lobby',
       locked: false,
       map: { size: p.size, terrain: p.terrain, caves: p.caves, layout: p.layout, events: p.events },
+      randomMap: false,
       teams: p.teams,
       seed: o.seed.slice(0, MAX_SEED_TEXT),
       rows,
@@ -243,9 +271,15 @@ export class HostLobby {
     };
     if (o.takeOver) {
       // the room as it was, run from here now; seat tokens stayed with the old host
+      const old = o.takeOver.state.host;
       this.state = { ...structuredClone(o.takeOver.state), host: t.self };
       if (this.state.phase === 'starting') this.state.phase = 'lobby';
       for (const peer of o.takeOver.connected) this.connected.add(peer);
+      for (const tok of o.takeOver.tokens ?? []) this.seenTokens.add(tok);
+      if (o.takeOver.reclaim) {
+        // back from a reload: our seat again, and nobody else is here yet
+        this.state.rows = this.state.rows.map((r) => (r.k !== 'human' ? r : r.peer === old ? { ...r, peer: t.self, ready: undefined } : { k: 'open', team: r.team }));
+      }
     }
     t.onPeer = (peer, up) => {
       if (up) this.connected.add(peer);
@@ -304,6 +338,11 @@ export class HostLobby {
     if (this.state.locked !== on) this.edit(() => (this.state.locked = on));
   }
 
+  /** Quick match (#184): roll a new random map at each Start. */
+  setRandomMap(on: boolean): void {
+    if (this.state.randomMap !== on) this.edit(() => (this.state.randomMap = on));
+  }
+
   /** Every open seat gets a bot (Normal, any personality); each one's settings are then the host's to change (#184). */
   fillBots(): void {
     if (!this.state.rows.some((r) => r.k === 'open')) return;
@@ -333,7 +372,14 @@ export class HostLobby {
   start(): MatchSetup | null {
     if (!this.canStart()) return null;
     this.countdownUntil = this.o.clock() + COUNTDOWN_MS;
-    this.edit(() => (this.state.phase = 'starting'));
+    this.edit(() => {
+      this.state.phase = 'starting';
+      // Quick match: everyone sees the rolled map during the countdown
+      if (this.state.randomMap) {
+        this.state.map = randomMap(players(this.state));
+        this.state.seed = randomSeed();
+      }
+    });
     return buildNetSetup(this.state);
   }
 
@@ -370,12 +416,17 @@ export class HostLobby {
     this.update();
   }
 
-  /** After a match: everyone still here comes back; seats whose players left open up. */
-  backToLobby(): void {
+  /**
+   * After a match: everyone still here comes back; seats whose players left
+   * open up. The next match gets a new map from the same settings (a new
+   * seed, #184), unless `sameMap` (Restart).
+   */
+  backToLobby(o: { sameMap?: boolean } = {}): void {
     this.waiting = null;
     this.countdownUntil = -1;
     this.edit(() => {
       this.state.phase = 'lobby';
+      if (!o.sameMap) this.state.seed = randomSeed();
       // bots keep their seats and the lock stays; everyone says "ready" afresh for the next match
       this.state.rows = this.state.rows.map((r) => (r.k !== 'human' ? r : r.peer !== this.t.self && !this.connected.has(r.peer) ? { k: 'open', team: r.team } : { ...r, ready: undefined }));
     });
@@ -393,6 +444,28 @@ export class HostLobby {
       this.waiting = null;
       this.onGo?.(w.go);
     }
+  }
+
+  /**
+   * The host leaves the room before a match (#184): the next player runs it
+   * (the same order as hosting a match). Our seat opens, everyone is told,
+   * and the one taking over gets the seat tokens. Returns who, or null when
+   * nobody's left to take it (the room ends). Close the lobby a moment after,
+   * so the word gets out first.
+   */
+  handOff(): string | null {
+    if (this.state.phase === 'playing') return null; // a match moves hosting itself (#166)
+    const to = nextHost(this.state, (p) => this.connected.has(p), this.t.self);
+    if (!to) return null;
+    this.countdownUntil = -1;
+    const me = this.mySeat;
+    this.edit(() => {
+      this.state.phase = 'lobby';
+      if (me >= 0) this.state.rows[me] = { k: 'open', team: this.state.rows[me].team };
+    });
+    const tokens = JSON.stringify([...this.seenTokens, ...this.tokens.values(), ...(this.o.ownToken ? [this.o.ownToken] : [])].filter((v, i, a) => a.indexOf(v) === i));
+    for (const r of this.state.rows) if (r.k === 'human') this.send(r.peer, { k: 'pass', to, tokens: r.peer === to && tokens.length <= MAX_LOBBY ? tokens : '' });
+    return to;
   }
 
   // ---- guests -----------------------------------------------------------------
@@ -534,6 +607,12 @@ export class GuestLobby {
   onNoHost: ((why: 'none' | 'left' | 'lost') => void) | null = null;
   /** the link to the host dropped (it may reconnect), or came back */
   onHostLink: ((state: 'lost' | 'back') => void) | null = null;
+  /**
+   * The host left the room before a match and passed it on (#184): to us
+   * (`tokens`: the seat tokens it knew; run the room from `state` now), or to
+   * another player, whose lobby we follow from here.
+   */
+  onPass: ((to: string, mine: boolean, tokens: string[]) => void) | null = null;
   private dropped = false;
   private readonly t: Transport;
   private readonly o: GuestLobbyOptions;
@@ -607,6 +686,22 @@ export class GuestLobby {
         this.host ??= peer;
         this.onRefused?.(m.reason);
         return;
+      case 'pass': {
+        if (!this.host || peer !== this.host || this.state?.phase === 'playing') return;
+        let tokens: string[] = [];
+        try {
+          const t = m.tokens ? (JSON.parse(m.tokens) as unknown) : [];
+          if (Array.isArray(t)) tokens = t.filter((x): x is string => typeof x === 'string' && x.length <= 64);
+        } catch {
+          /* no tokens, then */
+        }
+        if (m.to === this.t.self) return this.onPass?.(m.to, true, tokens);
+        // follow the new host, and say hello: it answers with the room as it runs it
+        this.follow(m.to);
+        this.send(m.to, { k: 'hello', proto: PROTOCOL_VERSION, build: this.o.build, mobile: this.o.mobile, char: this.o.char >>> 0, token: this.o.token });
+        this.onPass?.(m.to, false, []);
+        return;
+      }
       case 'start': {
         if (!this.host) return;
         try {

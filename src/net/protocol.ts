@@ -118,6 +118,12 @@ export type Msg =
   | { k: 'ready' }
   /** client → host, in the lobby: ready for the next match, or not (#184; advisory) */
   | { k: 'mark'; ready: boolean }
+  /**
+   * host → each guest, in the lobby (#184): the host is leaving, and `to` runs
+   * the room now. `tokens` (JSON, only in the one to `to`): the seat tokens of
+   * everyone who has sat in the room, so a closed room still lets them back.
+   */
+  | { k: 'pass'; to: string; tokens: string }
   /** sequencer → clients, every couple of seconds: every human seat's latency (#161) */
   | { k: 'lat'; rows: LatRow[] }
   /** client → sequencer: one order (no `p`; the decoder gives it p = -1) */

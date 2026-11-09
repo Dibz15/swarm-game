@@ -249,6 +249,8 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .lobby-screen[data-tab='players'] .roster { display: flex; flex: 1; }
 .lobby-screen section { max-width: 640px; margin: 0 auto; }
 .lobby-screen section > .check { margin: 0 0 18px; }
+.lobby-screen.random-map [data-pane='match'] .field { opacity: 0.55; }
+.lobby-screen.random-map [data-a=dice] { display: none; }
 .connecting { display: none; }
 .lobby-screen.waiting .connecting { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 24px; }
 .lobby-screen.waiting .lobby-body, .lobby-screen.waiting .lobby-tabs, .lobby-screen.waiting .lobby-bar { display: none; }

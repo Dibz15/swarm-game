@@ -377,7 +377,7 @@ function readTurn(r: Reader): Turn {
 
 // ---- messages ---------------------------------------------------------------
 
-const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff', 'mark'] as const;
+const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff', 'mark', 'pass'] as const;
 const KIND_INDEX = new Map<string, number>(KINDS.map((k, i) => [k, i]));
 
 /** The kind of the message in `bytes` from its first byte alone (for routing), or null. */
@@ -469,6 +469,10 @@ export function encodeMsg(m: Msg): Uint8Array {
       break;
     case 'mark':
       w.u8(m.ready ? 1 : 0);
+      break;
+    case 'pass':
+      w.str(m.to, MAX_NAME);
+      w.str(m.tokens, MAX_LOBBY);
       break;
     case 'snapreq':
       w.uv(m.tick);
@@ -600,6 +604,10 @@ function readMsg(r: Reader): Msg {
       return { k };
     case 'mark':
       return { k, ready: r.bool() };
+    case 'pass': {
+      const to = r.str(MAX_NAME);
+      return { k, to, tokens: r.str(MAX_LOBBY) };
+    }
     case 'snapreq':
       return { k, tick: r.uv() };
     case 'desync': {
