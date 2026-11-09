@@ -60,6 +60,10 @@ interface Room {
   view: LobbyView;
   router: Router | null;
   lobby: HostLobby | GuestLobby | null;
+  /** the lobby state the screen last showed, for join and leave notices (#184) */
+  seen: LobbyState | null;
+  /** measures our links to the others every few seconds, for the roster (#184) */
+  linkPoll: ReturnType<typeof setInterval> | null;
 }
 
 const ROOM_CHARS = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -85,6 +89,27 @@ function seatToken(room: string): string {
     /* as above */
   }
   return t;
+}
+
+/**
+ * The room this tab hosts, as it last was before a match (#184): a reload
+ * finds it here and runs the room again, unless hosting was passed on.
+ */
+const hostedKey = (room: string) => `swarm-hosted:${room}`;
+function saveHosted(room: string, state: LobbyState | null): void {
+  try {
+    if (state) sessionStorage.setItem(hostedKey(room), JSON.stringify(state));
+    else sessionStorage.removeItem(hostedKey(room));
+  } catch {
+    /* no storage: a reload joins as a player */
+  }
+}
+function loadHosted(room: string): string | null {
+  try {
+    return sessionStorage.getItem(hostedKey(room));
+  } catch {
+    return null;
+  }
 }
 
 function parseRoom(s: string): { id: string; secret: string } | null {
@@ -197,7 +222,10 @@ class App {
     });
     // Closing the page while hosting: hand hosting to the next player first (#166).
     window.addEventListener('pagehide', (e) => {
-      if (!e.persisted && this.match?.host && !this.game?.world.over) this.match.handOff();
+      if (e.persisted) return;
+      if (this.match?.host && !this.game?.world.over) this.match.handOff();
+      // in the room before a match: the next player runs it (#184); with nobody to take it, a reload runs it again
+      else if (!this.match && this.room?.host && this.mp && this.room.lobby instanceof this.mp.HostLobby && this.room.lobby.handOff()) saveHosted(this.room.id, null);
     });
     window.addEventListener('keydown', (e) => {
       this.sfx.unlock();
@@ -248,7 +276,8 @@ class App {
     this.modal?.remove();
     this.modal = m;
     if (m) this.ui.appendChild(m);
-    this.covered = !!m?.classList.contains('runmap');
+    // the run map and the room (#184) cover everything: the demo battle stops under them
+    this.covered = !!m && (m.classList.contains('runmap') || m.classList.contains('opaque'));
     this.ui.classList.toggle('covered', this.covered);
   }
 
@@ -690,23 +719,26 @@ class App {
   private async openRoom(id: string, secret: string, host: boolean): Promise<void> {
     this.closeRoom();
     const mp = (this.mp = await loadMp());
+    // this tab ran this room before a reload, and nobody took it over: run it again (#184)
+    const hosted = host ? null : mp.parseLobby(loadHosted(id) ?? '');
+    if (hosted?.phase === 'lobby' || hosted?.phase === 'starting') host = true;
     const hash = `#room=${id}.${secret}`;
     history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
     const link = `${location.origin}${location.pathname}${location.search}${hash}`;
     const last = mp.loadCharacter();
     const choices = mp.characterChoices(last ? 3 : 4, last ? [last.name] : []);
     if (last) choices.unshift(last);
-    const room: Room = { id, secret, host, link, choices, view: null as unknown as LobbyView, router: null, lobby: null };
+    const room: Room = { id, secret, host, link, choices, view: null as unknown as LobbyView, router: null, lobby: null, seen: null, linkPoll: null };
     const view = (room.view = this.roomView(mp, room));
     this.room = room;
     this.setModal(view.el);
     view.render(null, '', false);
-    view.status(host ? 'Opening the room…' : 'Looking for the host…');
+    view.status(host ? 'Opening the room…' : 'Connecting to the room…');
     let t: Transport;
     try {
       t = await this.openTransport(mp, id, secret, view);
     } catch (e) {
-      view.status(e instanceof Error && e.message.startsWith('Hide my IP') ? e.message : 'Couldn’t open the room. Check your connection and try again.', true);
+      view.fail('Couldn’t connect', e instanceof Error && e.message.startsWith('Hide my IP') ? e.message : 'Couldn’t open the room. Check your connection and try again.', true);
       return;
     }
     if (this.room !== room) return t.close(); // left while it opened
@@ -714,12 +746,59 @@ class App {
     room.router = router;
     const clock = () => performance.now();
     if (host) {
-      room.lobby = this.wireHostLobby(new mp.HostLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, prefs: loadPrefs(), seed: randomSeed(), clock, mobile: isMobile() }));
-      view.status('Send the link to your friends, then start when everyone is in.');
+      room.lobby = this.wireHostLobby(
+        new mp.HostLobby(router.view(mp.LOBBY_KINDS), {
+          build: BUILD,
+          char: choices[0].seed,
+          prefs: loadPrefs(),
+          seed: hosted?.seed ?? randomSeed(),
+          clock,
+          mobile: isMobile(),
+          ownToken: seatToken(id),
+          takeOver: hosted ? { state: hosted, connected: [], reclaim: true } : undefined,
+        }),
+      );
+      if (hosted) room.lobby.announce();
+      room.seen = structuredClone(room.lobby.state);
+      view.status('Send the link to your friends. They appear here as they join.');
     } else {
       room.lobby = this.wireGuestLobby(new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), token: seatToken(id), clock }));
+      view.status('Looking for the host…');
     }
+    room.linkPoll = setInterval(() => this.pollLinks(room), 3000);
     this.renderRoom();
+  }
+
+  /** How our link to each player in the room is doing (#184): ping, and whether it's through the relay. */
+  private pollLinks(room: Room): void {
+    const t = room.router?.transport;
+    const s = room.lobby?.state;
+    if (this.room !== room || this.game || !t?.linkInfo || !s) return;
+    const peers = s.rows.flatMap((r) => (r.k === 'human' && r.peer !== t.self ? [r.peer] : []));
+    void Promise.all(peers.map(async (p) => [p, await t.linkInfo!(p).catch(() => ({}))] as const)).then((got) => {
+      if (this.room === room) room.view.links(new Map(got));
+    });
+  }
+
+  /** Who came and went since the screen last looked (#184): a note and a sound for each. */
+  private rosterNews(st: LobbyState): void {
+    const r = this.room, mp = this.mp;
+    if (!r || !mp) return;
+    const prev = r.seen;
+    r.seen = structuredClone(st);
+    if (this.game) return; // mid-match, the match says who's away
+    const self = r.router?.transport.self;
+    const { joined, left } = mp.rosterChanges(prev, st);
+    for (const seat of joined) {
+      const row = st.rows[seat];
+      if (row.k !== 'human' || row.peer === self) continue;
+      r.view.notice(`${mp.playerCharacter(row.char).name} joined`, FACTION_HEX[seat]);
+      this.sfx.joined();
+    }
+    for (const l of left) {
+      r.view.notice(`${mp.playerCharacter(l.char).name} left`, FACTION_HEX[l.seat]);
+      this.sfx.left();
+    }
   }
 
   /** The room's screen: with the host's controls when we run the room. */
@@ -727,6 +806,9 @@ class App {
     const hostLobby = () => (room.lobby instanceof mp.HostLobby ? room.lobby : null);
     return mp.lobbyScreen(room.link, room.choices, {
       leave: () => this.leaveRoom(),
+      retry: () => void this.openRoom(room.id, room.secret, room.host),
+      tick: (n) => this.sfx.countTick(n),
+      ready: (on) => (room.lobby instanceof mp.GuestLobby ? room.lobby.mark(on) : undefined),
       pick: (seat, team, char) => {
         mp.saveCharacter(mp.playerCharacter(char));
         const l = room.lobby;
@@ -742,15 +824,22 @@ class App {
             row: (seat, row) => hostLobby()?.setRow(seat, row),
             kick: (seat) => hostLobby()?.kick(seat),
             start: () => hostLobby()?.start(),
+            cancel: () => hostLobby()?.cancelStart(),
+            lock: (on) => hostLobby()?.setLocked(on),
+            fillBots: () => hostLobby()?.fillBots(),
+            randomMap: (on) => hostLobby()?.setRandomMap(on),
           }
         : undefined,
     });
   }
 
   private wireHostLobby(lobby: HostLobby): HostLobby {
-    lobby.onChange = () => {
+    lobby.onChange = (st) => {
+      this.rosterNews(st);
       this.renderRoom();
       this.peersChanged();
+      // kept for a reload (#184); a match moves hosting its own way
+      if (this.room) saveHosted(this.room.id, st.phase === 'playing' ? null : st);
     };
     lobby.onGo = (go) => this.hostGo(go);
     // a guest reloaded mid-match and proved their seat: it answers to their new connection (#164)
@@ -762,9 +851,14 @@ class App {
     const status = (text: string, error = false) => this.room?.view.status(text, error);
     lobby.onChange = (st) => {
       this.peersChanged();
+      // in: say so, once (#184)
+      const self = this.room?.router?.transport.self;
+      const wasIn = !!this.room?.seen?.rows.some((r) => r.k === 'human' && r.peer === self);
+      if (!wasIn && st.rows.some((r) => r.k === 'human' && r.peer === self)) this.sfx.joined();
+      this.rosterNews(st);
       // back in the lobby while the match was still on: the host ended it (#183)
       const ended = st.phase === 'lobby' && !!this.match && !this.game?.world.over;
-      status(st.phase === 'lobby' ? (ended ? 'The host ended the match. Waiting for the host to start the next one.' : 'Waiting for the host to start the match.') : 'The match is starting…');
+      status(ended ? 'The host ended the match.' : st.phase === 'playing' ? 'The match is starting…' : '');
       this.renderRoom();
       // the host brought everyone back after a match
       if (st.phase === 'lobby' && this.match) this.backToRoom();
@@ -776,7 +870,8 @@ class App {
         this.setModal(this.mp.messageCard('You left this match', why, [{ label: 'Menu', primary: true, on: () => this.leaveRoom() }]));
         return;
       }
-      status(why, true);
+      // a version mismatch won't go away by trying again
+      this.room?.view.fail(/removed you/.test(why) ? 'Removed from the room' : 'Couldn’t join', why, !/different version|removed you/.test(why));
     };
     // in a match, the match itself watches the host (and finds a new one, #166)
     lobby.onNoHost = (why) => {
@@ -785,10 +880,46 @@ class App {
     lobby.onHostLink = (state) => {
       if (this.match) return;
       if (state === 'lost') status('Lost connection to the host. Reconnecting…', true);
-      else status(lobby.state?.phase === 'playing' ? 'The match is starting…' : 'Waiting for the host to start the match.');
+      else status(lobby.state?.phase === 'playing' ? 'The match is starting…' : '');
     };
     lobby.onStart = (st) => this.guestGo(st);
+    // the host left the room before a match, and passed it on (#184)
+    lobby.onPass = (to, mine, tokens) => {
+      if (mine) return this.becomeLobbyHost(tokens);
+      const row = lobby.state?.rows.find((r) => r.k === 'human' && r.peer === to);
+      if (row?.k === 'human' && this.mp) this.room?.view.notice(`${this.mp.playerCharacter(row.char).name} is hosting the room now`);
+    };
     return lobby;
+  }
+
+  /** The host left the room before a match, and it's ours to run now (#184): its state, everyone still in it, its seat tokens. */
+  private becomeLobbyHost(tokens: string[]): void {
+    const r = this.room, mp = this.mp;
+    if (!r?.router || !mp || r.host || !(r.lobby instanceof mp.GuestLobby) || !r.lobby.state) return;
+    const old = r.lobby;
+    const st = old.state!;
+    old.close();
+    const self = r.router.transport.self;
+    const connected = st.rows.flatMap((row) => (row.k === 'human' && row.peer !== self && row.peer !== st.host ? [row.peer] : []));
+    r.host = true;
+    r.view = this.roomView(mp, r);
+    const lobby = new mp.HostLobby(r.router.view(mp.LOBBY_KINDS), {
+      build: BUILD,
+      char: this.ownChar(st),
+      prefs: loadPrefs(),
+      seed: st.seed,
+      clock: () => performance.now(),
+      mobile: isMobile(),
+      ownToken: seatToken(r.id),
+      takeOver: { state: st, connected, tokens },
+    });
+    r.lobby = this.wireHostLobby(lobby);
+    r.seen = structuredClone(lobby.state);
+    if (!this.game) this.setModal(r.view.el);
+    lobby.announce();
+    r.view.notice('You’re hosting the room now');
+    r.view.status('The host left, so the room is yours to run.');
+    this.renderRoom();
   }
 
   /**
@@ -881,12 +1012,12 @@ class App {
   }
 
   /** After a match: back to the room's lobby (the host brings everyone). */
-  private backToRoom(): void {
+  private backToRoom(sameMap = false): void {
     const r = this.room;
     if (!r) return this.showMenu();
-    if (r.host) (r.lobby as HostLobby | null)?.backToLobby();
+    if (r.host) (r.lobby as HostLobby | null)?.backToLobby({ sameMap });
     this.endGame();
-    this.startDemo();
+    // nothing runs behind the room (#184): the menu starts the demo again when we leave it
     this.setScreen(null);
     this.setModal(r.view.el);
     this.renderRoom();
@@ -914,26 +1045,40 @@ class App {
       );
       return;
     }
-    r.view.status(
-      why === 'left' ? 'The host left the room.' : why === 'lost' ? 'Lost connection to the host, and it didn’t come back. Check your connection and open the link again.' : 'No one is hosting this room. Check the link, or ask the host to open it again.',
-      true,
-    );
+    if (why === 'left') r.view.fail('The host left', 'The host closed the room. Ask them to open a new one and send you the link.');
+    else if (why === 'lost') r.view.fail('Lost the host', 'The connection to the host dropped and didn’t come back. Check your connection and try again.', true);
+    else r.view.fail('No one is hosting', 'Nobody answered on this link. Check that it’s the latest one, or ask the host to open the room again.', true);
   }
 
   /** Leave the room for good, and go back to the menu. */
   private leaveRoom(): void {
-    this.closeRoom();
+    const r = this.room, mp = this.mp;
+    let linger = 0;
+    if (r) {
+      saveHosted(r.id, null); // leaving on purpose: a reload doesn't bring the room back
+      // the host leaving before a match: the next player runs the room (#184); give the word a moment to get out
+      if (!this.match && r.host && mp && r.lobby instanceof mp.HostLobby && r.lobby.handOff()) linger = 150;
+    }
+    this.closeRoom(linger);
     this.showMenu();
   }
 
-  private closeRoom(): void {
+  private closeRoom(linger = 0): void {
     const r = this.room;
     if (!r) return;
     this.room = null;
+    if (r.linkPoll) clearInterval(r.linkPoll);
     this.match?.close();
     this.match = null;
-    r.lobby?.close();
-    r.router?.close();
+    if (linger > 0) {
+      setTimeout(() => {
+        r.lobby?.close();
+        r.router?.close();
+      }, linger);
+    } else {
+      r.lobby?.close();
+      r.router?.close();
+    }
     if (parseRoom(location.hash)) history.replaceState(null, '', `${location.pathname}${location.search}`);
   }
 
@@ -1056,7 +1201,7 @@ class App {
   /** Host (#183): the same room and settings, from the start. */
   private restartMatch(): void {
     this.confirmNet('Restart the match for everyone?', 'Same room, same settings, from the start.', 'Restart', () => {
-      this.backToRoom();
+      this.backToRoom(true);
       (this.room?.lobby as HostLobby | null)?.start();
     });
   }

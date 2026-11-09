@@ -8,7 +8,7 @@ import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
-import { buildSetup, loadPrefs, randomSeed, savePrefs, type SetupPrefs } from '../game/matchSetup';
+import { buildSetup, loadPrefs, randomMap, randomSeed, savePrefs, type SetupPrefs } from '../game/matchSetup';
 import { relayOnly, setRelayOnly, TURN_URL } from '../net/ice';
 import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
@@ -138,15 +138,10 @@ export function randomSetup(difficulty: number): MatchSetup {
   const p = loadPrefs();
   const bots = weighted<number>([[1, 3], [2, 2], [3, 4], [4, 2], [5, 2]]);
   const others = [0, 1, 2, 3, 4, 5].filter((c) => c !== p.color);
-  const size: MapSize = bots <= 1 ? 'small' : bots <= 3 ? weighted<MapSize>([['small', 1], ['medium', 3]]) : weighted<MapSize>([['medium', 1], ['large', 3]]);
   return buildSetup(
     {
       ...p,
-      size,
-      terrain: weighted<TerrainLevel>([['light', 2], ['standard', 5], ['heavy', 2]]),
-      caves: weighted<CaveLevel>([['off', 6], ['belt', 2], ['full', 1]]),
-      layout: 'random',
-      events: weighted<EventLevel>([['calm', 2], ['normal', 6], ['wild', 1]]),
+      ...randomMap(bots + 1),
       teams: false,
       bots: others.slice(0, bots).map((faction, i) => ({ faction, difficulty, personality: 'random', team: i + 1 })),
     },

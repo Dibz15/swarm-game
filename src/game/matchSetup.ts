@@ -66,6 +66,28 @@ export function randomSeed(): string {
   return `${r()}-${r()}-${Math.floor(Math.random() * 100)}`;
 }
 
+function weighted<T>(opts: [T, number][], rnd: () => number): T {
+  let r = rnd() * opts.reduce((s, o) => s + o[1], 0);
+  for (const [v, wt] of opts) if ((r -= wt) < 0) return v;
+  return opts[opts.length - 1][0];
+}
+
+/**
+ * A random map for `sides` players and bots (Quick match, and multiplayer's
+ * random map, #184): bigger maps for more of them, never a small one for five
+ * or more.
+ */
+export function randomMap(sides: number, rnd: () => number = Math.random): { size: MapSize; terrain: TerrainLevel; caves: CaveLevel; layout: MapLayout | 'random'; events: EventLevel } {
+  const size: MapSize = sides <= 2 ? 'small' : sides <= 4 ? weighted<MapSize>([['small', 1], ['medium', 3]], rnd) : weighted<MapSize>([['medium', 1], ['large', 3]], rnd);
+  return {
+    size,
+    terrain: weighted<TerrainLevel>([['light', 2], ['standard', 5], ['heavy', 2]], rnd),
+    caves: weighted<CaveLevel>([['off', 6], ['belt', 2], ['full', 1]], rnd),
+    layout: 'random',
+    events: weighted<EventLevel>([['calm', 2], ['normal', 6], ['wild', 1]], rnd),
+  };
+}
+
 /** The match seed for a seed text. */
 export const seedOf = (seedText: string): number => hashString(seedText.trim() || 'swarm');
 

@@ -38,7 +38,7 @@ export interface WebRtcRoom {
 export const RECONNECT_GRACE_MS = 20_000;
 
 /** Namespaces our rooms on the relays: bumped with the protocol so old clients never meet new ones there. */
-const APP_ID = 'swarm-game.fourthcontact.v6';
+const APP_ID = 'swarm-game.fourthcontact.v7';
 
 export async function webrtcTransport(o: WebRtcRoom): Promise<Transport> {
   const { joinRoom, selfId } = await import('trystero/nostr');
@@ -71,6 +71,14 @@ export async function webrtcTransport(o: WebRtcRoom): Promise<Transport> {
         /* the peer is gone for now: a reconnect resumes, or its loss is reported */
       });
     },
+    async linkInfo(peer) {
+      if (!open || grace.isHeld(peer)) return {};
+      const [rtt, relay] = await Promise.all([
+        withTimeout(room.ping(peer), 2000).catch(() => undefined),
+        relayed(room.getPeers()[peer]).catch(() => undefined),
+      ]);
+      return { rtt: rtt === undefined ? undefined : Math.round(rtt), relay };
+    },
     close() {
       if (!open) return;
       sayBye();
@@ -99,4 +107,26 @@ export async function webrtcTransport(o: WebRtcRoom): Promise<Transport> {
   room.onPeerJoin = (peer) => grace.up(peer);
   room.onPeerLeave = (peer) => grace.down(peer);
   return t;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([p, new Promise<T>((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
+}
+
+/** Whether the link in use to a peer goes through a TURN relay: its chosen candidate pair's ends, either side. */
+async function relayed(pc: RTCPeerConnection | undefined): Promise<boolean | undefined> {
+  if (!pc) return undefined;
+  const stats = await pc.getStats();
+  let pairId: string | undefined;
+  stats.forEach((s) => {
+    if (s.type === 'transport' && s.selectedCandidatePairId) pairId = s.selectedCandidatePairId;
+  });
+  // Firefox has no transport stats: the nominated, succeeded pair is the one in use
+  if (!pairId) stats.forEach((s) => {
+    if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') pairId = s.id;
+  });
+  const pair = pairId ? stats.get(pairId) : undefined;
+  if (!pair) return undefined;
+  const type = (id: string) => stats.get(id)?.candidateType;
+  return type(pair.localCandidateId) === 'relay' || type(pair.remoteCandidateId) === 'relay';
 }

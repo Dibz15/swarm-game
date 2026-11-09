@@ -1,5 +1,5 @@
 import { playerCharacter } from '../game/character';
-import { personalityPicker, seedOf, type SetupPrefs } from '../game/matchSetup';
+import { personalityPicker, randomMap, randomSeed, seedOf, type SetupPrefs } from '../game/matchSetup';
 import { PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
 import type { MatchSetup } from '../sim/setup';
@@ -23,7 +23,7 @@ export type SeatRow =
   | { k: 'open'; team: number }
   | { k: 'closed'; team: number }
   | { k: 'bot'; team: number; difficulty: number; personality: Personality | 'random' }
-  | { k: 'human'; team: number; peer: string; char: number; mobile: boolean };
+  | { k: 'human'; team: number; peer: string; char: number; mobile: boolean; ready?: boolean };
 
 export interface LobbyMap {
   size: MapSize;
@@ -36,14 +36,25 @@ export interface LobbyMap {
 export interface LobbyState {
   /** the host's peer id */
   host: string;
-  phase: 'lobby' | 'playing';
+  /** `starting`: Start was pressed, the countdown runs (#184) */
+  phase: LobbyPhase;
+  /** "Everyone's here": no newcomers until the host reopens the room (#184) */
+  locked: boolean;
   map: LobbyMap;
+  /** Quick match (#184): a new random map, sized for the players, at each Start */
+  randomMap: boolean;
   teams: boolean;
   seed: string;
   rows: SeatRow[];
   /** how long a dropped player's seat idles before an Easy bot takes it, seconds (#164) */
   botSecs: BotSecs;
 }
+
+export type LobbyPhase = 'lobby' | 'starting' | 'playing';
+const PHASES: readonly LobbyPhase[] = ['lobby', 'starting', 'playing'];
+
+/** Start's countdown, ms: everyone sees 3, 2, 1 before the match (#184). */
+export const COUNTDOWN_MS = 3000;
 
 /** The bot timeouts a host can choose (#164). */
 export const BOT_SECS = [30, 60, 120] as const;
@@ -81,8 +92,10 @@ export function parseLobby(json: string): LobbyState | null {
     const m = o?.map;
     const ok =
       typeof o.host === 'string' &&
-      (o.phase === 'lobby' || o.phase === 'playing') &&
+      PHASES.includes(o.phase) &&
+      typeof o.locked === 'boolean' &&
       typeof o.teams === 'boolean' &&
+      typeof o.randomMap === 'boolean' &&
       typeof o.seed === 'string' &&
       o.seed.length <= MAX_SEED_TEXT &&
       m &&
@@ -96,7 +109,7 @@ export function parseLobby(json: string): LobbyState | null {
       o.rows.every(validRow) &&
       BOT_SECS.includes(o.botSecs);
     if (!ok) return null;
-    return { host: o.host, phase: o.phase, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs };
+    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs };
   } catch {
     return null;
   }
@@ -111,7 +124,7 @@ function validRow(r: SeatRow): boolean {
     case 'bot':
       return [0, 1, 2].includes(r.difficulty) && (r.personality === 'random' || PERSONALITIES.includes(r.personality));
     case 'human':
-      return typeof r.peer === 'string' && r.peer.length <= 64 && Number.isInteger(r.char) && r.char >= 0 && r.char <= 0xffffffff && typeof r.mobile === 'boolean';
+      return typeof r.peer === 'string' && r.peer.length <= 64 && Number.isInteger(r.char) && r.char >= 0 && r.char <= 0xffffffff && typeof r.mobile === 'boolean' && (r.ready === undefined || typeof r.ready === 'boolean');
     default:
       return false;
   }
@@ -129,6 +142,25 @@ export function matchPeers(s: LobbyState, setup: MatchSetup): MatchPeer[] {
     out.push({ seat: i, team, peer: r.peer, mobile: r.mobile });
   });
   return out;
+}
+
+/**
+ * Who arrived and who left between two lobby states (#184), by peer: each
+ * client works out its own join and leave notices, so the wire carries none.
+ * A player who only moved seats is neither.
+ */
+export function rosterChanges(prev: LobbyState | null, next: LobbyState): { joined: number[]; left: { seat: number; char: number }[] } {
+  const peersOf = (s: LobbyState | null) => {
+    const m = new Map<string, { seat: number; char: number }>();
+    s?.rows.forEach((r, i) => r.k === 'human' && m.set(r.peer, { seat: i, char: r.char }));
+    return m;
+  };
+  const a = peersOf(prev), b = peersOf(next);
+  if (!prev) return { joined: [], left: [] };
+  return {
+    joined: [...b].filter(([p]) => !a.has(p)).map(([, v]) => v.seat),
+    left: [...a].filter(([p]) => !b.has(p)).map(([, v]) => v),
+  };
 }
 
 /** What a guest needs to start: the match, its seat, and who runs the sequencer. */
@@ -153,11 +185,35 @@ export interface HostLobbyOptions {
   readyMs?: number;
   /** the host plays on a phone (#166: phones take over hosting last) */
   mobile?: boolean;
+  /** our own seat token for this room: passed on with hosting, so a reload gets back in (#184) */
+  ownToken?: string;
   /**
    * Taking over a room whose host left mid-match (#166): its last state (the
    * rows, map and settings), and the players still connected.
    */
-  takeOver?: { state: LobbyState; connected: string[] };
+  takeOver?: {
+    state: LobbyState;
+    connected: string[];
+    /** the seat tokens the room has seen (#184: passed on with hosting in the lobby) */
+    tokens?: string[];
+    /**
+     * We ran this room before a reload, and nobody took it over (#184): the
+     * old host's seat is ours again, on our new connection.
+     */
+    reclaim?: boolean;
+  };
+}
+
+/**
+ * Who takes over a room: the same order as hosting a match (#166), desktops
+ * before phones, then by seat. `exclude`: the one leaving.
+ */
+export function nextHost(s: LobbyState, connected: (peer: string) => boolean, exclude: string): string | null {
+  const cands = s.rows
+    .map((r, i) => ({ r, i }))
+    .filter((x): x is { r: Extract<SeatRow, { k: 'human' }>; i: number } => x.r.k === 'human' && x.r.peer !== exclude && connected(x.r.peer))
+    .sort((a, b) => Number(a.r.mobile) - Number(b.r.mobile) || a.i - b.i);
+  return cands[0]?.r.peer ?? null;
 }
 
 /** The match is go: who plays where. `seats` are the human seats and their peers (the host's is `null`: its own client). */
@@ -189,6 +245,10 @@ export class HostLobby {
   /** the match under way, for a rejoining player */
   private setupJson = '';
   private waiting: { go: HostGo; until: number; ready: Set<string> } | null = null;
+  /** Start was pressed: the match goes at this time, unless cancelled (#184) */
+  private countdownUntil = -1;
+  /** the tokens of everyone who has sat in this room: they get back in when it's locked (a reload, #184) */
+  private readonly seenTokens = new Set<string>();
 
   constructor(t: Transport, o: HostLobbyOptions) {
     this.t = t;
@@ -196,13 +256,14 @@ export class HostLobby {
     const p = o.prefs;
     const rows: SeatRow[] = Array.from({ length: MAX_SEATS }, (_, i) => ({ k: 'open', team: i }) as SeatRow);
     const me = Math.min(MAX_SEATS - 1, Math.max(0, p.color));
+    // the room opens empty (#184): every seat but the host's is free for friends; bots come later, by "Fill with bots"
     rows[me] = { k: 'human', team: 0, peer: t.self, char: o.char >>> 0, mobile: !!o.mobile };
-    // the skirmish screen's bots, where their colours are free
-    for (const b of p.bots) if (rows[b.faction]?.k === 'open') rows[b.faction] = { k: 'bot', team: Math.min(MAX_SEATS - 1, b.team), difficulty: b.difficulty, personality: b.personality };
     this.state = {
       host: t.self,
       phase: 'lobby',
+      locked: false,
       map: { size: p.size, terrain: p.terrain, caves: p.caves, layout: p.layout, events: p.events },
+      randomMap: false,
       teams: p.teams,
       seed: o.seed.slice(0, MAX_SEED_TEXT),
       rows,
@@ -210,8 +271,15 @@ export class HostLobby {
     };
     if (o.takeOver) {
       // the room as it was, run from here now; seat tokens stayed with the old host
+      const old = o.takeOver.state.host;
       this.state = { ...structuredClone(o.takeOver.state), host: t.self };
+      if (this.state.phase === 'starting') this.state.phase = 'lobby';
       for (const peer of o.takeOver.connected) this.connected.add(peer);
+      for (const tok of o.takeOver.tokens ?? []) this.seenTokens.add(tok);
+      if (o.takeOver.reclaim) {
+        // back from a reload: our seat again, and nobody else is here yet
+        this.state.rows = this.state.rows.map((r) => (r.k !== 'human' ? r : r.peer === old ? { ...r, peer: t.self, ready: undefined } : { k: 'open', team: r.team }));
+      }
     }
     t.onPeer = (peer, up) => {
       if (up) this.connected.add(peer);
@@ -265,6 +333,28 @@ export class HostLobby {
     this.edit(() => (this.state.rows[seat] = { k: 'open', team: r.team }));
   }
 
+  /** "Everyone's here" (on), or open the room to newcomers again (#184). */
+  setLocked(on: boolean): void {
+    if (this.state.locked !== on) this.edit(() => (this.state.locked = on));
+  }
+
+  /** Quick match (#184): roll a new random map at each Start. */
+  setRandomMap(on: boolean): void {
+    if (this.state.randomMap !== on) this.edit(() => (this.state.randomMap = on));
+  }
+
+  /** Every open seat gets a bot (Normal, any personality); each one's settings are then the host's to change (#184). */
+  fillBots(): void {
+    if (!this.state.rows.some((r) => r.k === 'open')) return;
+    this.edit(() => (this.state.rows = this.state.rows.map((r) => (r.k === 'open' ? { k: 'bot', team: r.team, difficulty: 1, personality: 'random' } : r))));
+  }
+
+  /** How many guests say they're ready, of all the guests (#184). The host doesn't count: Start is its say. */
+  readyCount(): { ready: number; of: number } {
+    const guests = this.state.rows.filter((r): r is Extract<SeatRow, { k: 'human' }> => r.k === 'human' && r.peer !== this.t.self);
+    return { ready: guests.filter((r) => r.ready).length, of: guests.length };
+  }
+
   /** the host's own seat, team and character */
   pickOwn(seat: number, team: number, char: number): void {
     this.pick(this.t.self, seat, team, char);
@@ -275,9 +365,34 @@ export class HostLobby {
     return this.state.phase === 'lobby' && this.mySeat >= 0 && players(this.state) >= 2;
   }
 
-  /** Send everyone the match; `onGo` fires once they're all ready (or `readyMs` runs out). */
+  /**
+   * Start: everyone sees a 3, 2, 1 (#184), then `update()` sends the match.
+   * Returns the setup it will start with.
+   */
   start(): MatchSetup | null {
     if (!this.canStart()) return null;
+    this.countdownUntil = this.o.clock() + COUNTDOWN_MS;
+    this.edit(() => {
+      this.state.phase = 'starting';
+      // Quick match: everyone sees the rolled map during the countdown
+      if (this.state.randomMap) {
+        this.state.map = randomMap(players(this.state));
+        this.state.seed = randomSeed();
+      }
+    });
+    return buildNetSetup(this.state);
+  }
+
+  /** Stop the countdown: back to the room as it was. */
+  cancelStart(): void {
+    if (this.state.phase !== 'starting') return;
+    this.countdownUntil = -1;
+    this.edit(() => (this.state.phase = 'lobby'));
+  }
+
+  /** Send everyone the match; `onGo` fires once they're all ready (or `readyMs` runs out). */
+  private launch(): void {
+    this.countdownUntil = -1;
     const setup = buildNetSetup(this.state);
     this.edit(() => (this.state.phase = 'playing'));
     const json = JSON.stringify(setup);
@@ -299,19 +414,29 @@ export class HostLobby {
     });
     this.waiting = { go: { setup, hostSeat: this.mySeat, seats, botMs: this.state.botSecs * 1000 }, until: this.o.clock() + (this.o.readyMs ?? 10000), ready };
     this.update();
-    return setup;
   }
 
-  /** After a match: everyone still here comes back; seats whose players left open up. */
-  backToLobby(): void {
+  /**
+   * After a match: everyone still here comes back; seats whose players left
+   * open up. The next match gets a new map from the same settings (a new
+   * seed, #184), unless `sameMap` (Restart).
+   */
+  backToLobby(o: { sameMap?: boolean } = {}): void {
     this.waiting = null;
+    this.countdownUntil = -1;
     this.edit(() => {
       this.state.phase = 'lobby';
-      this.state.rows = this.state.rows.map((r) => (r.k === 'human' && r.peer !== this.t.self && !this.connected.has(r.peer) ? { k: 'open', team: r.team } : r));
+      if (!o.sameMap) this.state.seed = randomSeed();
+      // bots keep their seats and the lock stays; everyone says "ready" afresh for the next match
+      this.state.rows = this.state.rows.map((r) => (r.k !== 'human' ? r : r.peer !== this.t.self && !this.connected.has(r.peer) ? { k: 'open', team: r.team } : { ...r, ready: undefined }));
     });
   }
 
   update(): void {
+    if (this.state.phase === 'starting' && this.countdownUntil >= 0 && this.o.clock() >= this.countdownUntil) {
+      if (players(this.state) >= 2 && this.mySeat >= 0) this.launch();
+      else this.cancelStart();
+    }
     const w = this.waiting;
     if (!w) return;
     const guests = w.go.seats.filter((s) => s.peer !== null && this.connected.has(s.peer));
@@ -319,6 +444,28 @@ export class HostLobby {
       this.waiting = null;
       this.onGo?.(w.go);
     }
+  }
+
+  /**
+   * The host leaves the room before a match (#184): the next player runs it
+   * (the same order as hosting a match). Our seat opens, everyone is told,
+   * and the one taking over gets the seat tokens. Returns who, or null when
+   * nobody's left to take it (the room ends). Close the lobby a moment after,
+   * so the word gets out first.
+   */
+  handOff(): string | null {
+    if (this.state.phase === 'playing') return null; // a match moves hosting itself (#166)
+    const to = nextHost(this.state, (p) => this.connected.has(p), this.t.self);
+    if (!to) return null;
+    this.countdownUntil = -1;
+    const me = this.mySeat;
+    this.edit(() => {
+      this.state.phase = 'lobby';
+      if (me >= 0) this.state.rows[me] = { k: 'open', team: this.state.rows[me].team };
+    });
+    const tokens = JSON.stringify([...this.seenTokens, ...this.tokens.values(), ...(this.o.ownToken ? [this.o.ownToken] : [])].filter((v, i, a) => a.indexOf(v) === i));
+    for (const r of this.state.rows) if (r.k === 'human') this.send(r.peer, { k: 'pass', to, tokens: r.peer === to && tokens.length <= MAX_LOBBY ? tokens : '' });
+    return to;
   }
 
   // ---- guests -----------------------------------------------------------------
@@ -332,6 +479,12 @@ export class HostLobby {
       case 'ready':
         this.waiting?.ready.add(peer);
         return this.update();
+      case 'mark': {
+        const seat = seatOf(this.state, peer);
+        const r = this.state.rows[seat];
+        if (this.state.phase !== 'lobby' || seat < 0 || r.k !== 'human' || !!r.ready === m.ready) return;
+        return this.edit(() => (this.state.rows[seat] = { ...r, ready: m.ready || undefined }));
+      }
       default:
         return;
     }
@@ -342,15 +495,21 @@ export class HostLobby {
     if (m.proto !== PROTOCOL_VERSION || m.build !== this.o.build) return this.send(peer, { k: 'refuse', reason: 'This room runs a different version of the game. Refresh the page to update, then open the link again.' });
     if (m.token) this.tokens.set(peer, m.token);
     if (seatOf(this.state, peer) >= 0) return this.send(peer, { k: 'lobby', state: this.json() });
+    if (this.state.phase === 'starting') return this.send(peer, { k: 'refuse', reason: 'The match is starting. Ask the host to let you in for the next one.' });
     if (this.state.phase !== 'lobby') {
       // a player back from a reload proves their seat with its token (#164)
       const seat = m.token ? [...this.seatTokens].find(([, t]) => t === m.token)?.[0] : undefined;
       if (seat === undefined || this.state.rows[seat]?.k !== 'human') return this.send(peer, { k: 'refuse', reason: 'This match has already started.' });
       return this.rejoin(peer, seat);
     }
-    const seat = this.state.rows.findIndex((r) => r.k === 'open');
+    // a closed room still lets back in anyone who sat here before (a reload, #184)
+    if (this.state.locked && !(m.token && this.seenTokens.has(m.token))) return this.send(peer, { k: 'refuse', reason: 'The host has closed this room to new players. Ask them to reopen it.' });
+    // an open seat, or else a bot's: bots step aside for people (#184)
+    let seat = this.state.rows.findIndex((r) => r.k === 'open');
+    if (seat < 0) seat = this.state.rows.findIndex((r) => r.k === 'bot');
     if (seat < 0) return this.send(peer, { k: 'refuse', reason: 'This room is full.' });
-    this.edit(() => (this.state.rows[seat] = { k: 'human', team: seat, peer, char: this.freeChar(m.char >>> 0, -1), mobile: m.mobile }));
+    if (m.token) this.seenTokens.add(m.token);
+    this.edit(() => (this.state.rows[seat] = { k: 'human', team: this.state.rows[seat].team, peer, char: this.freeChar(m.char >>> 0, -1), mobile: m.mobile }));
   }
 
   /** Seat `seat`'s player is back on a new connection: hand them the match, and the seat. */
@@ -375,7 +534,7 @@ export class HostLobby {
     const taken = this.state.rows.some((r, i) => i !== from && nameOf(r) === name);
     this.edit(() => {
       this.state.rows[from] = { k: 'open', team: from };
-      this.state.rows[to] = { k: 'human', peer, team: Math.max(0, Math.min(MAX_SEATS - 1, team | 0)), char: taken ? row.char : char >>> 0, mobile: row.mobile };
+      this.state.rows[to] = { k: 'human', peer, team: Math.max(0, Math.min(MAX_SEATS - 1, team | 0)), char: taken ? row.char : char >>> 0, mobile: row.mobile, ready: row.ready };
     });
   }
 
@@ -389,9 +548,11 @@ export class HostLobby {
 
   private lost(peer: string): void {
     this.connected.delete(peer);
-    if (this.state.phase !== 'lobby') return; // in a match, the sequencer's away policy decides
+    if (this.state.phase === 'playing') return; // in a match, the sequencer's away policy decides
     const seat = seatOf(this.state, peer);
     if (seat >= 0) this.edit(() => (this.state.rows[seat] = { k: 'open', team: this.state.rows[seat].team }));
+    // too few left for a match: the countdown stops
+    if (this.state.phase === 'starting' && players(this.state) < 2) this.cancelStart();
   }
 
   // ---- plumbing ---------------------------------------------------------------
@@ -446,6 +607,12 @@ export class GuestLobby {
   onNoHost: ((why: 'none' | 'left' | 'lost') => void) | null = null;
   /** the link to the host dropped (it may reconnect), or came back */
   onHostLink: ((state: 'lost' | 'back') => void) | null = null;
+  /**
+   * The host left the room before a match and passed it on (#184): to us
+   * (`tokens`: the seat tokens it knew; run the room from `state` now), or to
+   * another player, whose lobby we follow from here.
+   */
+  onPass: ((to: string, mine: boolean, tokens: string[]) => void) | null = null;
   private dropped = false;
   private readonly t: Transport;
   private readonly o: GuestLobbyOptions;
@@ -487,6 +654,11 @@ export class GuestLobby {
     this.dropped = false;
   }
 
+  /** Ready for the next match, or not (#184): the host sees it in the roster. */
+  mark(ready: boolean): void {
+    if (this.host) this.send(this.host, { k: 'mark', ready });
+  }
+
   /** the match from `start` is built: send turns */
   ready(): void {
     if (this.host) this.send(this.host, { k: 'ready' });
@@ -514,6 +686,22 @@ export class GuestLobby {
         this.host ??= peer;
         this.onRefused?.(m.reason);
         return;
+      case 'pass': {
+        if (!this.host || peer !== this.host || this.state?.phase === 'playing') return;
+        let tokens: string[] = [];
+        try {
+          const t = m.tokens ? (JSON.parse(m.tokens) as unknown) : [];
+          if (Array.isArray(t)) tokens = t.filter((x): x is string => typeof x === 'string' && x.length <= 64);
+        } catch {
+          /* no tokens, then */
+        }
+        if (m.to === this.t.self) return this.onPass?.(m.to, true, tokens);
+        // follow the new host, and say hello: it answers with the room as it runs it
+        this.follow(m.to);
+        this.send(m.to, { k: 'hello', proto: PROTOCOL_VERSION, build: this.o.build, mobile: this.o.mobile, char: this.o.char >>> 0, token: this.o.token });
+        this.onPass?.(m.to, false, []);
+        return;
+      }
       case 'start': {
         if (!this.host) return;
         try {

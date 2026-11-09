@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { playerCharacter } from '../src/game/character';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { buildNetSetup, GuestLobby, HostLobby, parseLobby, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
+import { buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { PROTOCOL_VERSION } from '../src/net/protocol';
 import { encodeMsg } from '../src/net/codec';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, PeerGrace, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
 import { DT } from '../src/sim/constants';
-import { FRAME, play, prefs, room, wipe } from './rig';
+import { FRAME, play, prefs, room, wipe, type Guest } from './rig';
 import { fullHash } from '../src/sim/snapshot';
 import { createWorld } from '../src/sim/setup';
 import { ordinal, placingOf } from '../src/game/standing';
@@ -17,12 +17,15 @@ const occupant = (s: LobbyState) => s.rows.map((r) => (r.k === 'human' ? r.peer 
 
 
 describe('lobby (#162)', () => {
-  it('seats guests in open rows, and every guest sees the host’s state', () => {
+  it('opens empty, seats guests in open rows, and every guest sees the host’s state', () => {
     const { host, guest } = room();
+    // the skirmish screen's bots stay out of a room (#184): its seats are for friends
     const h = host({ prefs: prefs({ color: 2, bots: [{ faction: 4, difficulty: 2, personality: 'rusher', team: 1 }] }) });
+    expect(occupant(h.lobby.state)).toEqual(['open', 'open', 'H', 'open', 'open', 'open']);
+    expect(h.lobby.state.locked).toBe(false);
     const a = guest('A');
     const b = guest('B');
-    expect(occupant(h.lobby.state)).toEqual(['A', 'B', 'H', 'open', 'bot', 'open']);
+    expect(occupant(h.lobby.state)).toEqual(['A', 'B', 'H', 'open', 'open', 'open']);
     for (const g of [a, b]) {
       expect(g.lobby.host).toBe('H');
       expect(g.lobby.state).toEqual(h.lobby.state);
@@ -32,15 +35,19 @@ describe('lobby (#162)', () => {
   });
 
   it('refuses another version, a full room, and a match in progress', () => {
-    const { host, guest } = room();
+    const rm = room();
+    const { host, guest } = rm;
     const h = host();
     expect(guest('A', { build: 'other' }).refused[0]).toMatch(/different version/);
-    for (let i = 1; i < 6; i++) h.lobby.setRow(i, i === 5 ? { k: 'closed', team: 5 } : { k: 'bot', team: i, difficulty: 1, personality: 'random' });
+    for (let i = 1; i < 6; i++) h.lobby.setRow(i, { k: 'closed', team: i });
     expect(guest('B').refused[0]).toMatch(/full/);
     h.lobby.setRow(5, { k: 'open', team: 5 });
     guest('C');
     h.lobby.start();
-    expect(guest('D').refused[0]).toMatch(/already started/);
+    expect(guest('D').refused[0]).toMatch(/is starting/);
+    rm.clock.now += 3000;
+    h.lobby.update();
+    expect(guest('E').refused[0]).toMatch(/already started/);
   });
 
   it('guests move to open colours, change team, and pick characters; names stay unique', () => {
@@ -119,7 +126,8 @@ describe('lobby (#162)', () => {
 
   it('builds the match from the rows: colours are seats, teams only when on', () => {
     const { host, guest } = room();
-    const h = host({ prefs: prefs({ bots: [{ faction: 3, difficulty: 0, personality: 'random', team: 1 }] }) });
+    const h = host();
+    h.lobby.setRow(3, { k: 'bot', team: 1, difficulty: 0, personality: 'random' });
     guest('A');
     const ffa = buildNetSetup(h.lobby.state);
     expect(ffa.players.map((p) => [p.faction, p.team, p.human])).toEqual([[0, 0, true], [1, 1, true], [3, 3, false]]);
@@ -285,7 +293,7 @@ describe('lobby to match (#162)', () => {
   });
 
   it('the host ends the match for everyone, changes a setting, and starts the next one (#183)', () => {
-    const { matches, run, h, gs } = play();
+    const { matches, run, h, gs, startNow } = play();
     run(3000);
     // End match: the host's room goes back to the lobby; every guest's state follows
     h.lobby.backToLobby();
@@ -294,7 +302,7 @@ describe('lobby to match (#162)', () => {
     h.lobby.setMap({ ...h.lobby.state.map, size: 'medium' });
     const starts: StartInfo[] = [];
     for (const g of gs) g.lobby.onStart = (s) => starts.push(s);
-    const setup = h.lobby.start()!;
+    const setup = startNow(h)!;
     expect(setup.size).toBe('medium');
     expect(starts.length).toBe(2);
     for (const s of starts) expect(s.setup).toEqual(setup);
@@ -306,9 +314,9 @@ describe('lobby to match (#162)', () => {
     rm.guest('A');
     let go: HostGo | null = null;
     h.lobby.onGo = (g) => (go = g);
-    h.lobby.start();
+    rm.startNow(h);
     expect(go).toBeNull();
-    rm.clock.now = 6000;
+    rm.clock.now += 6000;
     h.lobby.update();
     expect(go).not.toBeNull();
     // and the room shows the match as started
@@ -405,5 +413,269 @@ describe('where you finished (#183)', () => {
     w.factions[0].eliminated = true; // out now
     expect(placingOf(w, 0)).toEqual({ place: 3, of: 4 });
     expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 103].map(ordinal)).toEqual(['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '103rd']);
+  });
+});
+
+describe('the room, start to rematch (#184)', () => {
+  const bot = (team: number) => ({ k: 'bot' as const, team, difficulty: 1, personality: 'random' as const });
+
+  it('"Everyone\u2019s here" closes the room to strangers, not to a player reloading; reopening lets them in', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    h.lobby.setLocked(true);
+    expect(rm.guest('B').lobby.state).toBeNull();
+    expect(rm.guest('C').refused[0]).toMatch(/closed this room/);
+    // A reloads: a new peer id, the same seat token
+    rm.leave('A');
+    expect(occupant(h.lobby.state).filter((o) => o === 'A')).toEqual([]);
+    const a2 = rm.guest('A2');
+    expect(a2.refused).toEqual([]);
+    expect(a2.lobby.mySeat).toBeGreaterThanOrEqual(0);
+    h.lobby.setLocked(false);
+    const d = rm.guest('D');
+    expect(d.refused).toEqual([]);
+    expect(d.lobby.mySeat).toBeGreaterThanOrEqual(0);
+    expect(d.lobby.state!.locked).toBe(false);
+  });
+
+  it('fills only the open seats with bots, and a newcomer takes a bot’s seat when the room is open', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    h.lobby.setRow(4, { k: 'closed', team: 4 });
+    h.lobby.fillBots();
+    expect(occupant(h.lobby.state)).toEqual(['H', 'A', 'bot', 'bot', 'closed', 'bot']);
+    const b = rm.guest('B');
+    expect(b.lobby.mySeat).toBe(2);
+    expect(occupant(h.lobby.state)).toEqual(['H', 'A', 'B', 'bot', 'closed', 'bot']);
+    // locked: no bot gives way
+    h.lobby.setLocked(true);
+    expect(rm.guest('C').refused[0]).toMatch(/closed/);
+  });
+
+  it('ready is each guest’s own, shown to everyone, and cleared after a match', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A');
+    const b = rm.guest('B');
+    expect(h.lobby.readyCount()).toEqual({ ready: 0, of: 2 });
+    a.lobby.mark(true);
+    expect(h.lobby.readyCount()).toEqual({ ready: 1, of: 2 });
+    expect(b.lobby.state!.rows[a.lobby.mySeat]).toMatchObject({ peer: 'A', ready: true });
+    // a player without a seat (turned away at the door) marks nothing
+    h.lobby.setLocked(true);
+    const z = rm.guest('Z');
+    expect(z.refused[0]).toMatch(/closed/);
+    z.lobby.mark(true);
+    expect(h.lobby.readyCount()).toEqual({ ready: 1, of: 2 });
+    a.lobby.mark(false);
+    expect(h.lobby.readyCount()).toEqual({ ready: 0, of: 2 });
+    a.lobby.mark(true);
+    b.lobby.mark(true);
+    rm.startNow(h);
+    expect(h.lobby.state.phase).toBe('playing');
+    h.lobby.backToLobby();
+    expect(h.lobby.readyCount()).toEqual({ ready: 0, of: 2 });
+  });
+
+  it('Start counts down 3, 2, 1 for everyone; it can be cancelled, and stops by itself if too few are left', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A');
+    const starts: StartInfo[] = [];
+    a.lobby.onStart = (s) => starts.push(s);
+    let go: HostGo | null = null;
+    h.lobby.onGo = (g) => (go = g);
+    expect(h.lobby.start()).not.toBeNull();
+    expect(a.lobby.state!.phase).toBe('starting');
+    expect(h.lobby.canStart()).toBe(false);
+    // nobody changes seats or joins mid-countdown
+    a.lobby.pick(4, 4, 7);
+    expect(a.lobby.mySeat).toBe(1);
+    expect(rm.guest('B').refused[0]).toMatch(/is starting/);
+    rm.clock.now += COUNTDOWN_MS - 1;
+    h.lobby.update();
+    expect(starts.length).toBe(0);
+    h.lobby.cancelStart();
+    expect(a.lobby.state!.phase).toBe('lobby');
+    rm.clock.now += COUNTDOWN_MS;
+    h.lobby.update();
+    expect(starts.length).toBe(0);
+    // again, to the end: the match is sent, and goes once A is ready
+    rm.startNow(h);
+    expect(starts.length).toBe(1);
+    expect(go).toBeNull();
+    a.lobby.ready();
+    expect(go).not.toBeNull();
+    // a countdown that loses its last guest stops
+    h.lobby.backToLobby();
+    h.lobby.start();
+    rm.leave('A');
+    expect(h.lobby.state.phase).toBe('lobby');
+    rm.clock.now += COUNTDOWN_MS;
+    h.lobby.update();
+    expect(h.lobby.state.phase).toBe('lobby');
+  });
+
+  it('after a match: reopen, a newcomer joins, a player leaves, close again, and the next match has the new roster', () => {
+    const rm = play();
+    const { h, gs, matches, run } = rm;
+    run(2000);
+    for (const m of matches.values()) m.close();
+    matches.clear();
+    h.lobby.setLocked(true);
+    h.lobby.backToLobby();
+    // everything as it was: the lock, the bot, the players
+    expect(h.lobby.state.locked).toBe(true);
+    expect(occupant(h.lobby.state)).toEqual(['H', 'A', 'B', 'open', 'open', 'bot']);
+    h.lobby.setRow(3, bot(3));
+    h.lobby.setRow(4, bot(4));
+    const seen: ReturnType<typeof rosterChanges>[] = [];
+    let prev = gs[0].lobby.state;
+    gs[0].lobby.onChange = (s) => {
+      seen.push(rosterChanges(prev, s));
+      prev = structuredClone(s);
+    };
+    expect(rm.guest('C').refused[0]).toMatch(/closed/);
+    h.lobby.setLocked(false);
+    const d = rm.guest('D');
+    expect(d.lobby.mySeat).toBe(3);
+    rm.leave('B');
+    h.lobby.setLocked(true);
+    expect(occupant(h.lobby.state)).toEqual(['H', 'A', 'open', 'D', 'bot', 'bot']);
+    expect(seen.some((c) => c.joined.includes(3))).toBe(true);
+    expect(seen.some((c) => c.left.some((l) => l.seat === 2))).toBe(true);
+    const setup = rm.startNow(h)!;
+    expect(setup.players.map((p) => [p.faction, p.human])).toEqual([[0, true], [1, true], [3, true], [4, false], [5, false]]);
+    expect(d.start()?.seat).toBe(3);
+  });
+
+  it('works out who joined and who left, and ignores a seat change', () => {
+    const base = room().host().lobby.state;
+    const withRow = (s: LobbyState, i: number, peer: string) => ({ ...s, rows: s.rows.map((r, j) => (j === i ? { k: 'human' as const, team: j, peer, char: 5, mobile: false } : r)) });
+    const one = withRow(base, 1, 'A');
+    expect(rosterChanges(null, one)).toEqual({ joined: [], left: [] });
+    expect(rosterChanges(base, one)).toEqual({ joined: [1], left: [] });
+    const moved = withRow({ ...base }, 4, 'A');
+    expect(rosterChanges(one, moved)).toEqual({ joined: [], left: [] });
+    expect(rosterChanges(moved, base)).toEqual({ joined: [], left: [{ seat: 4, char: 5 }] });
+  });
+
+  it('checks the new fields on the way in', () => {
+    const s = room().host().lobby.state;
+    expect(parseLobby(JSON.stringify(s))).toEqual(s);
+    expect(parseLobby(JSON.stringify({ ...s, phase: 'starting' }))?.phase).toBe('starting');
+    expect(parseLobby(JSON.stringify({ ...s, phase: 'counting' }))).toBeNull();
+    expect(parseLobby(JSON.stringify({ ...s, locked: 'yes' }))).toBeNull();
+    const { locked: _, ...noLock } = s;
+    expect(parseLobby(JSON.stringify(noLock))).toBeNull();
+    expect(parseLobby(JSON.stringify({ ...s, rows: s.rows.map((r) => (r.k === 'human' ? { ...r, ready: 1 } : r)) }))).toBeNull();
+  });
+
+  /** what main.ts does when a guest's lobby says the room is ours now */
+  const takeOverAs = (rm: ReturnType<typeof room>, g: Guest, tokens: string[]) => {
+    const st = g.lobby.state!;
+    g.lobby.close();
+    const connected = st.rows.flatMap((r) => (r.k === 'human' && r.peer !== g.id && r.peer !== st.host ? [r.peer] : []));
+    const lobby = new HostLobby(g.r.view(LOBBY_KINDS), { build: 'test', char: 9, prefs: prefs(), seed: st.seed, clock: () => rm.clock.now, takeOver: { state: st, connected, tokens } });
+    lobby.announce();
+    return lobby;
+  };
+
+  it('a host leaving the room hands it to the next player (desktops first); everyone stays, and the lock still knows them', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A', { mobile: true });
+    const b = rm.guest('B');
+    h.lobby.setLocked(true);
+    expect(nextHost(h.lobby.state, () => true, 'H')).toBe('B');
+    let passed: { to: string; mine: boolean; tokens: string[] } | null = null;
+    let promoted: HostLobby | null = null;
+    b.lobby.onPass = (to, mine, tokens) => {
+      passed = { to, mine, tokens };
+      if (mine) promoted = takeOverAs(rm, b, tokens);
+    };
+    const aHeard: string[] = [];
+    a.lobby.onPass = (to) => aHeard.push(to);
+    expect(h.lobby.handOff()).toBe('B');
+    rm.leave('H');
+    expect(passed).toMatchObject({ to: 'B', mine: true });
+    expect(passed!.tokens).toEqual(expect.arrayContaining([rm.tokenOf('A'), rm.tokenOf('B'), rm.tokenOf('H')]));
+    expect(aHeard).toEqual(['B']);
+    // A follows B's room: the old host's seat is open, the lock and the rest as they were
+    expect(a.lobby.host).toBe('B');
+    expect(a.lobby.state!.host).toBe('B');
+    expect(a.lobby.state!.locked).toBe(true);
+    expect(occupant(a.lobby.state!)).toEqual(['open', 'A', 'B', 'open', 'open', 'open']);
+    // the old host reloads: a closed room still lets it back, as a player
+    const h2 = rm.guest('H2');
+    expect(h2.refused).toEqual([]);
+    expect(h2.lobby.host).toBe('B');
+    expect(h2.lobby.mySeat).toBe(0);
+    // and a stranger is still turned away
+    expect(rm.guest('Z').refused[0]).toMatch(/closed/);
+    // the new host runs it to a match
+    let go: HostGo | null = null;
+    promoted!.onGo = (g) => (go = g);
+    rm.startNow({ lobby: promoted! });
+    a.lobby.ready();
+    h2.lobby.ready();
+    expect(go).not.toBeNull();
+  });
+
+  it('nobody to hand the room to: no pass; a host back from a reload runs its room again, alone in it', () => {
+    const rm = room();
+    const h = rm.host();
+    h.lobby.fillBots();
+    h.lobby.setLocked(true);
+    expect(h.lobby.handOff()).toBeNull();
+    const saved = structuredClone(h.lobby.state);
+    rm.leave('H');
+    // the reloaded page: a new peer id
+    const h2 = rm.host({ id: 'H2' });
+    h2.lobby.close();
+    const back = new HostLobby(rm.routerOf('H2').view(LOBBY_KINDS), { build: 'test', char: 1, prefs: prefs(), seed: saved.seed, clock: () => rm.clock.now, takeOver: { state: saved, connected: [], reclaim: true } });
+    expect(back.mySeat).toBe(0);
+    expect(back.state.host).toBe('H2');
+    expect(back.state.locked).toBe(true);
+    expect(occupant(back.state)).toEqual(['H2', 'bot', 'bot', 'bot', 'bot', 'bot']);
+    expect(back.canStart()).toBe(true);
+  });
+
+  it('after a match the map is new (a new seed), unless the host restarts it', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    const seed0 = h.lobby.state.seed;
+    rm.startNow(h);
+    h.lobby.backToLobby({ sameMap: true });
+    expect(h.lobby.state.seed).toBe(seed0);
+    rm.startNow(h);
+    h.lobby.backToLobby();
+    expect(h.lobby.state.seed).not.toBe(seed0);
+  });
+
+  it('Quick match rolls a new map at each Start, everyone sees it in the countdown, and it’s never small for five or more', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A');
+    h.lobby.fillBots();
+    h.lobby.setRandomMap(true);
+    expect(a.lobby.state!.randomMap).toBe(true);
+    const seen = new Set<string>();
+    for (let k = 0; k < 20; k++) {
+      const setup = h.lobby.start()!;
+      expect(a.lobby.state!.phase).toBe('starting');
+      expect(a.lobby.state!.map).toEqual(h.lobby.state.map);
+      expect(setup.size).not.toBe('small');
+      seen.add(h.lobby.state.seed);
+      h.lobby.cancelStart();
+    }
+    expect(seen.size).toBeGreaterThan(1);
+    // off: the host's settings stand
+    h.lobby.setRandomMap(false);
+    h.lobby.setMap({ size: 'small' });
+    expect(h.lobby.start()!.size).toBe('small');
   });
 });

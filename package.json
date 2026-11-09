@@ -22,6 +22,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "qrcode-generator": "^1.4.4",
     "trystero": "^0.26.0"
   }
 }
