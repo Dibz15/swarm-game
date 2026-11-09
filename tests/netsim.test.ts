@@ -61,18 +61,35 @@ describe('net-sim (#160)', () => {
     expect(frozen.tick).toBe(host.tick);
   }, 60_000);
 
-  it('fair in PvP: the host waits as long as its 300 ms rival; fast in co-op', () => {
-    const peers = [{ seat: 0, rtt: 0 }, { seat: 1, rtt: 300, jitter: 80 }];
-    const pvp = runNetMatch({ setup: table([[0, 0], [1, 1]]), secs: 180, peers });
-    healthy(pvp);
-    const [host, friend] = pvp.seats;
+  it('fair in PvP: the host waits as long as its 300 ms rival (uncapped), by ~100 ms at most (the default); fast in co-op', () => {
+    const peers = [{ seat: 0, rtt: 0, net: { fixedBuffer: 1 } }, { seat: 1, rtt: 300, jitter: 80 }];
+    const fair = runNetMatch({ setup: table([[0, 0], [1, 1]]), secs: 120, peers, seq: { holdMaxMs: Infinity } });
+    healthy(fair);
+    const [host, friend] = fair.seats;
     expect(Math.abs(host.effect.p50 - friend.effect.p50)).toBeLessThanOrEqual(TICK + 1);
 
     const coop = runNetMatch({ setup: table([[0, 0], [1, 0]]), secs: 120, peers });
     healthy(coop);
-    // the host's own orders: D + its buffer, about 4 ticks
-    expect(coop.seats[0].effect.p50).toBeLessThan(6 * TICK);
+    // the host's own orders: D and one buffered turn, about 2.5 ticks (#198)
+    expect(coop.seats[0].effect.p50).toBeLessThan(3 * TICK);
     expect(coop.seats[1].effect.p50).toBeGreaterThan(300);
+
+    // the default: held back by about 100 ms, not up to the rival's 400+
+    const capped = runNetMatch({ setup: table([[0, 0], [1, 1]]), secs: 120, peers });
+    healthy(capped);
+    expect(capped.seats[0].effect.p50 - coop.seats[0].effect.p50).toBeLessThanOrEqual(100 + TICK);
+    expect(capped.seats[0].effect.p50).toBeLessThan(capped.seats[1].effect.p50 - 150);
+  }, 90_000);
+
+  it('a 60 ms friend gets their orders in about 150 ms, the host in under 100 (#198)', () => {
+    const r = runNetMatch({ setup: table([[0, 0], [1, 0]]), secs: 60, peers: [{ seat: 0, rtt: 0, net: { fixedBuffer: 1 } }, { seat: 1, rtt: 60, jitter: 10 }] });
+    healthy(r);
+    const [host, friend] = r.seats;
+    expect(host.effect.p50).toBeLessThan(100);
+    expect(host.stallMs).toBe(0);
+    expect(friend.effect.p50).toBeLessThanOrEqual(167);
+    // a clean link: almost never waiting on a turn
+    expect(friend.stallMs / 60).toBeLessThan(10); // ms per second
   }, 60_000);
 
   it('refuses a seat that is not a human player in the match', () => {

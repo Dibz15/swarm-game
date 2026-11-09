@@ -18,7 +18,9 @@ import type { Transport } from './transport';
  * runs the same commands on the same ticks.
  *
  * - **Jitter buffer.** It runs a few turns behind the newest it holds:
- *   `target = clamp(ceil(p95 jitter / tick) + 1, minBuffer, maxBuffer)`.
+ *   `target = clamp(ceil((p95 jitter + marginMs) / tick), minBuffer, maxBuffer)`
+ *   (#198: a small margin, not a whole tick). The host's own session gets its
+ *   turns in-process, with no network in between: a fixed target instead.
  * - **Time dilation.** The sim runs at `1 + 0.05·(buffered − target)`
  *   (0.9–1.25×), so the buffer drifts back to its target without a jump.
  * - **Catch-up.** Far behind (after a freeze or a background tab), it steps
@@ -40,6 +42,10 @@ function keepUntil(log: { tick: number }[], tick: number): void {
 export interface NetSessionOptions {
   minBuffer: number;
   maxBuffer: number;
+  /** headroom over the p95 arrival jitter, ms (#198) */
+  marginMs: number;
+  /** a buffer target that never moves (the host's own session, #198); unset: measured from jitter */
+  fixedBuffer?: number;
   /** ms per frame for catching up */
   catchupMs: number;
   /** ticks past the target before catching up */
@@ -63,15 +69,16 @@ export interface NetSessionOptions {
 }
 
 export const NET_SESSION_DEFAULTS: NetSessionOptions = {
-  minBuffer: 2,
+  minBuffer: 1,
   maxBuffer: 8,
+  marginMs: 12,
   catchupMs: 8,
   catchupLag: 15,
   pingMs: 1000,
   ackMs: 333,
   hashTicks: 30,
   jitterWindow: 300,
-  lowerMs: 5000,
+  lowerMs: 3000,
   resendMs: 750,
   maxResends: 8,
   keepSnaps: 6,
@@ -232,7 +239,7 @@ export class NetSession implements Session {
     this.transport = cfg.transport;
     this.host = cfg.host;
     this.clock = cfg.clock;
-    this.target = this.clampTarget(this.opts.minBuffer);
+    this.target = this.opts.fixedBuffer ?? this.clampTarget(this.opts.minBuffer);
     this.held_ = this.world_.tick;
     this.bufferHist = new Array(this.opts.maxBuffer * 4 + 1).fill(0);
     if (this.opts.stepCostMs !== undefined) this.stepCost = this.opts.stepCostMs;
@@ -724,8 +731,25 @@ export class NetSession implements Session {
     return Math.min(this.opts.maxBuffer, Math.max(this.opts.minBuffer, v));
   }
 
+  /**
+   * Hosting moved to or from this client (#166, #198): its own turns come
+   * in-process (a fixed buffer, `ticks`), or over the network again (`null`:
+   * measured from jitter, starting afresh).
+   */
+  setFixedBuffer(ticks: number | null): void {
+    if (ticks === null) {
+      delete this.opts.fixedBuffer;
+      this.offsets.length = 0;
+      this.target = Math.max(this.target, this.clampTarget(this.opts.minBuffer));
+    } else {
+      this.opts.fixedBuffer = ticks;
+      this.target = ticks;
+    }
+  }
+
   /** The buffer target from the p95 of recent arrival jitter: up at once, down a tick per lowerMs. */
   private retarget(now: number): void {
+    if (this.opts.fixedBuffer !== undefined) return;
     const o = this.offsets;
     if (o.length < 10 || now - this.retargetAt < 250) return;
     this.retargetAt = now;
@@ -733,7 +757,7 @@ export class NetSession implements Session {
     for (const v of o) if (v < min) min = v;
     const j = o.map((v) => v - min).sort((a, b) => a - b);
     const p95 = j[Math.min(j.length - 1, Math.floor(j.length * 0.95))];
-    const want = this.clampTarget(Math.ceil(p95 / DT_MS - 1e-9) + 1);
+    const want = this.clampTarget(Math.ceil((p95 + this.opts.marginMs) / DT_MS - 1e-9));
     if (want > this.target) {
       this.target = want;
       this.lowerAt = now;

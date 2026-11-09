@@ -62,6 +62,10 @@ const ENEMY_TIPS = [
   'Enemy Raiders: guard your nests',
 ];
 
+/** An order delay this long shows amber, and this long red (#161; raised in #198): the HUD's and the pause menu's. */
+export const DELAY_WARN_MS = 200;
+export const DELAY_BAD_MS = 350;
+
 export type HudAction =
   | 'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'nearest' | 'pause' | 'mute'
   | 'fortify' | 'barrage' | 'blink' | 'lockdown' | 'skip' | 'go' | 'next';
@@ -714,13 +718,13 @@ export class Hud {
       ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${100 * ds.frac}%`;
     }
 
-    // Networked (#161): how long orders take, amber past 150 ms, red past 300.
+    // Networked (#161): how long orders take, amber and red as in the pause menu's table (#198)
     if (g.session.net) {
       const ms = Math.round(g.session.expectedDelayMs());
       this.ping.hidden = false;
       this.ping.textContent = `${ms} ms`;
-      this.ping.classList.toggle('warn', ms >= 150 && ms < 300);
-      this.ping.classList.toggle('bad', ms >= 300);
+      this.ping.classList.toggle('warn', ms >= DELAY_WARN_MS && ms < DELAY_BAD_MS);
+      this.ping.classList.toggle('bad', ms >= DELAY_BAD_MS);
     }
 
     // Energy and buttons. Energy that orders on their way will spend (#161) already shows as spent.

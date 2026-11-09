@@ -510,6 +510,9 @@ export function encodeMsg(m: Msg): Uint8Array {
         w.u8(st);
         w.uv(Math.min(65535, Math.max(0, Math.round(r.rtt))));
         w.uv(Math.min(65535, Math.max(0, Math.round(r.delay))));
+        w.u8(Math.min(255, Math.max(0, r.d | 0)));
+        w.u8(Math.min(255, Math.max(0, r.hold | 0)));
+        w.u8(Math.min(255, Math.max(0, r.buffer | 0)));
       }
       break;
     case 'pick':
@@ -640,7 +643,8 @@ function readMsg(r: Reader): Msg {
         const s = readSeat(r);
         const state = SEAT_STATES[r.u8()];
         if (!state) throw new Bad();
-        rows.push({ seat: s, state, rtt: r.upTo(65535), delay: r.upTo(65535) });
+        const rtt = r.upTo(65535), delay = r.upTo(65535);
+        rows.push({ seat: s, state, rtt, delay, d: r.u8(), hold: r.u8(), buffer: r.u8() });
       }
       return { k, rows };
     }

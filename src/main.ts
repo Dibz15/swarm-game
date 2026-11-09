@@ -38,7 +38,7 @@ import type { DesyncReport } from './net/desync';
 import type { GuestLobby, HostGo, HostLobby, LobbyState, StartInfo } from './net/lobby';
 import type { NetMatch } from './net/match';
 import type { Router, Transport } from './net/transport';
-import { formatTime } from './ui/hud';
+import { DELAY_BAD_MS, DELAY_WARN_MS, formatTime } from './ui/hud';
 import type { LobbyView } from './ui/lobby';
 import { FACTION_NAMES } from './content/factions';
 import { relayOnly } from './net/ice';
@@ -158,6 +158,8 @@ class App {
   private endShown = false;
   /** an Easy bot had our seat (#164): its return is worth a word */
   private ownBot = false;
+  /** the resume countdown's last second shown, for its tick (#198) */
+  private resumeShown = -1;
   /** no word from the host; the match waits while a new one is found (#166) */
   private stalled = false;
   /** the desync card (#165), while the match is halted for one */
@@ -1161,12 +1163,37 @@ class App {
     downloadJson(`swarm-desync-${tick}.json`, mp.buildBundle({ setup: g.setup, seat: g.human, host: m.host, report, reported, turns }));
   }
 
+  /**
+   * A networked match is paused (not halted by a desync) and no menu shows
+   * it: the resume's countdown for everyone, with a tick each second, or who
+   * paused it. Null when it isn't paused.
+   */
+  private pauseLine(g: GameView): string | null {
+    const m = this.match;
+    const st = m?.session.status;
+    if (!m || !g.session.paused || this.netMenu || this.desyncView || (st?.paused && st.by < 0)) {
+      this.resumeShown = -1;
+      return null;
+    }
+    if (st?.paused && st.resumeIn >= 0) {
+      const n = Math.max(1, Math.ceil((st.resumeIn - (performance.now() - st.at)) / 1000));
+      if (n !== this.resumeShown) this.sfx.countTick(n);
+      this.resumeShown = n;
+      return `Resuming in ${n}…`;
+    }
+    this.resumeShown = -1;
+    return m.host ? 'Resuming…' : 'The host paused the match.';
+  }
+
   /** The line that stays on screen while you watch after your defeat (#183). */
   private updateBanner(g: GameView): void {
     const h = this.hud;
     if (!h) return;
     // first: no host to be had, rejoining or not; there's a way out
     if (this.stalled && !g.result) return h.banner('Lost touch with the host. Finding a new one…', [{ label: 'Leave', on: () => this.leaveRoom() }]);
+    // paused with the menu closed: say so, and count down a resume, so it never looks like a hang (#198)
+    const pause = this.pauseLine(g);
+    if (pause) return h.banner(pause);
     if (g.session.syncing) return h.banner('Rejoining the match…');
     if (g.session.seatBot) this.ownBot = true; // back from a reload with a bot in our seat: no control entry said so
     if (g.session.seatBot && !g.spectating && !g.result) return h.banner('An Easy bot is playing for you. Taking your seat back…');
@@ -1297,10 +1324,20 @@ class App {
     const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
     const rows = lat.map((r) => {
       const tag = r.state === 'away' ? ' <small>away</small>' : r.state === 'bot' ? ' <small>bot playing</small>' : r.state === 'spectating' ? ' <small>watching</small>' : '';
-      const cls = r.delay >= 300 ? 'bad' : r.delay >= 150 ? 'warn' : '';
-      return `<tr><td><i style="background:${FACTION_HEX[r.seat]}"></i>${esc(this.seatName(r.seat))}${r.seat === me ? ' (you)' : ''}${tag}</td><td>${r.rtt} ms</td><td class="${cls}">${r.delay} ms</td></tr>`;
+      const cls = r.delay >= DELAY_BAD_MS ? 'bad' : r.delay >= DELAY_WARN_MS ? 'warn' : '';
+      // what the delay is made of (#198): the network, the turn it's scheduled for, evening out PvP, smoothing out jitter
+      const tick = 1000 / TICK_HZ;
+      const ms = (ticks: number) => Math.round(ticks * tick);
+      const parts = `${r.rtt} ms network + ${ms(r.d - r.hold)} ms scheduling + ${ms(r.buffer)} ms smoothing${r.hold ? ` + ${ms(r.hold)} ms evening out (PvP)` : ''}`;
+      return `<tr><td><i style="background:${FACTION_HEX[r.seat]}"></i>${esc(this.seatName(r.seat))}${r.seat === me ? ' (you)' : ''}${tag}</td><td>${r.rtt} ms</td><td class="${cls}" title="${parts}">${r.delay} ms</td></tr>`;
     });
-    return `<table class="lat"><thead><tr><th></th><th>Round trip</th><th>Order delay</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    // phones can't hover: say what our own delay is made of under the table
+    const mine = lat.find((r) => r.seat === me);
+    const tick = 1000 / TICK_HZ;
+    const why = mine
+      ? `<p class="hint lat-why">Your orders: ${mine.rtt} ms network, ${Math.round((mine.d - mine.hold) * tick)} ms scheduling, ${Math.round(mine.buffer * tick)} ms smoothing${mine.hold ? `, ${Math.round(mine.hold * tick)} ms evening out with a slower rival` : ''}.</p>`
+      : '';
+    return `<table class="lat"><thead><tr><th></th><th>Round trip</th><th>Order delay</th></tr></thead><tbody>${rows.join('')}</tbody></table>${why}`;
   }
 
   private startDemo(): void {
@@ -1653,6 +1690,8 @@ class App {
       this.input.update(dt);
       this.match?.update();
       g.update(dt, this.time);
+      // the host resumed: guests' pause menus give way to the countdown over the map (#198)
+      if (this.netMenu === 'pause' && (this.match?.session.status?.resumeIn ?? -1) >= 0) this.closeNetMenu();
       if (this.netMenu) this.updateNetNote();
       if (g.result) this.saveRec(g.result, true);
       this.hud?.update(g, dt);

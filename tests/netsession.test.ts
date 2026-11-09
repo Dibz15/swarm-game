@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LocalSession } from '../src/game/session';
-import { decodeMsg } from '../src/net/codec';
+import { decodeMsg, encodeMsg } from '../src/net/codec';
 import { NetSession, type NetSessionOptions } from '../src/net/netSession';
 import type { SequencerOptions } from '../src/net/sequencer';
 import { hostSequencer, LoopbackHub, type Transport } from '../src/net/transport';
@@ -264,5 +264,54 @@ describe('NetSession (#159)', () => {
     run(1000);
     expect(nets[0].world.tick).toBeGreaterThan(t + 20);
     expect(nets.every((n) => n.stallMs < 100)).toBe(true);
+  });
+});
+
+describe('jitter buffer (#198)', () => {
+  /** a session fed turns by hand: turn T arrives at T·tick plus `late(T)` ms */
+  function fed(opts: Partial<NetSessionOptions>, late: (t: number) => number, upto: number) {
+    const clock = { now: 0 };
+    const t: Transport = { self: 'me', onMessage: null, onPeer: null, send: () => undefined, close: () => undefined };
+    const s = new NetSession({ setup: setup([0]), seat: 0, transport: t, host: 'host', clock: () => clock.now, opts });
+    const arrivals = Array.from({ length: upto }, (_, i) => ({ tick: i + 1, at: (i + 1) * DT_MS + late(i + 1) })).sort((a, b) => a.at - b.at);
+    let k = 0;
+    const run = (until: number) => {
+      for (; clock.now < until; clock.now += FRAME) {
+        for (; k < arrivals.length && arrivals[k].at <= clock.now; k++) t.onMessage?.('host', encodeMsg({ k: 'turns', epoch: 0, first: arrivals[k].tick, list: [{ entries: [] }] }));
+        s.update(FRAME / 1000);
+      }
+    };
+    return { s, run };
+  }
+
+  it('a steady link needs one turn of buffer; p95 jitter plus a small margin sets more', () => {
+    const steady = fed({}, () => 0, 300);
+    steady.run(8000);
+    expect(steady.s.target).toBe(1);
+    // every tenth turn 40 ms late: p95 ≈ 40 ms, + 12 ms margin → 2 ticks (the old rule said 3)
+    const bumpy = fed({}, (t) => (t % 10 === 0 ? 40 : 0), 300);
+    bumpy.run(8000);
+    expect(bumpy.s.target).toBe(2);
+  });
+
+  it('comes down a tick per lowerMs once the link settles', () => {
+    const f = fed({ lowerMs: 3000 }, (t) => (t < 60 ? (t % 3) * 50 : 0), 600);
+    f.run(2000);
+    const high = f.s.target;
+    expect(high).toBeGreaterThanOrEqual(4);
+    // the spiky turns age out of the ten-second window, then it steps down
+    f.run(20000);
+    expect(f.s.target).toBeLessThan(high);
+  });
+
+  it('a fixed buffer never moves, and handing it back starts measuring again', () => {
+    const f = fed({ fixedBuffer: 1 }, (t) => (t % 2) * 80, 300);
+    f.run(6000);
+    expect(f.s.target).toBe(1);
+    f.s.setFixedBuffer(null);
+    f.run(9000);
+    expect(f.s.target).toBeGreaterThan(1);
+    f.s.setFixedBuffer(1);
+    expect(f.s.target).toBe(1);
   });
 });

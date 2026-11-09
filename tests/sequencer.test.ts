@@ -102,7 +102,8 @@ describe('Sequencer (#158)', () => {
   });
 
   it('PvP: holds the faster seat so both humans wait about the same, one tick at a time, capped', () => {
-    const { seq, advance } = rig({ dMin: 2, dStepMs: 500 }, [0, 1]);
+    // uncapped evening out (the default caps it, below)
+    const { seq, advance } = rig({ dMin: 2, dStepMs: 500, holdMaxMs: Infinity }, [0, 1]);
     const ack = (rttA: number, rttB: number) => {
       seq.onMessage('a', { k: 'ack', tick: seq.closed, seq: 0, rtt: rttA, buffer: 2 });
       seq.onMessage('b', { k: 'ack', tick: seq.closed, seq: 0, rtt: rttB, buffer: 4 });
@@ -119,6 +120,18 @@ describe('Sequencer (#158)', () => {
     ack(0, 3000);
     advance(10000);
     expect(seq.delayOf(0)).toBe(30); // dMax
+  });
+
+  it('PvP: a laggy rival holds the host back by holdMaxMs at most (#198), and the latency table shows the parts', () => {
+    const { seq, advance } = rig({ dStepMs: 0 }, [0, 1]);
+    seq.onMessage('a', { k: 'ack', tick: seq.closed, seq: 0, rtt: 0, buffer: 1 });
+    seq.onMessage('b', { k: 'ack', tick: seq.closed, seq: 0, rtt: 400, buffer: 3 });
+    advance(2000);
+    expect(seq.delayOf(1)).toBe(1); // dMin: one tick
+    expect(seq.delayOf(0)).toBe(1 + Math.ceil(100 / TICK - 1e-9)); // held 3 ticks, not the ~14 that would even it out
+    const rows = seq.latRows();
+    expect(rows.find((r) => r.seat === 0)).toMatchObject({ d: 4, hold: 3, buffer: 1 });
+    expect(rows.find((r) => r.seat === 1)).toMatchObject({ d: 1, hold: 0, buffer: 3, rtt: 400 });
   });
 
   it('keeps a seat in order when its delay drops', () => {

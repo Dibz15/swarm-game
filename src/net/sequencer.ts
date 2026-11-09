@@ -26,7 +26,10 @@ import { MAX_ENTRIES_PER_TURN, MAX_TURNS_PER_MSG, type Ctrl, type CtrlSeatState,
 const DT_MS = DT * 1000;
 
 export interface SequencerOptions {
-  /** minimum delay in ticks, for every seat including the host's */
+  /**
+   * minimum delay in ticks, for every seat including the host's: one tick
+   * (#198), so an order runs in the turn after the one open when it came
+   */
   dMin: number;
   /**
    * most delay in ticks a seat is ever given: 1 s, enough to even out a
@@ -35,6 +38,11 @@ export interface SequencerOptions {
   dMax: number;
   /** D moves one tick at most this often */
   dStepMs: number;
+  /**
+   * most a seat is held back to even out PvP delays, ms (#198): fair for
+   * ordinary differences, but a laggy player can't make everyone's game slow
+   */
+  holdMaxMs: number;
   /** commands per seat: bucket size and refill per second */
   burst: number;
   refill: number;
@@ -48,7 +56,7 @@ export interface SequencerOptions {
   pauseMs: number;
   /** the seats that may pause and resume the match (null: every human seat); a networked match passes only the host's (#162) */
   pausers: number[] | null;
-  /** countdown between a resume and the next turn */
+  /** countdown between a resume and the next turn: everyone sees it, so nobody is caught mid-click (2 s since #198) */
   resumeMs: number;
   /** how often clients hear `status` while paused */
   statusMs: number;
@@ -61,9 +69,10 @@ export interface SequencerOptions {
 }
 
 export const SEQUENCER_DEFAULTS: SequencerOptions = {
-  dMin: 2,
+  dMin: 1,
   dMax: 30,
   dStepMs: 500,
+  holdMaxMs: 100,
   burst: 60,
   refill: 30,
   awayMs: 5000,
@@ -72,7 +81,7 @@ export const SEQUENCER_DEFAULTS: SequencerOptions = {
   pauses: 3,
   pauseMs: 120000,
   pausers: null,
-  resumeMs: 3000,
+  resumeMs: 2000,
   statusMs: 1000,
   hashTicks: 300,
   latMs: 2000,
@@ -485,10 +494,14 @@ export class Sequencer {
     if (now - this.statusAt >= this.opts.statusMs) this.broadcastStatus(now);
   }
 
-  /** Every human seat's round trip and order-to-effect delay: their RTT, the delay their orders are held, and their buffer. */
+  /** Every human seat's round trip and order-to-effect delay, and what it's made of (#198): scheduling, evening out, buffer. */
+  latRows(): LatRow[] {
+    return [...this.seats.values()].map((r) => ({ seat: r.seat, state: r.state, rtt: r.rtt, delay: r.rtt + (r.d + r.buffer) * DT_MS, d: r.d, hold: Math.max(0, r.d - this.opts.dMin), buffer: r.buffer }));
+  }
+
   private broadcastLat(now: number): void {
     this.latAt = now;
-    const rows: LatRow[] = [...this.seats.values()].map((r) => ({ seat: r.seat, state: r.state, rtt: r.rtt, delay: r.rtt + (r.d + r.buffer) * DT_MS }));
+    const rows = this.latRows();
     for (const peer of this.byPeer.keys()) this.send(peer, { k: 'lat', rows });
   }
 
@@ -519,8 +532,9 @@ export class Sequencer {
   /**
    * Fair in PvP: when two humans are on opposing teams, each seat is held so
    * its total order-to-effect delay (RTT + D + jitter buffer) matches the
-   * slowest human's. Fast in co-op: everyone gets dMin. D moves a tick at a
-   * time, so delays don't swing, and never above dMax.
+   * slowest human's, by `holdMaxMs` at most (#198). Fast in co-op: everyone
+   * gets dMin. D moves a tick at a time, so delays don't swing, and never
+   * above dMax.
    */
   private retargetDelays(now: number): void {
     const live = [...this.seats.values()].filter((r) => r.state === 'human');
@@ -528,7 +542,8 @@ export class Sequencer {
     const est = (r: SeatRec) => r.rtt + r.buffer * DT_MS;
     const worst = pvp ? Math.max(...live.map(est)) : 0;
     for (const r of this.seats.values()) {
-      const hold = pvp && r.state === 'human' ? Math.ceil((worst - est(r)) / DT_MS - 1e-9) : 0;
+      const most = Math.ceil(this.opts.holdMaxMs / DT_MS - 1e-9);
+      const hold = pvp && r.state === 'human' ? Math.min(most, Math.ceil((worst - est(r)) / DT_MS - 1e-9)) : 0;
       const target = Math.min(this.opts.dMax, this.opts.dMin + Math.max(0, hold));
       if (target === r.d || now - r.dAt < this.opts.dStepMs) continue;
       r.d += target > r.d ? 1 : -1;
