@@ -584,6 +584,11 @@ export class Sequencer {
 
   /** A control entry for the next turn (#190: the ranking, a new host): for the record, every player gets it at the same tick. */
   addCtrl(c: Ctrl): void {
+    // a ranking or a host stands for the whole state: a newer one replaces one not yet out (#190)
+    if (c.k === 'rank' || c.k === 'owner') {
+      const i = this.ctrlNext.findIndex((x) => x.k === c.k);
+      if (i >= 0) return void (this.ctrlNext[i] = c);
+    }
     this.ctrlNext.push(c);
   }
 

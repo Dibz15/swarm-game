@@ -102,6 +102,8 @@ export interface MatchConfig {
   resume?: boolean;
   /** the match's host: pause, restart, end (#190). Default: the leader's seat */
   owner?: number;
+  /** …or by peer, when the list of players doesn't have them yet (a rejoin before the lobby came in) */
+  ownerPeer?: string;
   /** "Runs the match" (#190): the seat the host chose to run it; absent: Auto, by measured links */
   runnerSeat?: number;
 }
@@ -200,15 +202,28 @@ export function runnerScore(p: MatchPeer, peers: readonly MatchPeer[], rtt: RttO
 }
 
 /**
- * The ranking by measured links (#190): seats, best runner first. Scores
- * are compared in RANK_STEP_MS steps, ties keep their place in `prev` (then the
- * default order), so near-equal links never reorder it. A `pin` goes first.
+ * The ranking by measured links (#190): seats, best runner first. It starts
+ * from `prev` (then the default order), and a player moves ahead of one
+ * before it only when it scores at least RANK_STEP_MS better, so
+ * near-equal links never reorder it. A `pin` goes first.
  */
 export function rankByLinks(peers: readonly MatchPeer[], rtt: RttOf, prev: readonly number[] | null, pin?: number): number[] {
-  const base = rankOf(peers, prev).map((peer) => peers.find((p) => p.peer === peer)!);
-  const score = new Map(base.map((p) => [p.seat, Math.round(runnerScore(p, peers, rtt) / RANK_STEP_MS)]));
-  const order = base.map((p, i) => ({ s: p.seat, i })).sort((a, b) => Number(b.s === pin) - Number(a.s === pin) || score.get(a.s)! - score.get(b.s)! || a.i - b.i);
-  return order.map((o) => o.s);
+  const order = rankOf(peers, prev).map((peer) => peers.find((p) => p.peer === peer)!.seat);
+  const score = new Map(peers.map((p) => [p.seat, runnerScore(p, peers, rtt)]));
+  // a bubble sort that swaps only on a clear gain: each swap removes an inversion of the scores, so it ends
+  for (let swapped = true; swapped; ) {
+    swapped = false;
+    for (let i = 0; i + 1 < order.length; i++) {
+      if (order[i] === pin) continue;
+      const a = order[i], b = order[i + 1];
+      if (b === pin || score.get(a)! - score.get(b)! >= RANK_STEP_MS) {
+        order[i] = b;
+        order[i + 1] = a;
+        swapped = true;
+      }
+    }
+  }
+  return order;
 }
 
 /** Whether `to` would run the match enough better than `from` to move it (#190). */
@@ -285,12 +300,18 @@ export class NetMatch {
   /** runner: each seat's reported round trips to the others*/
   private reports = new Map<number, { at: number; rtt: Map<number, number> }>();
   private rankAt = -Infinity;
+  /** runner: the last ranking we put in the log */
+  private rankSent: number[] | null = null;
   /** runner, at the start: when to look for a better-placed runner (-1: done), and the latest we wait for everyone's links */
   private settleAt = -1;
   private settleBy = -1;
   private settleEnd = -1;
   /** runner: the host asked for a resync before the desync report was ready (#190) */
   private resyncAsked = false;
+  /** host: the match's host by peer, until the list of players has them (#190) */
+  private ownerPeer: string | null = null;
+  /** host: rejoiners' new connections, told to whoever runs the match until they're in (#190) */
+  private rebinds = new Map<number, string>();
   /** runner: rejoiners who asked for a snapshot before the host told us their new connection (#190) */
   private snapWait = new Set<string>();
 
@@ -317,10 +338,14 @@ export class NetMatch {
     gzip?: boolean;
     resume?: boolean;
     owner?: number;
+    ownerPeer?: string;
     pin?: number;
   }) {
     this.remote = o.remote;
-    this.owner = o.owner ?? (o.leader === o.remote?.self ? o.seat : (o.peers.find((p) => p.peer === o.leader)?.seat ?? -1));
+    const ownerPeer = o.ownerPeer ?? o.leader;
+    this.owner = o.owner ?? (ownerPeer === o.remote?.self ? o.seat : (o.peers.find((p) => p.peer === ownerPeer)?.seat ?? -1));
+    // not in the list yet: found once it is
+    if (this.owner < 0 && o.ownerPeer) this.ownerPeer = o.ownerPeer;
     this.pin = o.pin;
     this.firstWordMs = o.resume ? SILENCE_MS : START_SILENCE_MS;
     this.self = o.remote?.self ?? '';
@@ -381,6 +406,7 @@ export class NetMatch {
       gzip: cfg.gzip,
       resume: cfg.resume,
       owner: cfg.owner,
+      ownerPeer: cfg.ownerPeer,
       pin: cfg.runnerSeat,
     });
     if (cfg.leader === remote.self) {
@@ -423,7 +449,7 @@ export class NetMatch {
     setup: MatchSetup,
     seat: number,
     host: string,
-    o: { clock?: () => number; net?: Partial<NetSessionOptions>; resume?: boolean; peers?: MatchPeer[]; botMs?: number; heartbeat?: boolean; gzip?: boolean; owner?: number } = {},
+    o: { clock?: () => number; net?: Partial<NetSessionOptions>; resume?: boolean; peers?: MatchPeer[]; botMs?: number; heartbeat?: boolean; gzip?: boolean; owner?: number; ownerPeer?: string; runnerSeat?: number } = {},
   ): NetMatch {
     return NetMatch.create(t, { setup, seat, peers: o.peers ?? [], leader: host, ...o });
   }
@@ -527,6 +553,11 @@ export class NetMatch {
   /** The seats' players changed (a rejoin under a new peer id, #164): keep the election's list current. */
   updatePeers(peers: MatchPeer[]): void {
     this.peers = peers;
+    const seat = this.ownerPeer ? this.seatOf(this.ownerPeer) : -1;
+    if (seat >= 0) {
+      this.ownerPeer = null;
+      this.setOwner(seat);
+    }
   }
 
   /** Our page was hidden or shown (#164): our seat goes away, and we can't help elect a host meanwhile. */
@@ -545,12 +576,29 @@ export class NetMatch {
     this.peers = this.peers.map((p) => (p.seat === seat ? { ...p, peer } : p));
     if (this.leading_ || !this.remote) {
       if (!this.seq_ && this.makeSeq) this.tick();
-      this.seq_?.bindPeer(seat, peer);
-      // they missed the ranking in the log before their snapshot
-      if (this.rank) this.seq_?.addCtrl({ k: 'rank', seats: this.rank.slice() });
+      if (this.seq_?.seatOfPeer(peer) !== seat) {
+        this.seq_?.bindPeer(seat, peer);
+        this.restate();
+      }
       // their snapshot request may have beaten the host's word here (another channel)
       if (this.snapWait.delete(peer)) this.serveSnap(peer, 0);
-    } else if (this.host) this.remote.send(this.leaderId, encodeMsg({ k: 'rebind', seat, peer }));
+    } else if (this.host) {
+      // said again until they're in: whoever runs the match may go before it hears (they reloaded, or handed over)
+      this.rebinds.set(seat, peer);
+      this.remote.send(this.leaderId, encodeMsg({ k: 'rebind', seat, peer }));
+    }
+  }
+
+  /**
+   * Runner (#190): who hosts and the ranking, in the log again, for a
+   * player whose world came from a snapshot taken after they were (a
+   * rejoin, a fork healed): they'd never see them otherwise.
+   */
+  private restate(): void {
+    const seq = this.seq_;
+    if (!seq) return;
+    if (this.rank) seq.addCtrl({ k: 'rank', seats: this.rank.slice() });
+    if (this.owner >= 0) seq.addCtrl({ k: 'owner', seat: this.owner });
   }
 
   /**
@@ -757,6 +805,7 @@ export class NetMatch {
     if (!seq || tick !== 0) return;
     // a rejoiner the host hasn't told us about yet (#190): served once it does
     if (seat < 0) return void (this.remote && this.snapWait.add(peer));
+    this.restate();
     const w = this.session.world;
     const meta = { tick: w.tick, pausedBy: this.session.pausedSeat, seqBase: seq.seatSeq(seat) };
     settle(
@@ -842,7 +891,8 @@ export class NetMatch {
     if (this.resync()) return;
     const r = this.report;
     if (!r && this.collect) this.resyncAsked = true;
-    else if (host !== this.self) {
+    // no agreed world: say so. No report and nothing halted: a second ask after the first one worked
+    else if (host !== this.self && (r || this.session.halted >= 0)) {
       const tick = r?.tick ?? this.session.halted;
       this.remote?.send(host, encodeMsg({ k: 'desync', tick, text: r ? NO_WORLD : 'nothing to resync from' }));
     }
@@ -947,7 +997,13 @@ export class NetMatch {
   private publishRank(now: number): { order: number[]; live: MatchPeer[] } {
     this.rankAt = now;
     const r = this.measuredRank(now);
-    if (!this.rank || r.order.some((s, i) => s !== this.rank![i])) this.seq_?.addCtrl({ k: 'rank', seats: r.order });
+    // against the last one out, not yet back in a closed turn; none while no turns close (paused, halted)
+    const last = this.rankSent ?? this.rank;
+    const still = this.session.paused || this.session.halted >= 0;
+    if (!still && (!last || r.order.length !== last.length || r.order.some((s, i) => s !== last[i]))) {
+      this.rankSent = r.order;
+      this.seq_?.addCtrl({ k: 'rank', seats: r.order });
+    }
     return r;
   }
 
@@ -1004,6 +1060,12 @@ export class NetMatch {
       this.linksAt = now;
       const rtt = [...this.links()];
       if (rtt.length) this.remote?.send(this.leaderId, encodeMsg({ k: 'links', rtt }));
+      // a rejoiner beating with a world is in; until then, whoever runs the match hears again
+      for (const [seat, peer] of this.rebinds) {
+        const b = this.beats.get(peer);
+        if (b && !b.syncing) this.rebinds.delete(seat);
+        else this.remote?.send(this.leaderId, encodeMsg({ k: 'rebind', seat, peer }));
+      }
     }
     if (this.candidate) {
       if (now < this.candidate.until) return;
@@ -1169,9 +1231,12 @@ export class NetMatch {
     });
     this.candidate = null;
     this.awaiting = null;
+    // our own sequencer starts from the current list of players
+    this.rebinds.clear();
     this.leading_ = true;
     this.leaderId = this.self;
     this.rankAt = this.clock();
+    this.rankSent = null;
     // taken over by election (#190): whoever claimed first may not be the best placed (two claimed at once, or
     // rankings differed): look again a few seconds in, as at a match's start. Handed over: chosen already
     if (handed) this.settleAt = -1;

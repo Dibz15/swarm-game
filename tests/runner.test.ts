@@ -75,6 +75,19 @@ describe('ranking by links (#190)', () => {
     expect(rankOf(peers, [2])).toEqual(['p2', 'p0', 'p1']);
   });
 
+  it('noise across a step edge never flips two players', () => {
+    const peers = [peer(0), peer(1), peer(2)];
+    // 312 and 313 sit either side of a 25 ms step's edge
+    const one = table({ '0-1': 300, '0-2': 312, '1-2': 313 });
+    const two = table({ '0-1': 300, '0-2': 313, '1-2': 312 });
+    let order = rankByLinks(peers, one, null);
+    const first = order.slice();
+    for (let i = 0; i < 6; i++) order = rankByLinks(peers, i % 2 ? one : two, order);
+    expect(order).toEqual(first);
+    // a clear gain still moves a player up
+    expect(rankByLinks(peers, table({ '0-1': 300, '0-2': 400, '1-2': 100 }), [0, 1, 2])).toEqual([1, 0, 2]);
+  });
+
   it('moves only for a real gain', () => {
     expect(worthMoving(300, 200)).toBe(true);
     expect(worthMoving(60, 45)).toBe(false); // 15 ms: under the margin
@@ -200,6 +213,12 @@ describe('the host keeps the controls (#190)', () => {
     const { common, bad } = agree();
     expect(common).toBeGreaterThan(3);
     expect(bad).toBe(0);
+    // a second click once it's done: nothing happens
+    expect(() => {
+      h.requestResync();
+      run(2000);
+    }).not.toThrow();
+    for (const m of matches.values()) expect(m.session.halted).toBe(-1);
   });
 
   it('when the host leaves, the runner becomes host', () => {
@@ -316,5 +335,65 @@ describe('moving the sequencer (#190)', () => {
     reload('A', 'A2');
     run(1500);
     expect(matches.get('A2')!.session.syncing).toBe(false);
+  });
+
+  it('a long desync halt while the links change: turns still go out after it', () => {
+    const r = uneven();
+    r.run(10_000);
+    const c = r.matches.get('C')!, h = r.matches.get('H')!;
+    const t0 = c.session.world.tick + 30;
+    c.session.beforeStep = (t, w) => void (t === t0 && nudgeWorld(w));
+    for (let i = 0; i < 400 && h.session.halted < 0; i++) r.run(50);
+    r.run(6000);
+    for (let i = 0; i < 20; i++) {
+      // the best-placed player keeps changing, between two who weren't before: no turn closes meanwhile to carry a new ranking
+      const best = i % 2 ? 'A' : 'C';
+      for (const [x, y] of [['H', 'A'], ['H', 'B'], ['H', 'C'], ['A', 'B'], ['A', 'C'], ['B', 'C']]) r.lag(x, y, x === best || y === best ? 40 : 250);
+      r.run(10_000);
+    }
+    h.requestResync();
+    r.run(4000);
+    const t1 = h.session.world.tick;
+    r.run(6000);
+    for (const m of r.matches.values()) {
+      expect(m.session.halted).toBe(-1);
+      expect(m.session.world.tick).toBeGreaterThan(t1 + 30);
+    }
+  });
+
+  it('a host cut off while running the match, back later: one host, and it isn’t them', () => {
+    const r = play({ guests: ['A', 'B'], bot: false });
+    r.run(5000);
+    const h = r.matches.get('H')!;
+    for (const id of ['A', 'B']) r.silence('H', id);
+    r.run(12_000);
+    for (const id of ['A', 'B']) r.heal('H', id);
+    r.run(15_000);
+    const hosts = [...r.matches.values()].filter((m) => m.host);
+    expect(hosts.length).toBe(1);
+    expect(h.host).toBe(false);
+    expect(new Set([...r.matches.values()].map((m) => m.ownerSeat)).size).toBe(1);
+  });
+
+  it('the runner reloads: whoever runs it next learns the rejoiner’s new connection', () => {
+    const { matches, run, reload } = uneven();
+    run(10_000);
+    expect(matches.get('B')!.runner).toBe(true);
+    reload('B', 'B2');
+    run(20_000);
+    expect(matches.get('B2')!.session.syncing).toBe(false);
+    expect([...matches.values()].filter((m) => m.runner).length).toBe(1);
+  });
+
+  it('the host’s choice holds when someone else took over in between', () => {
+    const r = uneven({ runner: 'A' });
+    r.run(10_000);
+    expect(r.matches.get('A')!.runner).toBe(true);
+    for (const id of ['H', 'B', 'C']) r.silence('A', id);
+    r.run(5000);
+    for (const id of ['H', 'B', 'C']) r.heal('A', id);
+    r.run(20_000);
+    expect(r.matches.get('A')!.runner).toBe(true);
+    expect([...r.matches.values()].filter((m) => m.runner).length).toBe(1);
   });
 });

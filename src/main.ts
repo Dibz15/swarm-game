@@ -916,7 +916,7 @@ class App {
       seed: st.seed,
       clock: () => performance.now(),
       mobile: isMobile(),
-          cell: onCellData(),
+      cell: onCellData(),
       ownToken: seatToken(r.id),
       takeOver: { state: st, connected, tokens },
     });
@@ -979,7 +979,7 @@ class App {
       seed: old.state!.seed,
       clock: () => performance.now(),
       mobile: isMobile(),
-          cell: onCellData(),
+      cell: onCellData(),
       takeOver: { state: old.state!, connected: m.livePeers() },
     });
     r.lobby = this.wireHostLobby(lobby);
@@ -1012,7 +1012,17 @@ class App {
       const peers = st ? mp.matchPeers(st, s.setup) : [];
       // the host may not be who runs the match (#190)
       const owner = st ? mp.seatOf(st, st.host) : undefined;
-      const match = mp.NetMatch.guest(r.router.view(mp.MATCH_KINDS), s.setup, s.seat, s.runner ?? s.host, { resume, peers, botMs: (st?.botSecs ?? 60) * 1000, owner });
+      // the host's "Runs the match" choice (#190): whoever runs it later honours it too
+      const pinned = st?.runner ? mp.seatOf(st, st.runner) : -1;
+      const match = mp.NetMatch.guest(r.router.view(mp.MATCH_KINDS), s.setup, s.seat, s.runner ?? s.host, {
+        resume,
+        peers,
+        botMs: (st?.botSecs ?? 60) * 1000,
+        owner,
+        // no lobby yet: the host by peer, found once the list of players has them
+        ownerPeer: owner === undefined ? s.host : undefined,
+        runnerSeat: pinned >= 0 ? pinned : undefined,
+      });
       this.startGame(s.setup, { seat: s.seat, match, record: false });
     } catch {
       r.view.status('The host sent a match this version can’t play.', true);
@@ -1167,9 +1177,10 @@ class App {
       r && r.tick === tick
         ? r
         : { tick, hashes: ownHash === undefined ? {} : { [g.human]: ownHash }, odd: [], snaps: new Map(own ? [[g.human, own]] : []), diffs: {} };
-    const reported = m.host ? m.reportedHashes() : { [g.human]: s.hashLog.slice() };
-    const turns = m.host && m.seq ? m.seq.closedTurns() : s.closedTurns();
-    downloadJson(`swarm-desync-${tick}.json`, mp.buildBundle({ setup: g.setup, seat: g.human, host: m.host, report, reported, turns }));
+    // the whole match's record is with whoever runs it (#190), not the host
+    const reported = m.runner ? m.reportedHashes() : { [g.human]: s.hashLog.slice() };
+    const turns = m.runner && m.seq ? m.seq.closedTurns() : s.closedTurns();
+    downloadJson(`swarm-desync-${tick}.json`, mp.buildBundle({ setup: g.setup, seat: g.human, host: m.runner, report, reported, turns }));
   }
 
   /**

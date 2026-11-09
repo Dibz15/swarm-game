@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { COUNTDOWN_MS, GuestLobby, HostLobby, matchPeers, seatOf, type HostGo, type StartInfo } from '../src/net/lobby';
+import { COUNTDOWN_MS, GuestLobby, HostLobby, matchPeers, seatOf, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
@@ -161,7 +161,7 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
     const s = g.start()!;
     expect(s.setup).toEqual(setup);
     expect(s.seat).toBe(g.lobby.mySeat);
-    add(g.id, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), botMs: g.lobby.state!.botSecs * 1000, heartbeat: false, gzip: false }));
+    add(g.id, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), botMs: g.lobby.state!.botSecs * 1000, runnerSeat: pinOf(g.lobby.state!), heartbeat: false, gzip: false }));
     g.lobby.ready();
   }
   expect(go).not.toBeNull();
@@ -208,7 +208,7 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
     const g = rm.guest(newId, { token });
     const s = g.start();
     if (s) {
-      add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.runner ?? s.host, { clock: () => rm.clock.now, resume: s.tick > 0, owner: seatOf(g.lobby.state!, g.lobby.state!.host), net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), heartbeat: false, gzip: false }));
+      add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.runner ?? s.host, { clock: () => rm.clock.now, resume: s.tick > 0, owner: seatOf(g.lobby.state!, g.lobby.state!.host), net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), runnerSeat: pinOf(g.lobby.state!), heartbeat: false, gzip: false }));
       // as main.ts does on the lobby's change: everyone's list of who could host has the new peer id
       for (const m of matches.values()) m.updatePeers(matchPeers(h.lobby.state, s.setup));
     }
@@ -220,6 +220,12 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
     return rejoin(id, newId);
   };
   return { ...rm, h, gs, matches, run, quit, rejoin, reload, add, kill, dead, orders };
+}
+
+/** The host's "Runs the match" choice, as a seat (#190; main.ts does the same) */
+function pinOf(st: LobbyState): number | undefined {
+  const s = st.runner ? seatOf(st, st.runner) : -1;
+  return s >= 0 ? s : undefined;
 }
 
 /** Knock a faction out: its dots gone, its nests unclaimed (the sim then marks it eliminated). */
