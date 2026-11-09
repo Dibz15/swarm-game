@@ -717,36 +717,7 @@ class App {
       room.lobby = this.wireHostLobby(new mp.HostLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, prefs: loadPrefs(), seed: randomSeed(), clock, mobile: isMobile() }));
       view.status('Send the link to your friends, then start when everyone is in.');
     } else {
-      const lobby = new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), token: seatToken(id), clock });
-      lobby.onChange = (s) => {
-        this.peersChanged();
-        // back in the lobby while the match was still on: the host ended it (#183)
-        const ended = s.phase === 'lobby' && !!this.match && !this.game?.world.over;
-        view.status(s.phase === 'lobby' ? (ended ? 'The host ended the match. Waiting for the host to start the next one.' : 'Waiting for the host to start the match.') : 'The match is starting…');
-        this.renderRoom();
-        // the host brought everyone back after a match
-        if (s.phase === 'lobby' && this.match) this.backToRoom();
-      };
-      lobby.onRefused = (why) => {
-        // mid-match: this tab's seat moved to another tab (#164), or the host removed us
-        if (this.match && this.mp) {
-          this.input.enabled = false;
-          this.setModal(this.mp.messageCard('You left this match', why, [{ label: 'Menu', primary: true, on: () => this.leaveRoom() }]));
-          return;
-        }
-        view.status(why, true);
-      };
-      // in a match, the match reports the host (below, in startGame)
-      lobby.onNoHost = (why) => {
-        if (!this.match) this.roomLost(why);
-      };
-      lobby.onHostLink = (state) => {
-        if (this.match) return;
-        if (state === 'lost') view.status('Lost connection to the host. Reconnecting…', true);
-        else view.status(lobby.state?.phase === 'playing' ? 'The match is starting…' : 'Waiting for the host to start the match.');
-      };
-      lobby.onStart = (s) => this.guestGo(s);
-      room.lobby = lobby;
+      room.lobby = this.wireGuestLobby(new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), token: seatToken(id), clock }));
     }
     this.renderRoom();
   }
@@ -785,6 +756,57 @@ class App {
     // a guest reloaded mid-match and proved their seat: it answers to their new connection (#164)
     lobby.onRejoin = (seat, peer) => this.match?.rebind(seat, peer);
     return lobby;
+  }
+
+  private wireGuestLobby(lobby: GuestLobby): GuestLobby {
+    const status = (text: string, error = false) => this.room?.view.status(text, error);
+    lobby.onChange = (st) => {
+      this.peersChanged();
+      // back in the lobby while the match was still on: the host ended it (#183)
+      const ended = st.phase === 'lobby' && !!this.match && !this.game?.world.over;
+      status(st.phase === 'lobby' ? (ended ? 'The host ended the match. Waiting for the host to start the next one.' : 'Waiting for the host to start the match.') : 'The match is starting…');
+      this.renderRoom();
+      // the host brought everyone back after a match
+      if (st.phase === 'lobby' && this.match) this.backToRoom();
+    };
+    lobby.onRefused = (why) => {
+      // mid-match: this tab's seat moved to another tab (#164), or the host removed us
+      if (this.match && this.mp) {
+        this.input.enabled = false;
+        this.setModal(this.mp.messageCard('You left this match', why, [{ label: 'Menu', primary: true, on: () => this.leaveRoom() }]));
+        return;
+      }
+      status(why, true);
+    };
+    // in a match, the match itself watches the host (and finds a new one, #166)
+    lobby.onNoHost = (why) => {
+      if (!this.match) this.roomLost(why);
+    };
+    lobby.onHostLink = (state) => {
+      if (this.match) return;
+      if (state === 'lost') status('Lost connection to the host. Reconnecting…', true);
+      else status(lobby.state?.phase === 'playing' ? 'The match is starting…' : 'Waiting for the host to start the match.');
+    };
+    lobby.onStart = (st) => this.guestGo(st);
+    return lobby;
+  }
+
+  /**
+   * We hosted the room, and another player hosts the match now (#166): we
+   * were cut off and it moved on without us. The room goes with the match:
+   * follow the new host's lobby, so there's never two.
+   */
+  private becomeRoomGuest(leader: string): void {
+    const r = this.room, mp = this.mp;
+    if (!r?.router || !mp || !r.host || !(r.lobby instanceof mp.HostLobby)) return;
+    const old = r.lobby;
+    old.close();
+    r.host = false;
+    r.view = this.roomView(mp, r);
+    const lobby = this.wireGuestLobby(new mp.GuestLobby(r.router.view(mp.LOBBY_KINDS), { build: BUILD, char: 0, mobile: isMobile(), token: seatToken(r.id), clock: () => performance.now() }));
+    lobby.follow(leader);
+    lobby.state = { ...old.state, host: leader };
+    r.lobby = lobby;
   }
 
   /** The room's rows changed mid-match (a rejoin under a new peer id): the match's list of who could host follows (#166). */
@@ -991,8 +1013,9 @@ class App {
   private updateBanner(g: GameView): void {
     const h = this.hud;
     if (!h) return;
-    if (g.session.syncing) return h.banner('Rejoining the match…');
+    // first: no host to be had, rejoining or not; there's a way out
     if (this.stalled && !g.result) return h.banner('Lost touch with the host. Finding a new one…', [{ label: 'Leave', on: () => this.leaveRoom() }]);
+    if (g.session.syncing) return h.banner('Rejoining the match…');
     if (g.session.seatBot) this.ownBot = true; // back from a reload with a bot in our seat: no control entry said so
     if (g.session.seatBot && !g.spectating && !g.result) return h.banner('An Easy bot is playing for you. Taking your seat back…');
     if (!g.spectating || g.result) return h.banner(null);
@@ -1007,12 +1030,15 @@ class App {
    */
   private leaveMatch(): void {
     const m = this.match;
-    if (m?.host && !this.game?.world.over && m.handOff()) {
+    if (!m?.host || this.game?.world.over) return this.leaveRoom();
+    if (m.handOff()) {
       this.input.enabled = false;
       setTimeout(() => this.leaveRoom(), 150);
       return;
     }
-    this.leaveRoom();
+    // nobody can take over right now (the others are hidden, or still rejoining): say what leaving does
+    if (m.livePeers().length === 0) return this.leaveRoom();
+    this.confirmNet('Leave the match?', 'Nobody can take over hosting right now, so leaving ends the match for everyone else. To stop it and keep the room, use End match instead.', 'Leave and end it', () => this.leaveRoom());
   }
 
   /** Host (#183): stop the match for everyone and bring them back to the room, to change settings or let someone in. */
@@ -1189,7 +1215,8 @@ class App {
           const me = peer === this.room?.router?.transport.self;
           this.hud?.toast(me ? 'You’re hosting now' : `${this.seatName(seat)} is now hosting`, '#8aa0b8');
           if (me) this.becomeRoomHost();
-          else if (this.room && !this.room.host) (this.room.lobby as GuestLobby | null)?.follow(peer);
+          else if (this.room?.host) this.becomeRoomGuest(peer);
+          else (this.room?.lobby as GuestLobby | null)?.follow(peer);
         },
         onStall: (stalled) => (this.stalled = stalled),
         onDesync: (t) => this.showDesync(t),

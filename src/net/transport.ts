@@ -183,33 +183,6 @@ export class Router {
 export const MATCH_KINDS: readonly MsgKind[] = ['cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff'];
 export const LOBBY_KINDS: readonly MsgKind[] = ['hello', 'refuse', 'seats', 'start', 'lobby', 'pick', 'ready'];
 
-/** The id the host's own client has on the host's sequencer transport. */
+/** The id the host's own client has on its own sequencer (NetMatch routes it in-process). */
 export const HOST_SELF = '~host';
 
-/**
- * The host's sequencer talks to remote peers over `remote` and to the host's
- * own client in-process: returns the sequencer's transport and that client's.
- * The client reaches the sequencer as `remote.self`.
- */
-export function splitHost(remote: Transport): { seq: Transport; client: Transport } {
-  const hub = new LoopbackHub();
-  const local = hub.link(remote.self);
-  const client = hub.link(HOST_SELF);
-  const seq: Transport = {
-    self: remote.self,
-    onMessage: null,
-    onPeer: null,
-    send(peer, bytes) {
-      if (peer === HOST_SELF) local.send(peer, bytes);
-      else remote.send(peer, bytes);
-    },
-    close() {
-      local.close();
-      client.close();
-    },
-  };
-  local.onMessage = (peer, bytes) => seq.onMessage?.(peer, bytes);
-  remote.onMessage = (peer, bytes) => seq.onMessage?.(peer, bytes);
-  remote.onPeer = (peer, up) => seq.onPeer?.(peer, up);
-  return { seq, client };
-}

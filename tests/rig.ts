@@ -96,7 +96,10 @@ export function room() {
   const silence = (a: string, b: string) => cuts.add(pair(a, b));
   const heal = (a: string, b: string) => cuts.delete(pair(a, b));
   const ids = () => [...routers.keys()];
-  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids };
+  /** send raw bytes as `from` would, straight to `to` (forged or out-of-turn messages in tests) */
+  const inject = (from: string, to: string, bytes: Uint8Array) => routers.get(from)!.transport.send(to, bytes);
+  const routerOf = (id: string) => routers.get(id)!;
+  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf };
 }
 
 export type Guest = ReturnType<ReturnType<typeof room>['guest']>;
@@ -169,7 +172,11 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
   const rejoin = (id: string, newId: string, token = tokenOf(id)): Guest => {
     const g = rm.guest(newId, { token });
     const s = g.start();
-    if (s) add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, resume: s.tick > 0, net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), heartbeat: false, gzip: false }));
+    if (s) {
+      add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, resume: s.tick > 0, net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), heartbeat: false, gzip: false }));
+      // as main.ts does on the lobby's change: everyone's list of who could host has the new peer id
+      for (const m of matches.values()) m.updatePeers(matchPeers(h.lobby.state, s.setup));
+    }
     return g;
   };
   /** A reload: gone, then straight back. */

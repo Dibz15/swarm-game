@@ -152,10 +152,11 @@ export type Msg =
   | { k: 'desync'; tick: number; text: string }
   /**
    * every player → every other, twice a second (#166): the epoch it follows,
-   * the last tick it holds, whether it still hears the host (`ok`), and
-   * whether its page is hidden (then it can't help elect a new host)
+   * whether it still hears the host (`ok`), whether its page is hidden (then
+   * it can't help elect a new host), and whether it's waiting for a snapshot
+   * (`syncing`: it can vote, but has no world to host from)
    */
-  | { k: 'beat'; epoch: number; held: number; ok: boolean; hidden: boolean }
+  | { k: 'beat'; epoch: number; ok: boolean; hidden: boolean; syncing: boolean }
   /** a player taking over as host (#166): send me your closed turns after `held` */
   | { k: 'claim'; epoch: number; held: number }
   /** the new host → everyone (#166): follow me; I close turns from `next` on */

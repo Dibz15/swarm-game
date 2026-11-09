@@ -88,6 +88,11 @@ export interface MatchConfig {
 const TO_SEQ = new Set<MsgKind>(['cmd', 'ack', 'ping', 'hash', 'pause', 'reclaim', 'away', 'snapreq', 'snap']);
 /** players talking among themselves about who hosts (#166) */
 const MESH = new Set<MsgKind>(['beat', 'claim', 'lead', 'handoff']);
+/**
+ * what only a running sequencer sends: hearing these, and not a player's
+ * beats, is what tells us the host still hosts (#166)
+ */
+const SEQ_OUT = new Set<MsgKind>(['turns', 'status', 'lat', 'pong', 'snap', 'snapreq', 'desync']);
 
 export const BEAT_MS = 500;
 /** a player beat within this is alive */
@@ -141,7 +146,7 @@ export class NetMatch {
   // ---- choosing a host (#166)
   private readonly started: number;
   private heardAt = new Map<string, number>();
-  private beats = new Map<string, { at: number; epoch: number; ok: boolean; hidden: boolean }>();
+  private beats = new Map<string, { at: number; epoch: number; ok: boolean; hidden: boolean; syncing: boolean }>();
   private gone = new Set<string>();
   private goneAt = new Map<string, number>();
   private linkLost = new Set<string>();
@@ -319,9 +324,13 @@ export class NetMatch {
 
   /** Who would take over hosting if we left now (#166): their seat, or -1. */
   successorSeat(): number {
-    const now = this.clock();
-    const succ = rankOf(this.peers).find((p) => p !== this.self && !this.gone.has(p) && this.alive(p, now));
+    const succ = this.successor(this.clock());
     return this.peers.find((p) => p.peer === succ)?.seat ?? -1;
+  }
+
+  /** The first player in rank who could host now: connected, beating, shown, and with a world. */
+  private successor(now: number): string | undefined {
+    return rankOf(this.peers).find((p) => p !== this.self && !this.gone.has(p) && this.canHost(p, now));
   }
 
   /** The seats' players changed (a rejoin under a new peer id, #164): keep the election's list current. */
@@ -352,16 +361,16 @@ export class NetMatch {
     const seq = this.seq_;
     const remote = this.remote;
     if (!this.leading_ || !seq || !remote) return false;
-    const now = this.clock();
-    const rank = rankOf(this.peers);
-    const succ = rank.find((p) => p !== this.self && !this.gone.has(p) && this.alive(p, now));
+    const succ = this.successor(this.clock());
     if (!succ) return false;
     seq.sendRange(succ, seq.ackOf(succ) + 1, seq.closed);
-    const epoch = epochFor(Math.floor(this.epoch / 8) + 1, rank.indexOf(succ));
-    remote.send(succ, encodeMsg({ k: 'handoff', epoch, state: JSON.stringify(seq.exportState()) }));
+    const epoch = epochFor(Math.floor(this.epoch / 8) + 1, rankOf(this.peers).indexOf(succ));
+    const state = JSON.stringify(seq.exportState());
+    // no longer ours before it goes out: whatever answers it finds us a follower
     this.stepDown();
+    // our epoch stays: if the successor has to claim instead, its claim is above ours, and we answer it with our turns
     this.leaderId = succ;
-    this.epoch = epoch;
+    remote.send(succ, encodeMsg({ k: 'handoff', epoch, state }));
     return true;
   }
 
@@ -419,7 +428,7 @@ export class NetMatch {
       const k = msgKind(bytes);
       if (!k) return;
       const now = this.clock();
-      this.heardAt.set(peer, now);
+      if (SEQ_OUT.has(k)) this.heardAt.set(peer, now);
       if (MESH.has(k)) {
         const m = decodeMsg(bytes);
         if (m) this.mesh(peer, m, now);
@@ -584,9 +593,10 @@ export class NetMatch {
 
   // ---- choosing a host (#166) --------------------------------------------------
 
-  private alive(peer: string, now: number): boolean {
+  /** beating lately, shown, and not waiting for a snapshot: could run the sequencer */
+  private canHost(peer: string, now: number): boolean {
     const b = this.beats.get(peer);
-    return !!b && now - b.at <= ALIVE_MS && !b.hidden;
+    return !!b && now - b.at <= ALIVE_MS && !b.hidden && !b.syncing;
   }
 
   /** every other player still connected */
@@ -601,7 +611,7 @@ export class NetMatch {
 
   private beatNow(now: number): void {
     this.beatAt = now;
-    this.broadcast({ k: 'beat', epoch: this.epoch, held: this.session.heldTick, ok: !this.suspect, hidden: this.hidden });
+    this.broadcast({ k: 'beat', epoch: this.epoch, ok: !this.suspect, hidden: this.hidden, syncing: this.session.syncing });
   }
 
   private elect(now: number): void {
@@ -620,15 +630,13 @@ export class NetMatch {
     const leader = this.leaderId;
     const quiet = now - (this.heardAt.get(leader) ?? this.started);
     const left = this.gone.has(leader) && now - (this.goneAt.get(leader) ?? now) >= BYE_WAIT_MS;
-    const suspect = !this.hidden && !this.session.syncing && (left || this.linkLost.has(leader) || quiet > SILENCE_MS);
+    // a player waiting for a snapshot still says whether it hears the host: it votes, but can't lead
+    const suspect = !this.hidden && (left || this.linkLost.has(leader) || quiet > SILENCE_MS);
     if (suspect !== this.suspect) {
       this.suspect = suspect;
       this.beatNow(now);
     }
-    if (suspect !== this.stalled) {
-      this.stalled = suspect;
-      this.events.onStall?.(suspect);
-    }
+    this.setStalled(suspect);
     if (!suspect) return;
     // everyone but the host who could still take part: not gone, not hidden
     const electorate = this.others().filter((p) => p !== leader && !this.beats.get(p)?.hidden);
@@ -640,8 +648,10 @@ export class NetMatch {
       }),
     ];
     if (voters.length < Math.floor((electorate.length + 1) / 2) + 1) return;
+    // the first-ranked voter with a world to host from takes over
     const rank = rankOf(this.peers);
-    if (rank.find((p) => voters.includes(p)) !== this.self) return;
+    const first = rank.find((p) => voters.includes(p) && (p === this.self ? !this.session.syncing : !this.beats.get(p)?.syncing));
+    if (first !== this.self) return;
     const epoch = epochFor(Math.floor(this.epoch / 8) + 1, rank.indexOf(this.self));
     this.candidate = { epoch, until: now + COLLECT_MS };
     this.broadcast({ k: 'claim', epoch, held: this.session.heldTick });
@@ -650,7 +660,7 @@ export class NetMatch {
   private mesh(peer: string, m: Msg, now: number): void {
     switch (m.k) {
       case 'beat':
-        this.beats.set(peer, { at: now, epoch: m.epoch, ok: m.ok, hidden: m.hidden });
+        this.beats.set(peer, { at: now, epoch: m.epoch, ok: m.ok, hidden: m.hidden, syncing: m.syncing });
         // a player still on an old epoch (back from a partition): tell it who hosts now
         if (this.leading_ && m.epoch < this.epoch) this.remote?.send(peer, encodeMsg({ k: 'lead', epoch: this.epoch, next: this.forkAt }));
         return;
@@ -673,6 +683,8 @@ export class NetMatch {
       }
       case 'lead':
         if (m.epoch <= this.epoch && !(this.awaiting && m.epoch >= this.awaiting.epoch)) return;
+        // we claimed above it: that leader steps down when our claim reaches it, and we lead
+        if (this.candidate && m.epoch < this.candidate.epoch) return;
         this.follow(peer, m.epoch, m.next);
         return;
       case 'handoff': {
@@ -707,10 +719,7 @@ export class NetMatch {
     this.heardAt.set(peer, this.clock());
     this.session.follow(peer, epoch, next);
     this.suspect = false;
-    if (this.stalled) {
-      this.stalled = false;
-      this.events.onStall?.(false);
-    }
+    this.setStalled(false);
     this.events.onLeader?.(this.leaderSeat, peer);
   }
 
@@ -751,11 +760,14 @@ export class NetMatch {
     this.broadcast({ k: 'lead', epoch, next });
     if (this.heartbeat) this.startHeartbeat();
     this.suspect = false;
-    if (this.stalled) {
-      this.stalled = false;
-      this.events.onStall?.(false);
-    }
+    this.setStalled(false);
     this.events.onLeader?.(this.mySeat, this.self);
+  }
+
+  private setStalled(on: boolean): void {
+    if (on === this.stalled) return;
+    this.stalled = on;
+    this.events.onStall?.(on);
   }
 
   /** We no longer host. */

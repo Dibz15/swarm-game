@@ -158,6 +158,12 @@ export class NetSession implements Session {
   private own: CtrlSeatState = 'human';
   private reclaimAt = -Infinity;
   private snapReqAt = -Infinity;
+  /**
+   * while resyncing after a fork (#166): the last tick the new host's turns
+   * replace from. Our world is still the forked one, past it, but its turns
+   * from here on are the ones to keep for when the snapshot comes.
+   */
+  private forkFloor = -1;
   private readonly snaps: SnapAssembler;
   /** closed turns stepped, from `historyFrom` on: the match's log as this client holds it (#164) */
   private history: Turn[] = [];
@@ -346,7 +352,8 @@ export class NetSession implements Session {
       }
       this.syncing = true;
       this.snapReqAt = -Infinity;
-      this.maxSeen = this.held_ = this.world_.tick;
+      this.forkFloor = next - 1;
+      this.maxSeen = this.held_ = next - 1;
       return;
     }
     this.held_ = Math.min(this.held_, next - 1);
@@ -457,6 +464,7 @@ export class NetSession implements Session {
    */
   adopt(w: World, meta: SnapMeta, o: { restep?: boolean } = {}): void {
     const tick = w.tick;
+    this.forkFloor = -1;
     if (o.restep) {
       // a resync (#165): the turns we stepped past `tick` run again on the agreed world
       const from = this.historyFrom;
@@ -493,7 +501,8 @@ export class NetSession implements Session {
   }
 
   private turnIn(tick: number, turn: Turn, now: number): void {
-    if (tick <= this.world_.tick || this.turns.has(tick)) return;
+    const floor = this.forkFloor >= 0 ? this.forkFloor : this.world_.tick;
+    if (tick <= floor || this.turns.has(tick)) return;
     this.turns.set(tick, turn);
     this.turnAt = now;
     if (turn.ctrl?.some((c) => c.k === 'resume')) this.offsets.length = 0; // the clock restarted: old timing says nothing

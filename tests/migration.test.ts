@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { HostLobby, type StartInfo } from '../src/net/lobby';
 import { epochFor, rankOf, type NetMatch } from '../src/net/match';
 import { rebuildState } from '../src/net/sequencer';
+import { encodeMsg } from '../src/net/codec';
 import { LOBBY_KINDS } from '../src/net/transport';
 import { DT } from '../src/sim/constants';
 import { play, prefs } from './rig';
@@ -229,5 +230,106 @@ describe('hosting moves (#166)', () => {
     expect(setup.size).toBe('medium');
     expect(starts.length).toBe(1);
     expect(starts[0].host).toBe('A');
+  });
+});
+
+describe('election edge cases (#166 review)', () => {
+  /** a private field, read for the test's sake */
+  const peek = <T,>(m: NetMatch, k: string) => (m as unknown as Record<string, T>)[k];
+
+  it('a candidate keeps its claim over a lower-ranked player’s lead that crossed it', () => {
+    const { matches, run, kill, inject } = play({ guests: ['A', 'B', 'C'], bot: false });
+    run(10_000);
+    kill('H');
+    // step until A is collecting turns as a candidate
+    for (let i = 0; i < 400 && !peek(matches.get('A')!, 'candidate'); i++) run(16);
+    const cand = peek<{ epoch: number } | null>(matches.get('A')!, 'candidate');
+    expect(cand).not.toBeNull();
+    // B's lead, from a claim of its own one rank down, arrives now
+    const ranks = [...matches.values()].map((m) => ({ seat: m.session.localSeat, team: 0, peer: [...matches].find(([, x]) => x === m)![0], mobile: false }));
+    const lowB = epochFor(1, rankOf(ranks).indexOf('B'));
+    expect(lowB).toBeLessThan(cand!.epoch);
+    inject('B', 'A', encodeMsg({ k: 'lead', epoch: lowB, next: matches.get('B')!.session.heldTick + 1 }));
+    run(4000);
+    expect(matches.get('A')!.host).toBe(true);
+    const t = matches.get('C')!.session.world.tick;
+    run(3000);
+    expect(matches.get('C')!.session.world.tick).toBeGreaterThan(t + 2 / DT);
+  });
+
+  it('a player still waiting for its snapshot votes for a new host, but isn’t chosen; then gets its world from the new one', () => {
+    const { matches, run, kill, quit, rejoin, clock } = play({ botSecs: 30 });
+    run(8000);
+    quit('A');
+    run(2000);
+    rejoin('A', 'A2');
+    kill('H'); // before A2's snapshot came: it's syncing, and stays so until someone hosts
+    expect(matches.get('A2')!.session.syncing).toBe(true);
+    run(12_000);
+    expect(matches.get('B')!.host).toBe(true);
+    expect(matches.get('A2')!.host).toBe(false);
+    expect(matches.get('A2')!.session.syncing).toBe(false);
+    const { agree } = watch(matches, clock);
+    run(8000);
+    const { common, bad } = agree(['B', 'A2']);
+    expect(common).toBeGreaterThan(5);
+    expect(bad).toEqual([]);
+  });
+
+  it('hosting is never handed to a player without a world', () => {
+    const { matches, run, inject } = play();
+    run(5000);
+    const h = matches.get('H')!;
+    const seatB = matches.get('B')!.session.localSeat;
+    expect(h.successorSeat()).toBe(matches.get('A')!.session.localSeat);
+    // A says it's waiting for a snapshot: B is next
+    inject('A', 'H', encodeMsg({ k: 'beat', epoch: 0, ok: true, hidden: false, syncing: true }));
+    expect(h.successorSeat()).toBe(seatB);
+  });
+
+  it('after handing off, the old host still answers its successor’s claim with its turns', () => {
+    const { matches, run, inject, routerOf, silence, heal } = play();
+    run(5000);
+    const h = matches.get('H')!;
+    // A misses a second of turns, and its last ack (forged here, stale in life) says it has them all
+    silence('H', 'A');
+    run(1000);
+    heal('H', 'A');
+    const closed = h.seq!.closed;
+    inject('A', 'H', encodeMsg({ k: 'ack', tick: closed, seq: 0, rtt: 0, buffer: 2 }));
+    expect(matches.get('A')!.session.heldTick).toBeLessThan(closed - 10);
+    // count the turns H sends A from here
+    const r = routerOf('A');
+    const prev = r.transport.onMessage!;
+    let fromH = 0;
+    r.transport.onMessage = (peer, bytes) => {
+      if (peer === 'H' && bytes[0] === encodeMsg({ k: 'turns', epoch: 0, first: 1, list: [{ entries: [] }] })[0]) fromH++;
+      prev(peer, bytes);
+    };
+    // the handoff sends nothing (A "has" it all), so A must claim; H answers with what A lacks
+    expect(h.handOff()).toBe(true);
+    expect(fromH).toBeGreaterThan(0);
+    expect(matches.get('A')!.host).toBe(false); // still collecting
+    matches.delete('H');
+    run(1000);
+    expect(matches.get('A')!.host).toBe(true);
+    expect(matches.get('A')!.session.heldTick).toBeGreaterThanOrEqual(closed);
+  });
+
+  it('a host that still beats but no longer sends turns is replaced', () => {
+    const { matches, run, inject, clock } = play({ guests: ['A', 'B', 'C'], bot: false });
+    run(8000);
+    // a forged claim makes H step down and wait for a lead that never comes; H keeps beating
+    inject('C', 'H', encodeMsg({ k: 'claim', epoch: 200, held: matches.get('H')!.session.heldTick }));
+    expect(matches.get('H')!.host).toBe(false);
+    run(8000);
+    const hosts = [...matches].filter(([, m]) => m.host).map(([id]) => id);
+    expect(hosts.length).toBe(1);
+    const { agree } = watch(matches, clock);
+    run(6000);
+    const ids = [...matches.keys()];
+    const { common, bad } = agree(ids);
+    expect(common).toBeGreaterThan(3);
+    expect(bad).toEqual([]);
   });
 });

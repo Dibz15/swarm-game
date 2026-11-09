@@ -476,8 +476,7 @@ export function encodeMsg(m: Msg): Uint8Array {
       break;
     case 'beat':
       w.uv(m.epoch);
-      w.uv(m.held);
-      w.u8((m.ok ? 1 : 0) | (m.hidden ? 2 : 0));
+      w.u8((m.ok ? 1 : 0) | (m.hidden ? 2 : 0) | (m.syncing ? 4 : 0));
       break;
     case 'claim':
       w.uv(m.epoch);
@@ -603,9 +602,9 @@ function readMsg(r: Reader): Msg {
       return { k, tick, text: r.str(MAX_REASON) };
     }
     case 'beat': {
-      const epoch = r.uv(), held = r.uv(), f = r.u8();
-      if (f > 3) throw new Bad();
-      return { k, epoch, held, ok: !!(f & 1), hidden: !!(f & 2) };
+      const epoch = r.uv(), f = r.u8();
+      if (f > 7) throw new Bad();
+      return { k, epoch, ok: !!(f & 1), hidden: !!(f & 2), syncing: !!(f & 4) };
     }
     case 'claim': {
       const epoch = r.uv();
