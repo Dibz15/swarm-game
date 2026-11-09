@@ -186,6 +186,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
         <button data-tab="players">Players <b class="count"></b></button>
         <button data-tab="match">Match</button>
       </nav>
+      <div class="connecting" role="status"><i class="spin" aria-hidden="true"></i><p class="cstatus">Connecting to the room…</p><p class="hint">This can take a few seconds.</p></div>
       <div class="lobby-body">
         <main class="lobby-main">
           <section data-pane="room">
@@ -201,13 +202,17 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
               </div>
             </div>
             <div class="field">
-              <label>You play as</label>
+              <label>Choose your character</label>
               <div class="chars"></div>
             </div>
-            <div class="field">
+            ${
+              isHost
+                ? `<div class="field">
               <label>If a player drops <small>their colour idles, then an Easy bot plays it until they're back</small></label>
-              <select data-a="botsecs"${isHost ? '' : ' disabled'}>${BOT_SECS.map((s) => `<option value="${s}">Easy bot after ${s < 60 ? `${s} s` : `${s / 60} min`}</option>`).join('')}</select>
-            </div>
+              <select data-a="botsecs">${BOT_SECS.map((s) => `<option value="${s}">Easy bot after ${s < 60 ? `${s} s` : `${s / 60} min`}</option>`).join('')}</select>
+            </div>`
+                : ''
+            }
           </section>
           <section data-pane="match">
             ${isHost ? '' : '<p class="hint">The host chooses the map.</p>'}
@@ -247,7 +252,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
   const seats = $<HTMLDivElement>('.seats');
   const seedInput = $<HTMLInputElement>('.seed');
   const teamsBox = $<HTMLInputElement>('[data-a=teams]');
-  const botBox = $<HTMLSelectElement>('[data-a=botsecs]');
+  const botBox = m.querySelector('[data-a=botsecs]') as HTMLSelectElement | null;
   const toasts = $<HTMLDivElement>('.toasts');
   const countdown = $<HTMLDivElement>('.countdown');
   const fail = $<HTMLDivElement>('.lobby-fail');
@@ -337,7 +342,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
 
   // ---- host controls
   teamsBox.addEventListener('change', () => h.host?.teams(teamsBox.checked));
-  botBox.addEventListener('change', () => h.host?.botSecs(Number(botBox.value) as BotSecs));
+  botBox?.addEventListener('change', () => h.host?.botSecs(Number(botBox.value) as BotSecs));
   seedInput.addEventListener('change', () => h.host?.seed(seedInput.value));
   m.querySelector('[data-a=dice]')?.addEventListener('click', () => {
     seedInput.value = randomSeed();
@@ -388,7 +393,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
       if (isHost && open) actions = '<button class="small" data-a="open" title="Remove the bot">✕</button>';
     } else if (r.k === 'open') {
       who = `<span class="hint" title="${state!.locked ? 'Empty: the room is closed' : 'A player who joins sits here'}">${state!.locked ? 'Empty' : 'Open'}</span>`;
-      if (open) actions = `${myRow() >= 0 ? '<button class="small" data-a="sit">Sit here</button>' : ''}${isHost ? '<button class="small" data-a="bot">+ Bot</button><button class="small" data-a="close">Close</button>' : ''}`;
+      if (open) actions = `${myRow() >= 0 ? '<button class="small" data-a="sit" title="Switch to this colour">Play this colour</button>' : ''}${isHost ? '<button class="small" data-a="bot">+ Bot</button><button class="small" data-a="close">Close</button>' : ''}`;
     } else {
       who = '<span class="hint">Closed</span>';
       if (isHost && open) actions = '<button class="small" data-a="open">Open</button>';
@@ -482,6 +487,16 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
     m.classList.toggle('locked', s.locked);
   };
 
+  /** the folded list of empty colours: open on wide screens, closed on phones, then as the player leaves it */
+  let emptiesOpen = !(document.body.classList.contains('mobile') || matchMedia('(max-width: 899px)').matches);
+  seats.addEventListener(
+    'toggle',
+    (e) => {
+      if ((e.target as HTMLElement).classList.contains('empties')) emptiesOpen = (e.target as HTMLDetailsElement).open;
+    },
+    true,
+  );
+
   let lastJson = '';
   const render = (s: LobbyState | null, self: string, canStart: boolean) => {
     me = self;
@@ -499,7 +514,14 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
     }
     const sides = s.rows.filter((r) => r.k === 'human' || r.k === 'bot').length;
     m.querySelectorAll('.count').forEach((c) => (c.textContent = `${sides}/${s.rows.filter((r) => r.k !== 'closed').length}`));
-    seats.innerHTML = s.rows.map(seatHtml).join('');
+    // the players (and bots) first; empty and closed colours fold away under them, closed by default on phones
+    const filled = s.rows.map((r, i) => (r.k === 'human' || r.k === 'bot' ? seatHtml(r, i) : '')).join('');
+    const empty = s.rows.map((r, i) => (r.k === 'open' || r.k === 'closed' ? seatHtml(r, i) : '')).join('');
+    const nEmpty = s.rows.filter((r) => r.k === 'open' || r.k === 'closed').length;
+    const nOpen = s.rows.filter((r) => r.k === 'open').length;
+    seats.innerHTML = `<div class="filled">${filled}</div>${
+      nEmpty ? `<details class="empties"${emptiesOpen ? ' open' : ''}><summary>${nOpen ? `${nOpen} open colour${nOpen > 1 ? 's' : ''}` : 'No open colours'}${nEmpty > nOpen ? ` · ${nEmpty - nOpen} closed` : ''}</summary><div class="empty-list">${empty}</div></details>` : ''
+    }`;
     seats.querySelectorAll<HTMLElement>('[data-p]').forEach((slot) => {
       const r = s.rows[Number(slot.dataset.p)];
       if (r.k === 'human') slot.replaceChildren(creatureCanvas(characterCreature(playerCharacter(r.char), Number(slot.dataset.p)), 28));
@@ -507,7 +529,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
     renderChars();
     fields.render(s.map, !isHost || s.phase !== 'lobby');
     teamsBox.checked = s.teams;
-    if (document.activeElement !== botBox) botBox.value = String(s.botSecs);
+    if (botBox && document.activeElement !== botBox) botBox.value = String(s.botSecs);
     if (document.activeElement !== seedInput) seedInput.value = s.seed;
     if (s.phase === 'starting') startCount();
     else stopCount();
@@ -517,6 +539,8 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
     el: m,
     render,
     status: (text, error = false) => {
+      // before we're in, the connecting card says it big; after, the line under the title
+      if (!state && text && !error) $('.cstatus').textContent = text;
       status.textContent = text;
       status.hidden = !text;
       status.classList.toggle('error', error);

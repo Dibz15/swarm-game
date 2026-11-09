@@ -706,7 +706,7 @@ class App {
     this.room = room;
     this.setModal(view.el);
     view.render(null, '', false);
-    view.status(host ? 'Opening the room…' : 'Looking for the host…');
+    view.status(host ? 'Opening the room…' : 'Connecting to the room…');
     let t: Transport;
     try {
       t = await this.openTransport(mp, id, secret, view);
@@ -724,6 +724,7 @@ class App {
       view.status('Send the link to your friends. They appear here as they join.');
     } else {
       room.lobby = this.wireGuestLobby(new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), token: seatToken(id), clock }));
+      view.status('Looking for the host…');
     }
     room.linkPoll = setInterval(() => this.pollLinks(room), 3000);
     this.renderRoom();
