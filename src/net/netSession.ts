@@ -183,9 +183,12 @@ export class NetSession implements Session {
   readonly bufferHist: number[];
 
   private readonly transport: Transport;
-  private readonly host: string;
+  /** the peer running the sequencer: changes when hosting passes to another player (#166) */
+  private host: string;
   private readonly clock: () => number;
   private epoch = 0;
+  /** our orders that ran lately, by seq: a fork past them (#166) sends them again */
+  private landed = new Map<number, { cmd: Command; tick: number; at: number }>();
   private turns = new Map<number, Turn>();
   /** highest tick held with no gap from the world's tick */
   private held_ = 0;
@@ -286,6 +289,69 @@ export class NetSession implements Session {
   /** orders sent that haven't run yet */
   get queued(): number {
     return this.pending.size;
+  }
+
+  /** the highest tick held with no gap */
+  get heldTick(): number {
+    return this.held_;
+  }
+
+  /** the sequencer's epoch this client follows (#166) */
+  get currentEpoch(): number {
+    return this.epoch;
+  }
+
+  /** whose turns this client takes */
+  get leader(): string {
+    return this.host;
+  }
+
+  /**
+   * Closed turns another player forwards while a new sequencer takes over
+   * (#166): the old one closed them, whatever its epoch now.
+   */
+  absorb(first: number, list: Turn[]): void {
+    const now = this.clock();
+    for (let i = 0; i < list.length; i++) this.turnIn(first + i, list[i], now);
+  }
+
+  /**
+   * Hosting passed to `leader` (#166): its turns, from `next` on, under
+   * `epoch`. Turns we hold from `next` on came from the old sequencer and
+   * were never confirmed: drop them. Our orders that hadn't landed before
+   * `next` go to the new one at once. If our world already ran past `next`
+   * (we stepped turns the new sequencer never had), resync from its world.
+   */
+  follow(leader: string, epoch: number, next: number): void {
+    const now = this.clock();
+    this.host = leader;
+    this.epoch = epoch;
+    for (const t of [...this.turns.keys()]) if (t >= next) this.turns.delete(t);
+    for (const p of this.pending.values()) {
+      if (p.tick >= next) p.tick = -1;
+      if (p.tick < 0) {
+        p.sentAt = -Infinity;
+        p.resends = 0;
+      }
+    }
+    this.offsets.length = 0;
+    this.gapSince = -1;
+    this.wantAt = -Infinity;
+    this.turnAt = now;
+    this.ackAt = -Infinity;
+    if (this.world_.tick >= next) {
+      // forked: the orders that ran in the lost stretch go again, with the agreed world
+      for (const [s, l] of this.landed) {
+        if (l.tick >= next && !this.pending.has(s)) this.pending.set(s, { cmd: l.cmd, issuedAt: l.at, sentAt: -Infinity, resends: 0, tick: -1 });
+      }
+      this.syncing = true;
+      this.snapReqAt = -Infinity;
+      this.maxSeen = this.held_ = this.world_.tick;
+      return;
+    }
+    this.held_ = Math.min(this.held_, next - 1);
+    while (this.turns.has(this.held_ + 1)) this.held_++;
+    this.maxSeen = Math.min(this.maxSeen, next - 1);
   }
 
   /** turns held beyond the world's tick */
@@ -466,6 +532,10 @@ export class NetSession implements Session {
     this.timers(now);
     this.retarget(now);
     this.reclaimSeat(now);
+    for (const [s, l] of this.landed) {
+      if (now - l.at <= 30_000) break; // in the order they landed
+      this.landed.delete(s);
+    }
     if (this.world_.over) {
       // the match is decided: step() no longer advances, so neither do we
       this.alpha = 1;
@@ -543,6 +613,7 @@ export class NetSession implements Session {
       const p = this.pending.get(e.seq);
       if (!p) return;
       this.pending.delete(e.seq);
+      this.landed.set(e.seq, { cmd: p.cmd, tick: t, at: p.issuedAt });
       failed ??= rejectedIn(w, fx);
       const why = failed.get(i);
       if (why) this.onReject?.(e.seq, why);

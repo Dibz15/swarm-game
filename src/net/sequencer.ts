@@ -230,6 +230,11 @@ export class Sequencer {
     return this.pause !== null;
   }
 
+  /** The last tick a peer said it holds (its ack): a successor is sent the turns after it (#166). */
+  ackOf(peer: string): number {
+    return this.byPeer.get(peer)?.ackTick ?? 0;
+  }
+
   /** The seat a peer is bound to, or -1. */
   seatOfPeer(peer: string): number {
     return this.byPeer.get(peer)?.seat ?? -1;
@@ -581,4 +586,85 @@ export class Sequencer {
   closedTurns(): { first: number; turns: Turn[] } {
     return { first: this.base, turns: this.history.slice() };
   }
+}
+
+/**
+ * A successor's state built from the turn log alone (#166), when the old
+ * sequencer vanished without handing over: what it knew that matters can be
+ * read back from the closed turns.
+ *
+ * - Each seat's seen seqs (the dedupe window) come from its entries, so a
+ *   resent order that already landed isn't run twice.
+ * - Seat states and a pause or halt come from the control entries; pauses
+ *   called count against their allowance.
+ * - Orders the old sequencer took but hadn't closed are gone: their clients
+ *   see them unlanded and resend them.
+ */
+export function rebuildState(o: {
+  epoch: number;
+  /** the first turn the successor closes */
+  next: number;
+  /** every human seat, with the peer that plays it (HOST_SELF for the successor's own) */
+  seats: SeatConfig[];
+  history: { first: number; turns: Turn[] };
+  opts?: Partial<SequencerOptions>;
+  /** the latest latency table, for each seat's round trip */
+  lat?: LatRow[];
+}): SequencerState {
+  const opts = { ...SEQUENCER_DEFAULTS, ...o.opts };
+  const high = new Map<number, number>();
+  const seqs = new Map<number, number[]>();
+  const state = new Map<number, SeatState>();
+  const pausesUsed = new Map<number, number>();
+  let pause: SequencerState['pause'] = null;
+  const lastTick = o.history.first + o.history.turns.length - 1;
+  o.history.turns.forEach((turn, i) => {
+    const tick = o.history.first + i;
+    for (const e of turn.entries) {
+      high.set(e.seat, Math.max(high.get(e.seat) ?? 0, e.seq));
+      (seqs.get(e.seat) ?? seqs.set(e.seat, []).get(e.seat)!).push(e.seq);
+    }
+    for (const c of turn.ctrl ?? []) {
+      if (c.k === 'seat') state.set(c.seat, c.state);
+      else if (c.k === 'pause') {
+        pausesUsed.set(c.seat, (pausesUsed.get(c.seat) ?? 0) + 1);
+        pause = { by: c.seat, since: 0, resumeIn: -1, after: tick === lastTick ? -1 : tick };
+      } else if (c.k === 'resume') pause = null;
+      // a halt holds only if nothing closed after it (a resumed halt has no entry of its own)
+      else if (c.k === 'desync') pause = tick === lastTick ? { by: -1, since: 0, resumeIn: -1, after: -1 } : pause;
+    }
+  });
+  // a pause whose turn closed with more after it was resumed (or the log would end there)
+  if (pause && (pause as { after: number }).after >= 0) pause = null;
+  return {
+    epoch: o.epoch,
+    next: o.next,
+    pending: [],
+    ctrlNext: [],
+    pause,
+    seats: o.seats.map((c) => {
+      const h = high.get(c.seat) ?? 0;
+      const rtt = o.lat?.find((r) => r.seat === c.seat)?.rtt ?? 0;
+      return {
+        seat: c.seat,
+        team: c.team,
+        peer: c.peer,
+        state: state.get(c.seat) ?? 'human',
+        heardAt: 0,
+        awayAt: 0,
+        highSeq: h,
+        seen: (seqs.get(c.seat) ?? []).filter((s) => s > h - SEQ_WINDOW),
+        tokens: opts.burst,
+        tokensAt: 0,
+        d: opts.dMin,
+        dAt: 0,
+        lastExec: o.next - 1,
+        rtt,
+        buffer: 0,
+        ackTick: o.next - 1,
+        pausesLeft: Math.max(0, opts.pauses - (pausesUsed.get(c.seat) ?? 0)),
+        pauseMsLeft: opts.pauseMs,
+      };
+    }),
+  };
 }

@@ -14,7 +14,7 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;
@@ -22,6 +22,8 @@ export const SNAP_CHUNK = 16 * 1024;
 export const MAX_SNAP_PARTS = 256;
 /** A seat token's longest form (#164): the secret a reloaded page reclaims its seat with. */
 export const MAX_TOKEN = 64;
+/** A sequencer's handed-over state, as JSON (#166) */
+export const MAX_HANDOFF = 256 * 1024;
 /** Most turns one `turns` message carries (a resend batch, or the last K repeated). */
 export const MAX_TURNS_PER_MSG = 64;
 /** Most entries one turn holds: six seats' rate limits allow far fewer. */
@@ -147,6 +149,18 @@ export type Msg =
   /** client → host: send me a world snapshot (`tick` 0: your current world, to rejoin; #164). Host → client: your kept snapshot at `tick` (a desync, #165) */
   | { k: 'snapreq'; tick: number }
   /** host → clients: what the desync at `tick` is, as far as the host could tell (the first field that differs, #165) */
-  | { k: 'desync'; tick: number; text: string };
+  | { k: 'desync'; tick: number; text: string }
+  /**
+   * every player → every other, twice a second (#166): the epoch it follows,
+   * the last tick it holds, whether it still hears the host (`ok`), and
+   * whether its page is hidden (then it can't help elect a new host)
+   */
+  | { k: 'beat'; epoch: number; held: number; ok: boolean; hidden: boolean }
+  /** a player taking over as host (#166): send me your closed turns after `held` */
+  | { k: 'claim'; epoch: number; held: number }
+  /** the new host → everyone (#166): follow me; I close turns from `next` on */
+  | { k: 'lead'; epoch: number; next: number }
+  /** the host, leaving → its successor (#166): my state as JSON (`exportState` and who plays each seat) */
+  | { k: 'handoff'; epoch: number; state: string };
 
 export type MsgKind = Msg['k'];

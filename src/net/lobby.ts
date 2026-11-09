@@ -4,6 +4,7 @@ import { PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
 import type { MatchSetup } from '../sim/setup';
 import { decodeMsg, encodeMsg } from './codec';
+import type { MatchPeer } from './match';
 import { MAX_LOBBY, MAX_SEATS, PROTOCOL_VERSION, type Msg } from './protocol';
 import type { Transport } from './transport';
 
@@ -22,7 +23,7 @@ export type SeatRow =
   | { k: 'open'; team: number }
   | { k: 'closed'; team: number }
   | { k: 'bot'; team: number; difficulty: number; personality: Personality | 'random' }
-  | { k: 'human'; team: number; peer: string; char: number };
+  | { k: 'human'; team: number; peer: string; char: number; mobile: boolean };
 
 export interface LobbyMap {
   size: MapSize;
@@ -110,10 +111,24 @@ function validRow(r: SeatRow): boolean {
     case 'bot':
       return [0, 1, 2].includes(r.difficulty) && (r.personality === 'random' || PERSONALITIES.includes(r.personality));
     case 'human':
-      return typeof r.peer === 'string' && r.peer.length <= 64 && Number.isInteger(r.char) && r.char >= 0 && r.char <= 0xffffffff;
+      return typeof r.peer === 'string' && r.peer.length <= 64 && Number.isInteger(r.char) && r.char >= 0 && r.char <= 0xffffffff && typeof r.mobile === 'boolean';
     default:
       return false;
   }
+}
+
+/**
+ * Every human seat in a lobby's match, the peer that plays it, and whether
+ * it's a phone (#166): who can take over hosting, and in what order.
+ */
+export function matchPeers(s: LobbyState, setup: MatchSetup): MatchPeer[] {
+  const out: MatchPeer[] = [];
+  s.rows.forEach((r, i) => {
+    if (r.k !== 'human') return;
+    const team = setup.players.find((p) => p.faction === i)?.team ?? i;
+    out.push({ seat: i, team, peer: r.peer, mobile: r.mobile });
+  });
+  return out;
 }
 
 /** What a guest needs to start: the match, its seat, and who runs the sequencer. */
@@ -136,13 +151,20 @@ export interface HostLobbyOptions {
   clock: () => number;
   /** how long Start waits for every guest's `ready` */
   readyMs?: number;
+  /** the host plays on a phone (#166: phones take over hosting last) */
+  mobile?: boolean;
+  /**
+   * Taking over a room whose host left mid-match (#166): its last state (the
+   * rows, map and settings), and the players still connected.
+   */
+  takeOver?: { state: LobbyState; connected: string[] };
 }
 
 /** The match is go: who plays where. `seats` are the human seats and their peers (the host's is `null`: its own client). */
 export interface HostGo {
   setup: MatchSetup;
   hostSeat: number;
-  seats: { seat: number; team: number; peer: string | null }[];
+  seats: { seat: number; team: number; peer: string | null; mobile: boolean }[];
   /** a dropped seat's idle time before its Easy bot, ms (#164) */
   botMs: number;
 }
@@ -174,7 +196,7 @@ export class HostLobby {
     const p = o.prefs;
     const rows: SeatRow[] = Array.from({ length: MAX_SEATS }, (_, i) => ({ k: 'open', team: i }) as SeatRow);
     const me = Math.min(MAX_SEATS - 1, Math.max(0, p.color));
-    rows[me] = { k: 'human', team: 0, peer: t.self, char: o.char >>> 0 };
+    rows[me] = { k: 'human', team: 0, peer: t.self, char: o.char >>> 0, mobile: !!o.mobile };
     // the skirmish screen's bots, where their colours are free
     for (const b of p.bots) if (rows[b.faction]?.k === 'open') rows[b.faction] = { k: 'bot', team: Math.min(MAX_SEATS - 1, b.team), difficulty: b.difficulty, personality: b.personality };
     this.state = {
@@ -186,6 +208,11 @@ export class HostLobby {
       rows,
       botSecs: 60,
     };
+    if (o.takeOver) {
+      // the room as it was, run from here now; seat tokens stayed with the old host
+      this.state = { ...structuredClone(o.takeOver.state), host: t.self };
+      for (const peer of o.takeOver.connected) this.connected.add(peer);
+    }
     t.onPeer = (peer, up) => {
       if (up) this.connected.add(peer);
       else this.lost(peer);
@@ -198,6 +225,11 @@ export class HostLobby {
 
   get mySeat(): number {
     return seatOf(this.state, this.t.self);
+  }
+
+  /** Tell everyone the room's state (and who runs it) as it is now. */
+  announce(): void {
+    this.edit(() => undefined);
   }
 
   // ---- the host's own edits ---------------------------------------------------
@@ -257,12 +289,12 @@ export class HostLobby {
       if (r.k !== 'human') return;
       const team = setup.players.find((p) => p.faction === i)!.team;
       if (r.peer === this.t.self) {
-        seats.push({ seat: i, team, peer: null });
+        seats.push({ seat: i, team, peer: null, mobile: r.mobile });
         return;
       }
       const token = this.tokens.get(r.peer);
       if (token) this.seatTokens.set(i, token);
-      seats.push({ seat: i, team, peer: r.peer });
+      seats.push({ seat: i, team, peer: r.peer, mobile: r.mobile });
       this.send(r.peer, { k: 'start', setup: json, seat: i, tick: 0 });
     });
     this.waiting = { go: { setup, hostSeat: this.mySeat, seats, botMs: this.state.botSecs * 1000 }, until: this.o.clock() + (this.o.readyMs ?? 10000), ready };
@@ -318,7 +350,7 @@ export class HostLobby {
     }
     const seat = this.state.rows.findIndex((r) => r.k === 'open');
     if (seat < 0) return this.send(peer, { k: 'refuse', reason: 'This room is full.' });
-    this.edit(() => (this.state.rows[seat] = { k: 'human', team: seat, peer, char: this.freeChar(m.char >>> 0, -1) }));
+    this.edit(() => (this.state.rows[seat] = { k: 'human', team: seat, peer, char: this.freeChar(m.char >>> 0, -1), mobile: m.mobile }));
   }
 
   /** Seat `seat`'s player is back on a new connection: hand them the match, and the seat. */
@@ -343,7 +375,7 @@ export class HostLobby {
     const taken = this.state.rows.some((r, i) => i !== from && nameOf(r) === name);
     this.edit(() => {
       this.state.rows[from] = { k: 'open', team: from };
-      this.state.rows[to] = { k: 'human', peer, team: Math.max(0, Math.min(MAX_SEATS - 1, team | 0)), char: taken ? row.char : char >>> 0 };
+      this.state.rows[to] = { k: 'human', peer, team: Math.max(0, Math.min(MAX_SEATS - 1, team | 0)), char: taken ? row.char : char >>> 0, mobile: row.mobile };
     });
   }
 
@@ -444,6 +476,12 @@ export class GuestLobby {
 
   pick(seat: number, team: number, char: number): void {
     if (this.host) this.send(this.host, { k: 'pick', seat, team, char: char >>> 0 });
+  }
+
+  /** Another player runs the room now (#166): their lobby states, from here on. */
+  follow(host: string): void {
+    this.host = host;
+    this.dropped = false;
   }
 
   /** the match from `start` is built: send turns */

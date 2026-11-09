@@ -5,6 +5,7 @@ import { FACTION_HEX, FACTION_RGB } from './content/factions';
 import { GameView, type Services } from './game/gameView';
 import type { EndReason, Recording } from './game/recording';
 import { downloadJson, recordingEnabled, saveRecording } from './game/recordStore';
+import type { Character } from './game/character';
 import { LocalSession } from './game/session';
 import { ordinal } from './game/standing';
 import { loadProgress, MISSIONS, MissionRun, nextMission, saveProgress } from './game/tutorial';
@@ -51,8 +52,11 @@ const loadMp = (): Promise<Mp> => (mpModule ??= import('./net/mp'));
 interface Room {
   id: string;
   secret: string;
+  /** we run the room: from the start, or since hosting passed to us (#166) */
   host: boolean;
   link: string;
+  /** the characters on offer to us, for the room's screen */
+  choices: Character[];
   view: LobbyView;
   router: Router | null;
   lobby: HostLobby | GuestLobby | null;
@@ -129,6 +133,8 @@ class App {
   private endShown = false;
   /** an Easy bot had our seat (#164): its return is worth a word */
   private ownBot = false;
+  /** no word from the host; the match waits while a new one is found (#166) */
+  private stalled = false;
   /** the desync card (#165), while the match is halted for one */
   private desyncView: { el: HTMLDivElement; detail: (text: string) => void; canResync: (on: boolean) => void } | null = null;
   /** the host's word on the last desync, which may come before the halt does */
@@ -187,7 +193,11 @@ class App {
       // Hidden, the music can't keep time: sleep, and wake (or recover from an interruption) on return.
       this.sfx.setHidden(hidden);
       // In a room match, a hidden page's seat is away at once (#164); back, it's ours again.
-      this.match?.session.setHidden(hidden);
+      this.match?.setHidden(hidden);
+    });
+    // Closing the page while hosting: hand hosting to the next player first (#166).
+    window.addEventListener('pagehide', (e) => {
+      if (!e.persisted && this.match?.host && !this.game?.world.over) this.match.handOff();
     });
     window.addEventListener('keydown', (e) => {
       this.sfx.unlock();
@@ -686,29 +696,8 @@ class App {
     const last = mp.loadCharacter();
     const choices = mp.characterChoices(last ? 3 : 4, last ? [last.name] : []);
     if (last) choices.unshift(last);
-    const pick = (seat: number, team: number, char: number) => {
-      mp.saveCharacter(mp.playerCharacter(char));
-      const l = room.lobby;
-      if (l instanceof mp.HostLobby) l.pickOwn(seat, team, char);
-      else l?.pick(seat, team, char);
-    };
-    const hostLobby = () => (room.lobby instanceof mp.HostLobby ? room.lobby : null);
-    const view = mp.lobbyScreen(link, choices, {
-      leave: () => this.leaveRoom(),
-      pick,
-      host: host
-        ? {
-            map: (patch) => hostLobby()?.setMap(patch),
-            teams: (on) => hostLobby()?.setTeams(on),
-            botSecs: (secs) => hostLobby()?.setBotSecs(secs),
-            seed: (text) => hostLobby()?.setSeed(text),
-            row: (seat, row) => hostLobby()?.setRow(seat, row),
-            kick: (seat) => hostLobby()?.kick(seat),
-            start: () => hostLobby()?.start(),
-          }
-        : undefined,
-    });
-    const room: Room = { id, secret, host, link, view, router: null, lobby: null };
+    const room: Room = { id, secret, host, link, choices, view: null as unknown as LobbyView, router: null, lobby: null };
+    const view = (room.view = this.roomView(mp, room));
     this.room = room;
     this.setModal(view.el);
     view.render(null, '', false);
@@ -725,16 +714,12 @@ class App {
     room.router = router;
     const clock = () => performance.now();
     if (host) {
-      const lobby = new mp.HostLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, prefs: loadPrefs(), seed: randomSeed(), clock });
-      lobby.onChange = () => this.renderRoom();
-      lobby.onGo = (go) => this.hostGo(go);
-      // a guest reloaded mid-match and proved their seat: it answers to their new connection (#164)
-      lobby.onRejoin = (seat, peer) => this.match?.rebind(seat, peer);
-      room.lobby = lobby;
+      room.lobby = this.wireHostLobby(new mp.HostLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, prefs: loadPrefs(), seed: randomSeed(), clock, mobile: isMobile() }));
       view.status('Send the link to your friends, then start when everyone is in.');
     } else {
       const lobby = new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), token: seatToken(id), clock });
       lobby.onChange = (s) => {
+        this.peersChanged();
         // back in the lobby while the match was still on: the host ended it (#183)
         const ended = s.phase === 'lobby' && !!this.match && !this.game?.world.over;
         view.status(s.phase === 'lobby' ? (ended ? 'The host ended the match. Waiting for the host to start the next one.' : 'Waiting for the host to start the match.') : 'The match is starting…');
@@ -766,6 +751,73 @@ class App {
     this.renderRoom();
   }
 
+  /** The room's screen: with the host's controls when we run the room. */
+  private roomView(mp: Mp, room: Room): LobbyView {
+    const hostLobby = () => (room.lobby instanceof mp.HostLobby ? room.lobby : null);
+    return mp.lobbyScreen(room.link, room.choices, {
+      leave: () => this.leaveRoom(),
+      pick: (seat, team, char) => {
+        mp.saveCharacter(mp.playerCharacter(char));
+        const l = room.lobby;
+        if (l instanceof mp.HostLobby) l.pickOwn(seat, team, char);
+        else l?.pick(seat, team, char);
+      },
+      host: room.host
+        ? {
+            map: (patch) => hostLobby()?.setMap(patch),
+            teams: (on) => hostLobby()?.setTeams(on),
+            botSecs: (secs) => hostLobby()?.setBotSecs(secs),
+            seed: (text) => hostLobby()?.setSeed(text),
+            row: (seat, row) => hostLobby()?.setRow(seat, row),
+            kick: (seat) => hostLobby()?.kick(seat),
+            start: () => hostLobby()?.start(),
+          }
+        : undefined,
+    });
+  }
+
+  private wireHostLobby(lobby: HostLobby): HostLobby {
+    lobby.onChange = () => {
+      this.renderRoom();
+      this.peersChanged();
+    };
+    lobby.onGo = (go) => this.hostGo(go);
+    // a guest reloaded mid-match and proved their seat: it answers to their new connection (#164)
+    lobby.onRejoin = (seat, peer) => this.match?.rebind(seat, peer);
+    return lobby;
+  }
+
+  /** The room's rows changed mid-match (a rejoin under a new peer id): the match's list of who could host follows (#166). */
+  private peersChanged(): void {
+    const s = this.room?.lobby?.state;
+    if (this.match && this.game && s?.phase === 'playing') this.match.updatePeers(this.mp!.matchPeers(s, this.game.setup));
+  }
+
+  /**
+   * Hosting passed to us mid-match (#166): the room comes too. Its state as
+   * we last saw it, run from here; the old host's seat tokens didn't come, so
+   * a player who reloads can't get back into this match.
+   */
+  private becomeRoomHost(): void {
+    const r = this.room, mp = this.mp, m = this.match;
+    if (!r?.router || !mp || !m || r.host || !(r.lobby instanceof mp.GuestLobby) || !r.lobby.state) return;
+    const old = r.lobby;
+    old.close();
+    r.host = true;
+    r.view = this.roomView(mp, r);
+    const lobby = new mp.HostLobby(r.router.view(mp.LOBBY_KINDS), {
+      build: BUILD,
+      char: 0,
+      prefs: loadPrefs(),
+      seed: old.state!.seed,
+      clock: () => performance.now(),
+      mobile: isMobile(),
+      takeOver: { state: old.state!, connected: m.livePeers() },
+    });
+    r.lobby = this.wireHostLobby(lobby);
+    lobby.announce();
+  }
+
   private renderRoom(): void {
     const r = this.room;
     if (!r?.lobby || !r.router) return;
@@ -787,7 +839,11 @@ class App {
     // back after a reload (#164): the match is under way, a snapshot of it is on its way
     const resume = s.tick > 0;
     try {
-      this.startGame(s.setup, { seat: s.seat, match: mp.NetMatch.guest(r.router.view(mp.MATCH_KINDS), s.setup, s.seat, s.host, { resume }), record: false });
+      const st = (r.lobby as GuestLobby).state;
+      // every human seat, to take over hosting if it comes to that (#166)
+      const peers = st ? mp.matchPeers(st, s.setup) : [];
+      const match = mp.NetMatch.guest(r.router.view(mp.MATCH_KINDS), s.setup, s.seat, s.host, { resume, peers, botMs: (st?.botSecs ?? 60) * 1000 });
+      this.startGame(s.setup, { seat: s.seat, match, record: false });
     } catch {
       r.view.status('The host sent a match this version can’t play.', true);
       return;
@@ -936,6 +992,7 @@ class App {
     const h = this.hud;
     if (!h) return;
     if (g.session.syncing) return h.banner('Rejoining the match…');
+    if (this.stalled && !g.result) return h.banner('Lost touch with the host. Finding a new one…', [{ label: 'Leave', on: () => this.leaveRoom() }]);
     if (g.session.seatBot) this.ownBot = true; // back from a reload with a bot in our seat: no control entry said so
     if (g.session.seatBot && !g.spectating && !g.result) return h.banner('An Easy bot is playing for you. Taking your seat back…');
     if (!g.spectating || g.result) return h.banner(null);
@@ -944,13 +1001,18 @@ class App {
   }
 
   /**
-   * Leave a room match. The host runs it for everyone: until hosting can
-   * pass to another player (#166), leaving ends it for all, so ask first.
+   * Leave a room match. A host hands hosting to the next player first
+   * (#166), so the match goes on without it; the handoff gets a moment to
+   * go out before the connection closes.
    */
   private leaveMatch(): void {
-    const g = this.game;
-    if (!this.match?.host || !g || g.world.over) return this.leaveRoom();
-    this.confirmNet('Leave the match?', 'You’re hosting: leaving ends the match for everyone. To stop it and keep the room, use End match instead.', 'Leave and end it', () => this.leaveRoom());
+    const m = this.match;
+    if (m?.host && !this.game?.world.over && m.handOff()) {
+      this.input.enabled = false;
+      setTimeout(() => this.leaveRoom(), 150);
+      return;
+    }
+    this.leaveRoom();
   }
 
   /** Host (#183): stop the match for everyone and bring them back to the room, to change settings or let someone in. */
@@ -997,7 +1059,7 @@ class App {
       restart: host ? () => this.restartMatch() : undefined,
       more: host ? [{ label: 'End match', on: () => this.endMatch() }] : undefined,
       quit: () => this.leaveMatch(),
-      quitLabel: 'Leave match',
+      quitLabel: host && this.match!.successorSeat() >= 0 ? `Leave (hosting passes to ${this.seatName(this.match!.successorSeat())})` : 'Leave match',
       audio: this.sfx,
       teams: teamLayout(g.world, g.human).team ? teamsList(g.world, g.human) : undefined,
       players: '<div class="players"></div>',
@@ -1122,8 +1184,14 @@ class App {
           else this.hud?.toast(`${who} is back`, '#8aa0b8');
         },
         onPause: (p) => this.netPaused(p),
-        onHostLost: (why) => this.roomLost(why),
-        onHostLink: (state) => this.hud?.toast(state === 'lost' ? 'Lost connection to the host. Reconnecting…' : 'Reconnected to the host', state === 'lost' ? '#ffb627' : '#8aa0b8'),
+        // hosting passed to another player (#166); the room comes with it
+        onLeader: (seat, peer) => {
+          const me = peer === this.room?.router?.transport.self;
+          this.hud?.toast(me ? 'You’re hosting now' : `${this.seatName(seat)} is now hosting`, '#8aa0b8');
+          if (me) this.becomeRoomHost();
+          else if (this.room && !this.room.host) (this.room.lobby as GuestLobby | null)?.follow(peer);
+        },
+        onStall: (stalled) => (this.stalled = stalled),
         onDesync: (t) => this.showDesync(t),
         onDesyncReport: (r) => this.desyncDetail(r),
         // the host's word can come before our halt turn does: keep it for the card
@@ -1173,6 +1241,7 @@ class App {
     this.match?.close();
     this.match = null;
     this.ownBot = false;
+    this.stalled = false;
     this.desyncView = null;
     this.desyncNote = null;
     this.netMenu = null;

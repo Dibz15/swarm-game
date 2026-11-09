@@ -184,10 +184,10 @@ describe('lobby to match (#162)', () => {
     const { matches, run, drop, reconnect } = play();
     const desyncs: number[] = [];
     matches.get('H')!.events.onDesync = (t) => desyncs.push(t);
-    const link: string[] = [];
-    const lost: string[] = [];
-    matches.get('A')!.events.onHostLink = (s) => link.push(s);
-    matches.get('A')!.events.onHostLost = (w) => lost.push(w);
+    const stalls: boolean[] = [];
+    const leaders: number[] = [];
+    matches.get('A')!.events.onStall = (on) => stalls.push(on);
+    for (const m of matches.values()) m.events.onLeader = (seat) => leaders.push(seat);
     const seats: [number, string][] = [];
     matches.get('B')!.events.onSeat = (seat, state) => seats.push([seat, state]);
     run(5000);
@@ -197,8 +197,9 @@ describe('lobby to match (#162)', () => {
     expect(matches.get('H')!.session.world.tick - behind).toBeGreaterThan(10 / DT);
     reconnect('A', 'H');
     run(20_000);
-    expect(link).toEqual(['lost', 'back']);
-    expect(lost).toEqual([]);
+    // A waited for the host, on its own: the others still heard it, so nobody took over
+    expect(stalls).toEqual([true, false]);
+    expect(leaders).toEqual([]);
     const seatA = matches.get('A')!.session.localSeat;
     expect(seats).toEqual([[seatA, 'away'], [seatA, 'human']]);
     // A caught up and plays on, in step with everyone
@@ -211,19 +212,31 @@ describe('lobby to match (#162)', () => {
     expect(desyncs).toEqual([]);
   });
 
-  it('a host whose link drops and never comes back: the guest is told it was lost, not that the host left', () => {
+  it('a guest cut off from the host on its own doesn’t take over; when the host really goes, the players pick a new one (#166)', () => {
     const { matches, run, drop, giveUp, leave } = play();
-    const lostA: string[] = [];
-    const lostB: string[] = [];
-    matches.get('A')!.events.onHostLost = (w) => lostA.push(w);
-    matches.get('B')!.events.onHostLost = (w) => lostB.push(w);
+    const leaders = new Map<string, number[]>();
+    for (const [id, m] of matches) m.events.onLeader = (seat) => leaders.set(id, [...(leaders.get(id) ?? []), seat]);
     run(2000);
     drop('A', 'H');
     run(3000);
     giveUp('A', 'H');
-    expect(lostA).toEqual(['lost']);
-    leave('H'); // B's host really leaves
-    expect(lostB).toEqual(['left']);
+    run(3000);
+    // B still hears the host: A alone is no majority
+    expect([...leaders.keys()]).toEqual([]);
+    expect(matches.get('H')!.host).toBe(true);
+    // the host really leaves: A and B both miss it, and A (first in seat order) takes over
+    matches.get('H')!.close();
+    matches.delete('H');
+    leave('H');
+    run(4000);
+    const seatA = matches.get('A')!.session.localSeat;
+    expect(matches.get('A')!.host).toBe(true);
+    expect(leaders.get('A')).toEqual([seatA]);
+    expect(leaders.get('B')).toEqual([seatA]);
+    run(5000);
+    const ticks = [matches.get('A')!, matches.get('B')!].map((m) => m.session.world.tick);
+    expect(Math.abs(ticks[0] - ticks[1])).toBeLessThan(10);
+    expect(ticks[0]).toBeGreaterThan(12 / DT);
   });
 
   it('defeated players watch the rest: they keep stepping and hashing, never go to a bot, and the host keeps running the match (#183)', () => {

@@ -3,7 +3,7 @@ import type { Command } from '../sim/commands';
 import { FACTION_UNIT_CAP, NEUTRAL } from '../sim/constants';
 import { QUANTUM } from '../sim/sanitize';
 import {
-  MAX_BUILD, MAX_CTRL_PER_TURN, MAX_ENTRIES_PER_TURN, MAX_LOBBY, MAX_NAME, MAX_REASON, MAX_SEATS, MAX_SETUP, MAX_SNAP_PARTS, MAX_TOKEN, MAX_TURNS_PER_MSG,
+  MAX_BUILD, MAX_CTRL_PER_TURN, MAX_ENTRIES_PER_TURN, MAX_LOBBY, MAX_NAME, MAX_REASON, MAX_SEATS, MAX_HANDOFF, MAX_SETUP, MAX_SNAP_PARTS, MAX_TOKEN, MAX_TURNS_PER_MSG,
   SEAT_STATES, SNAP_CHUNK, type Ctrl, type Entry, type LatRow, type Msg, type MsgKind, type SeatInfo, type Turn,
 } from './protocol';
 
@@ -377,7 +377,7 @@ function readTurn(r: Reader): Turn {
 
 // ---- messages ---------------------------------------------------------------
 
-const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync'] as const;
+const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff'] as const;
 const KIND_INDEX = new Map<string, number>(KINDS.map((k, i) => [k, i]));
 
 /** The kind of the message in `bytes` from its first byte alone (for routing), or null. */
@@ -473,6 +473,23 @@ export function encodeMsg(m: Msg): Uint8Array {
     case 'desync':
       w.uv(m.tick);
       w.str(m.text, MAX_REASON);
+      break;
+    case 'beat':
+      w.uv(m.epoch);
+      w.uv(m.held);
+      w.u8((m.ok ? 1 : 0) | (m.hidden ? 2 : 0));
+      break;
+    case 'claim':
+      w.uv(m.epoch);
+      w.uv(m.held);
+      break;
+    case 'lead':
+      w.uv(m.epoch);
+      w.uv(m.next);
+      break;
+    case 'handoff':
+      w.uv(m.epoch);
+      w.str(m.state, MAX_HANDOFF);
       break;
     case 'lobby':
       w.str(m.state, MAX_LOBBY);
@@ -584,6 +601,23 @@ function readMsg(r: Reader): Msg {
     case 'desync': {
       const tick = r.uv();
       return { k, tick, text: r.str(MAX_REASON) };
+    }
+    case 'beat': {
+      const epoch = r.uv(), held = r.uv(), f = r.u8();
+      if (f > 3) throw new Bad();
+      return { k, epoch, held, ok: !!(f & 1), hidden: !!(f & 2) };
+    }
+    case 'claim': {
+      const epoch = r.uv();
+      return { k, epoch, held: r.uv() };
+    }
+    case 'lead': {
+      const epoch = r.uv();
+      return { k, epoch, next: r.uv() };
+    }
+    case 'handoff': {
+      const epoch = r.uv();
+      return { k, epoch, state: r.str(MAX_HANDOFF) };
     }
     case 'lobby':
       return { k, state: r.str(MAX_LOBBY) };

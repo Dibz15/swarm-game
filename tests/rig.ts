@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { GuestLobby, HostLobby, type HostGo, type StartInfo } from '../src/net/lobby';
+import { GuestLobby, HostLobby, matchPeers, type HostGo, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
@@ -66,18 +66,18 @@ export function room() {
   const arrived = (id: string) => {
     for (const other of routers.keys()) if (other !== id) routers.get(id)!.transport.onPeer?.(other, true);
   };
-  const host = (o: Partial<{ prefs: SetupPrefs; char: number; build: string }> = {}) => {
+  const host = (o: Partial<{ prefs: SetupPrefs; char: number; build: string; mobile: boolean }> = {}) => {
     const r = link('H');
-    const lobby = new HostLobby(r.view(LOBBY_KINDS), { build: o.build ?? 'test', char: o.char ?? 1, prefs: o.prefs ?? prefs(), seed: 'ember-tide-7', clock: () => clock.now, readyMs: 5000 });
+    const lobby = new HostLobby(r.view(LOBBY_KINDS), { build: o.build ?? 'test', char: o.char ?? 1, prefs: o.prefs ?? prefs(), seed: 'ember-tide-7', clock: () => clock.now, readyMs: 5000, mobile: o.mobile });
     arrived('H');
     return { r, lobby };
   };
-  const guest = (id: string, o: Partial<{ char: number; build: string; token: string }> = {}) => {
+  const guest = (id: string, o: Partial<{ char: number; build: string; token: string; mobile: boolean }> = {}) => {
     const r = link(id);
     const lobby = new GuestLobby(r.view(LOBBY_KINDS), {
       build: o.build ?? 'test',
       char: o.char ?? id.charCodeAt(0) * 1000,
-      mobile: false,
+      mobile: o.mobile ?? false,
       token: o.token ?? tokenOf(id),
       clock: () => clock.now,
     });
@@ -92,17 +92,26 @@ export function room() {
     routers.get(id)!.close();
     routers.delete(id);
   };
-  return { clock, host, guest, leave, drop, reconnect, giveUp };
+  /** `a` hears nothing from `b` and the other way round, with no word from either transport (a dead or hung peer) */
+  const silence = (a: string, b: string) => cuts.add(pair(a, b));
+  const heal = (a: string, b: string) => cuts.delete(pair(a, b));
+  const ids = () => [...routers.keys()];
+  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids };
 }
 
 export type Guest = ReturnType<ReturnType<typeof room>['guest']>;
 
-/** host + two guests (and a bot) through the lobby into running NetMatches, all on one fake clock */
-export function play(o: { botSecs?: 30 | 60 | 120 } = {}) {
+/**
+ * host + guests (two by default, and a bot) through the lobby into running
+ * NetMatches, all on one fake clock. `mobile`: which of them play on phones.
+ */
+export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: string[]; bot?: boolean } = {}) {
   const rm = room();
-  const h = rm.host({ prefs: prefs({ bots: [{ faction: 5, difficulty: 1, personality: 'expander', team: 1 }] }) });
+  const mobile = new Set(o.mobile ?? []);
+  const bots = o.bot === false ? [] : [{ faction: 5, difficulty: 1, personality: 'expander' as const, team: 1 }];
+  const h = rm.host({ prefs: prefs({ bots }), mobile: mobile.has('H') });
   if (o.botSecs) h.lobby.setBotSecs(o.botSecs);
-  const gs = [rm.guest('A'), rm.guest('B')];
+  const gs = (o.guests ?? ['A', 'B']).map((id) => rm.guest(id, { mobile: mobile.has(id) }));
   let go: HostGo | null = null;
   h.lobby.onGo = (g) => (go = g);
   const setup = h.lobby.start()!;
@@ -117,20 +126,29 @@ export function play(o: { botSecs?: 30 | 60 | 120 } = {}) {
     const s = g.start()!;
     expect(s.setup).toEqual(setup);
     expect(s.seat).toBe(g.lobby.mySeat);
-    add(g.id, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, net: { gzipSnaps: false } }));
+    add(g.id, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), botMs: g.lobby.state!.botSecs * 1000, heartbeat: false, gzip: false }));
     g.lobby.ready();
   }
   expect(go).not.toBeNull();
   add('H', NetMatch.host(h.r.view(MATCH_KINDS), go!, { clock: () => rm.clock.now, heartbeat: false, gzip: false, net: { gzipSnaps: false } }));
   // a guest back from a reload: its seat answers to its new connection (main.ts does the same)
   h.lobby.onRejoin = (seat, peer) => matches.get('H')!.rebind(seat, peer);
+  /** peers that died: no frames, nothing in or out, and no word from their transport */
+  const dead = new Set<string>();
+  const kill = (id: string) => {
+    dead.add(id);
+    for (const other of rm.ids()) if (other !== id) rm.silence(id, other);
+  };
+  /** players give orders (their Proxy plays) unless told to stop, to let everything in flight land */
+  let ordering = true;
+  const orders = (on: boolean) => (ordering = on);
   const run = (ms: number, frozen: string[] = []) => {
     for (const end = rm.clock.now + ms; rm.clock.now < end; ) {
       rm.clock.now += FRAME;
       for (const [id, m] of matches) {
-        if (frozen.includes(id)) continue;
+        if (frozen.includes(id) || dead.has(id)) continue;
         const w = m.session.world;
-        if (!m.session.syncing && !m.session.seatBot) for (const c of proxies.get(id)!.think(w)) m.session.issue(c);
+        if (ordering && !m.session.syncing && !m.session.seatBot) for (const c of proxies.get(id)!.think(w)) m.session.issue(c);
         m.update();
         m.session.update(FRAME / 1000);
         w.fx = [];
@@ -151,7 +169,7 @@ export function play(o: { botSecs?: 30 | 60 | 120 } = {}) {
   const rejoin = (id: string, newId: string, token = tokenOf(id)): Guest => {
     const g = rm.guest(newId, { token });
     const s = g.start();
-    if (s) add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, resume: s.tick > 0, net: { gzipSnaps: false } }));
+    if (s) add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, resume: s.tick > 0, net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), heartbeat: false, gzip: false }));
     return g;
   };
   /** A reload: gone, then straight back. */
@@ -159,7 +177,7 @@ export function play(o: { botSecs?: 30 | 60 | 120 } = {}) {
     quit(id);
     return rejoin(id, newId);
   };
-  return { ...rm, h, gs, matches, run, quit, rejoin, reload, add };
+  return { ...rm, h, gs, matches, run, quit, rejoin, reload, add, kill, dead, orders };
 }
 
 /** Knock a faction out: its dots gone, its nests unclaimed (the sim then marks it eliminated). */
