@@ -301,13 +301,19 @@ function readSeat(r: Reader): number {
   return s;
 }
 
-const CTRL_KINDS = ['pause', 'resume', 'seat', 'desync'] as const;
+const CTRL_KINDS = ['pause', 'resume', 'seat', 'desync', 'rank', 'owner'] as const;
 
 function writeCtrl(w: Writer, c: Ctrl): void {
   const k = CTRL_KINDS.indexOf(c.k);
   if (k < 0) throw new Error(`codec: unknown control entry ${c.k}`);
   w.u8(k);
   if (c.k === 'desync') return void w.uv(c.tick);
+  if (c.k === 'rank') {
+    if (c.seats.length > MAX_SEATS) throw new Error('codec: rank too long');
+    w.uv(c.seats.length);
+    for (const s of c.seats) seat(w, s);
+    return;
+  }
   seat(w, c.seat);
   if (c.k !== 'seat') return;
   const st = SEAT_STATES.indexOf(c.state);
@@ -325,6 +331,12 @@ function readCtrl(r: Reader): Ctrl {
   const k = CTRL_KINDS[r.u8()];
   if (!k) throw new Bad();
   if (k === 'desync') return { k, tick: r.uv() };
+  if (k === 'rank') {
+    const n = r.upTo(MAX_SEATS);
+    const seats: number[] = [];
+    for (let i = 0; i < n; i++) seats.push(readSeat(r));
+    return { k, seats };
+  }
   const s = readSeat(r);
   if (k !== 'seat') return { k, seat: s };
   const b = r.u8();
@@ -377,7 +389,8 @@ function readTurn(r: Reader): Turn {
 
 // ---- messages ---------------------------------------------------------------
 
-const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff', 'mark', 'pass'] as const;
+const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff', 'mark', 'pass', 'links', 'ask', 'rebind'] as const;
+const ASKS = ['resync'] as const;
 const KIND_INDEX = new Map<string, number>(KINDS.map((k, i) => [k, i]));
 
 /** The kind of the message in `bytes` from its first byte alone (for routing), or null. */
@@ -392,7 +405,7 @@ export function encodeMsg(m: Msg): Uint8Array {
     case 'hello':
       w.uv(m.proto);
       w.str(m.build, MAX_BUILD);
-      w.u8(m.mobile ? 1 : 0);
+      w.u8((m.mobile ? 1 : 0) | (m.cell ? 2 : 0));
       u32(w, m.char);
       w.str(m.token, MAX_TOKEN);
       break;
@@ -416,6 +429,7 @@ export function encodeMsg(m: Msg): Uint8Array {
       w.str(m.setup, MAX_SETUP);
       seat(w, m.seat);
       w.uv(m.tick);
+      w.str(m.runner ?? '', MAX_NAME);
       break;
     case 'cmd':
       w.uv(m.seq);
@@ -484,6 +498,24 @@ export function encodeMsg(m: Msg): Uint8Array {
     case 'beat':
       w.uv(m.epoch);
       w.u8((m.ok ? 1 : 0) | (m.hidden ? 2 : 0) | (m.syncing ? 4 : 0));
+      w.uv(m.t & 0xffff);
+      w.uv(m.echo < 0 ? 0 : (m.echo & 0xffff) + 1);
+      w.uv(Math.min(65535, Math.max(0, Math.round(m.held))));
+      break;
+    case 'links':
+      if (m.rtt.length > MAX_SEATS) throw new Error('codec: too many links');
+      w.uv(m.rtt.length);
+      for (const [s, ms] of m.rtt) {
+        seat(w, s);
+        w.uv(Math.min(65535, Math.max(0, Math.round(ms))));
+      }
+      break;
+    case 'ask':
+      w.u8(ASKS.indexOf(m.what));
+      break;
+    case 'rebind':
+      seat(w, m.seat);
+      w.str(m.peer, MAX_NAME);
       break;
     case 'claim':
       w.uv(m.epoch);
@@ -542,8 +574,10 @@ function readMsg(r: Reader): Msg {
   const k = KINDS[r.u8()];
   switch (k) {
     case 'hello': {
-      const proto = r.uv(), build = r.str(MAX_BUILD), mobile = r.bool(), char = r.upTo(0xffffffff);
-      return { k, proto, build, mobile, char, token: r.str(MAX_TOKEN) };
+      const proto = r.uv(), build = r.str(MAX_BUILD), f = r.u8(), char = r.upTo(0xffffffff);
+      if (f > 3) throw new Bad();
+      const token = r.str(MAX_TOKEN);
+      return f & 2 ? { k, proto, build, mobile: !!(f & 1), char, token, cell: true } : { k, proto, build, mobile: !!(f & 1), char, token };
     }
     case 'refuse':
       return { k, reason: r.str(MAX_REASON) };
@@ -560,8 +594,8 @@ function readMsg(r: Reader): Msg {
       return { k, you, table };
     }
     case 'start': {
-      const setup = r.str(MAX_SETUP), s = readSeat(r);
-      return { k, setup, seat: s, tick: r.uv() };
+      const setup = r.str(MAX_SETUP), s = readSeat(r), tick = r.uv(), runner = r.str(MAX_NAME);
+      return runner ? { k, setup, seat: s, tick, runner } : { k, setup, seat: s, tick };
     }
     case 'cmd': {
       const seq = r.uv();
@@ -620,7 +654,26 @@ function readMsg(r: Reader): Msg {
     case 'beat': {
       const epoch = r.uv(), f = r.u8();
       if (f > 7) throw new Bad();
-      return { k, epoch, ok: !!(f & 1), hidden: !!(f & 2), syncing: !!(f & 4) };
+      const t = r.upTo(65535), echo = r.upTo(65536) - 1;
+      return { k, epoch, ok: !!(f & 1), hidden: !!(f & 2), syncing: !!(f & 4), t, echo, held: r.upTo(65535) };
+    }
+    case 'links': {
+      const n = r.upTo(MAX_SEATS);
+      const rtt: [number, number][] = [];
+      for (let i = 0; i < n; i++) {
+        const s = readSeat(r);
+        rtt.push([s, r.upTo(65535)]);
+      }
+      return { k, rtt };
+    }
+    case 'ask': {
+      const what = ASKS[r.u8()];
+      if (!what) throw new Bad();
+      return { k, what };
+    }
+    case 'rebind': {
+      const s = readSeat(r);
+      return { k, seat: s, peer: r.str(MAX_NAME) };
     }
     case 'claim': {
       const epoch = r.uv();

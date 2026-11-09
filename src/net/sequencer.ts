@@ -446,6 +446,11 @@ export class Sequencer {
     this.hashes.clear();
   }
 
+  /** Resume for the match's host (#190): after a resync it asked for, wherever the sequencer runs. */
+  resume(): void {
+    this.requestResume(this.clock());
+  }
+
   /** The peer playing a seat (null: the host's own, or nobody). */
   peerOfSeat(seat: number): string | null {
     return this.seats.get(seat)?.peer ?? null;
@@ -575,6 +580,16 @@ export class Sequencer {
       const b = Math.min(to, a + MAX_TURNS_PER_MSG - 1);
       this.send(peer, { k: 'turns', epoch: this.epoch, first: a, list: this.history.slice(a - this.base, b - this.base + 1) });
     }
+  }
+
+  /** A control entry for the next turn (#190: the ranking, a new host): for the record, every player gets it at the same tick. */
+  addCtrl(c: Ctrl): void {
+    this.ctrlNext.push(c);
+  }
+
+  /** Who may pause (#190: the match's host, wherever the sequencer runs); null: anyone. */
+  setPausers(seats: number[] | null): void {
+    this.opts.pausers = seats;
   }
 
   // ---- handoff ---------------------------------------------------------------

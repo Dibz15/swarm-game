@@ -14,7 +14,7 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;
@@ -72,7 +72,19 @@ export type Ctrl =
    * this turn, on every client at the same tick, until the host resyncs or
    * resumes it.
    */
-  | { k: 'desync'; tick: number };
+  | { k: 'desync'; tick: number }
+  /**
+   * Who takes over running the match, best first (#190): seats ranked by
+   * their measured round trips, published by whoever runs it, so every
+   * player ranks the same way. Changes nothing in the sim.
+   */
+  | { k: 'rank'; seats: number[] }
+  /**
+   * The match's host is now this seat's player (#190): the one with pause,
+   * restart, end and the room. Published when the old host left. Changes
+   * nothing in the sim.
+   */
+  | { k: 'owner'; seat: number };
 
 /** The bot a dropped seat gets: only difficulty and personality travel. */
 export type SeatBot = Pick<BotConfig, 'difficulty' | 'personality'>;
@@ -111,13 +123,17 @@ export type Msg =
    * character it plays as (#162); `token`, its seat secret for this room,
    * kept across reloads (#164)
    */
-  | { k: 'hello'; proto: number; build: string; mobile: boolean; char: number; token: string }
+  | { k: 'hello'; proto: number; build: string; mobile: boolean; char: number; token: string; cell?: boolean }
   /** host → client: not accepted (version or build mismatch, room full) */
   | { k: 'refuse'; reason: string }
   /** host → clients: the seat table, and which row is yours (-1: none) */
   | { k: 'seats'; you: number; table: SeatInfo[] }
-  /** host → client: the match begins with this setup (`tick` 0), or is joined again after a reload (`tick` ≥ 1: ask for a snapshot, #164) */
-  | { k: 'start'; setup: string; seat: number; tick: number }
+  /**
+   * host → client: the match begins with this setup (`tick` 0), or is joined
+   * again after a reload (`tick` ≥ 1: ask for a snapshot, #164). `runner`:
+   * who runs the match, when it isn't the host (#190).
+   */
+  | { k: 'start'; setup: string; seat: number; tick: number; runner?: string }
   /** host → clients: the whole lobby (`LobbyState` as JSON, #162) */
   | { k: 'lobby'; state: string }
   /** client → host, in the lobby: the seat, team and character it wants */
@@ -172,7 +188,18 @@ export type Msg =
    * it can't help elect a new host), and whether it's waiting for a snapshot
    * (`syncing`: it can vote, but has no world to host from)
    */
-  | { k: 'beat'; epoch: number; ok: boolean; hidden: boolean; syncing: boolean }
+  /**
+   * …and it measures round trips (#190): `t` is the sender's clock (ms, mod
+   * 2^16), `echo` the last `t` it heard from the recipient (-1: none yet),
+   * and `held` how long ago it heard it, ms
+   */
+  | { k: 'beat'; epoch: number; ok: boolean; hidden: boolean; syncing: boolean; t: number; echo: number; held: number }
+  /** a player → whoever runs the match, every couple of seconds (#190): its round trip to each other seat, ms */
+  | { k: 'links'; rtt: [number, number][] }
+  /** the host → whoever runs the match (#190): do this for me (resync after a desync) */
+  | { k: 'ask'; what: 'resync' }
+  /** the host → whoever runs the match (#190): this seat came back on a new connection (a reload, #164) */
+  | { k: 'rebind'; seat: number; peer: string }
   /** a player taking over as host (#166): send me your closed turns after `held` */
   | { k: 'claim'; epoch: number; held: number }
   /** the new host → everyone (#166): follow me; I close turns from `next` on */

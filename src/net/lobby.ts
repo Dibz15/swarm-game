@@ -23,7 +23,7 @@ export type SeatRow =
   | { k: 'open'; team: number }
   | { k: 'closed'; team: number }
   | { k: 'bot'; team: number; difficulty: number; personality: Personality | 'random' }
-  | { k: 'human'; team: number; peer: string; char: number; mobile: boolean; ready?: boolean };
+  | { k: 'human'; team: number; peer: string; char: number; mobile: boolean; ready?: boolean; cell?: boolean };
 
 export interface LobbyMap {
   size: MapSize;
@@ -48,6 +48,11 @@ export interface LobbyState {
   rows: SeatRow[];
   /** how long a dropped player's seat idles before an Easy bot takes it, seconds (#164) */
   botSecs: BotSecs;
+  /**
+   * "Runs the match" (#190): the player whose browser runs the turn clock,
+   * by peer id; absent: Auto, the best-placed player by measured links.
+   */
+  runner?: string;
 }
 
 export type LobbyPhase = 'lobby' | 'starting' | 'playing';
@@ -107,9 +112,10 @@ export function parseLobby(json: string): LobbyState | null {
       Array.isArray(o.rows) &&
       o.rows.length === MAX_SEATS &&
       o.rows.every(validRow) &&
-      BOT_SECS.includes(o.botSecs);
+      BOT_SECS.includes(o.botSecs) &&
+      (o.runner === undefined || (typeof o.runner === 'string' && o.runner.length <= 64));
     if (!ok) return null;
-    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs };
+    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs, ...(o.runner ? { runner: o.runner } : {}) };
   } catch {
     return null;
   }
@@ -124,7 +130,7 @@ function validRow(r: SeatRow): boolean {
     case 'bot':
       return [0, 1, 2].includes(r.difficulty) && (r.personality === 'random' || PERSONALITIES.includes(r.personality));
     case 'human':
-      return typeof r.peer === 'string' && r.peer.length <= 64 && Number.isInteger(r.char) && r.char >= 0 && r.char <= 0xffffffff && typeof r.mobile === 'boolean' && (r.ready === undefined || typeof r.ready === 'boolean');
+      return typeof r.peer === 'string' && r.peer.length <= 64 && Number.isInteger(r.char) && r.char >= 0 && r.char <= 0xffffffff && typeof r.mobile === 'boolean' && (r.ready === undefined || typeof r.ready === 'boolean') && (r.cell === undefined || typeof r.cell === 'boolean');
     default:
       return false;
   }
@@ -139,7 +145,7 @@ export function matchPeers(s: LobbyState, setup: MatchSetup): MatchPeer[] {
   s.rows.forEach((r, i) => {
     if (r.k !== 'human') return;
     const team = setup.players.find((p) => p.faction === i)?.team ?? i;
-    out.push({ seat: i, team, peer: r.peer, mobile: r.mobile });
+    out.push({ seat: i, team, peer: r.peer, mobile: r.mobile, ...(r.cell ? { cell: true } : {}) });
   });
   return out;
 }
@@ -170,6 +176,8 @@ export interface StartInfo {
   host: string;
   /** 0: a new match; ≥ 1: rejoining one under way, from a snapshot (#164) */
   tick: number;
+  /** who runs the match, when it isn't the host (#190) */
+  runner?: string;
 }
 
 // ---- host -------------------------------------------------------------------
@@ -185,6 +193,8 @@ export interface HostLobbyOptions {
   readyMs?: number;
   /** the host plays on a phone (#166: phones take over hosting last) */
   mobile?: boolean;
+  /** the host is on mobile data, where the browser says (#190: ranked after Wi-Fi and wired) */
+  cell?: boolean;
   /** our own seat token for this room: passed on with hosting, so a reload gets back in (#184) */
   ownToken?: string;
   /**
@@ -220,9 +230,11 @@ export function nextHost(s: LobbyState, connected: (peer: string) => boolean, ex
 export interface HostGo {
   setup: MatchSetup;
   hostSeat: number;
-  seats: { seat: number; team: number; peer: string | null; mobile: boolean }[];
+  seats: { seat: number; team: number; peer: string | null; mobile: boolean; cell?: boolean }[];
   /** a dropped seat's idle time before its Easy bot, ms (#164) */
   botMs: number;
+  /** "Runs the match" (#190): the seat chosen to run it; absent: Auto */
+  runnerSeat?: number;
 }
 
 export class HostLobby {
@@ -232,6 +244,8 @@ export class HostLobby {
   onGo: ((go: HostGo) => void) | null = null;
   /** a player came back mid-match on a new connection (#164): bind their seat to `peer` */
   onRejoin: ((seat: number, peer: string, oldPeer: string) => void) | null = null;
+  /** who runs the match under way, when it isn't us (#190): a rejoining player talks to them */
+  runnerOf: (() => string | null) | null = null;
   private readonly t: Transport;
   private readonly o: HostLobbyOptions;
   private readonly connected = new Set<string>();
@@ -257,7 +271,7 @@ export class HostLobby {
     const rows: SeatRow[] = Array.from({ length: MAX_SEATS }, (_, i) => ({ k: 'open', team: i }) as SeatRow);
     const me = Math.min(MAX_SEATS - 1, Math.max(0, p.color));
     // the room opens empty (#184): every seat but the host's is free for friends; bots come later, by "Fill with bots"
-    rows[me] = { k: 'human', team: 0, peer: t.self, char: o.char >>> 0, mobile: !!o.mobile };
+    rows[me] = { k: 'human', team: 0, peer: t.self, char: o.char >>> 0, mobile: !!o.mobile, ...(o.cell ? { cell: true } : {}) };
     this.state = {
       host: t.self,
       phase: 'lobby',
@@ -338,6 +352,12 @@ export class HostLobby {
     if (this.state.locked !== on) this.edit(() => (this.state.locked = on));
   }
 
+  /** "Runs the match" (#190): this player's browser runs the turn clock; null: Auto, by measured links. */
+  setRunner(peer: string | null): void {
+    const want = peer && seatOf(this.state, peer) >= 0 ? peer : undefined;
+    if (this.state.runner !== want) this.edit(() => (want ? (this.state.runner = want) : delete this.state.runner));
+  }
+
   /** Quick match (#184): roll a new random map at each Start. */
   setRandomMap(on: boolean): void {
     if (this.state.randomMap !== on) this.edit(() => (this.state.randomMap = on));
@@ -403,16 +423,19 @@ export class HostLobby {
     this.state.rows.forEach((r, i) => {
       if (r.k !== 'human') return;
       const team = setup.players.find((p) => p.faction === i)!.team;
+      const cell = r.cell ? { cell: true } : {};
       if (r.peer === this.t.self) {
-        seats.push({ seat: i, team, peer: null, mobile: r.mobile });
+        seats.push({ seat: i, team, peer: null, mobile: r.mobile, ...cell });
         return;
       }
       const token = this.tokens.get(r.peer);
       if (token) this.seatTokens.set(i, token);
-      seats.push({ seat: i, team, peer: r.peer, mobile: r.mobile });
+      seats.push({ seat: i, team, peer: r.peer, mobile: r.mobile, ...cell });
       this.send(r.peer, { k: 'start', setup: json, seat: i, tick: 0 });
     });
-    this.waiting = { go: { setup, hostSeat: this.mySeat, seats, botMs: this.state.botSecs * 1000 }, until: this.o.clock() + (this.o.readyMs ?? 10000), ready };
+    const pinned = this.state.runner ? seatOf(this.state, this.state.runner) : -1;
+    const go: HostGo = { setup, hostSeat: this.mySeat, seats, botMs: this.state.botSecs * 1000, ...(pinned >= 0 ? { runnerSeat: pinned } : {}) };
+    this.waiting = { go, until: this.o.clock() + (this.o.readyMs ?? 10000), ready };
     this.update();
   }
 
@@ -509,16 +532,20 @@ export class HostLobby {
     if (seat < 0) seat = this.state.rows.findIndex((r) => r.k === 'bot');
     if (seat < 0) return this.send(peer, { k: 'refuse', reason: 'This room is full.' });
     if (m.token) this.seenTokens.add(m.token);
-    this.edit(() => (this.state.rows[seat] = { k: 'human', team: this.state.rows[seat].team, peer, char: this.freeChar(m.char >>> 0, -1), mobile: m.mobile }));
+    this.edit(() => (this.state.rows[seat] = { k: 'human', team: this.state.rows[seat].team, peer, char: this.freeChar(m.char >>> 0, -1), mobile: m.mobile, ...(m.cell ? { cell: true } : {}) }));
   }
 
   /** Seat `seat`'s player is back on a new connection: hand them the match, and the seat. */
   private rejoin(peer: string, seat: number): void {
     const row = this.state.rows[seat] as Extract<SeatRow, { k: 'human' }>;
     const old = row.peer;
-    this.edit(() => (this.state.rows[seat] = { ...row, peer }));
+    this.edit(() => {
+      this.state.rows[seat] = { ...row, peer };
+      if (this.state.runner === old) this.state.runner = peer;
+    });
     this.onRejoin?.(seat, peer, old);
-    this.send(peer, { k: 'start', setup: this.setupJson, seat, tick: 1 });
+    const runner = this.runnerOf?.() ?? null;
+    this.send(peer, { k: 'start', setup: this.setupJson, seat, tick: 1, ...(runner && runner !== this.t.self ? { runner } : {}) });
     // the same seat open twice (a duplicated tab): the newer one has it
     if (old !== peer && this.connected.has(old)) this.send(old, { k: 'refuse', reason: 'You joined this match again from another tab or window, so this one has left it.' });
   }
@@ -534,7 +561,7 @@ export class HostLobby {
     const taken = this.state.rows.some((r, i) => i !== from && nameOf(r) === name);
     this.edit(() => {
       this.state.rows[from] = { k: 'open', team: from };
-      this.state.rows[to] = { k: 'human', peer, team: Math.max(0, Math.min(MAX_SEATS - 1, team | 0)), char: taken ? row.char : char >>> 0, mobile: row.mobile, ready: row.ready };
+      this.state.rows[to] = { ...row, peer, team: Math.max(0, Math.min(MAX_SEATS - 1, team | 0)), char: taken ? row.char : char >>> 0 };
     });
   }
 
@@ -589,6 +616,8 @@ export interface GuestLobbyOptions {
   build: string;
   char: number;
   mobile: boolean;
+  /** on mobile data, where the browser says (#190) */
+  cell?: boolean;
   /** this room's seat token, kept across reloads (sessionStorage), to get the seat back mid-match (#164) */
   token: string;
   clock: () => number;
@@ -626,7 +655,7 @@ export class GuestLobby {
     t.onPeer = (peer, up) => {
       // a new peer may be the host; the host reconnecting in the lobby gets told again who we are (it may have freed our seat)
       const hello = up && (!this.host || (peer === this.host && this.state?.phase === 'lobby'));
-      if (hello) this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0, token: o.token });
+      if (hello) this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0, token: o.token, ...(o.cell ? { cell: true } : {}) });
       if (!up && peer === this.host) this.onNoHost?.(this.dropped ? 'lost' : 'left');
     };
     t.onLink = (peer, state) => {
@@ -698,7 +727,7 @@ export class GuestLobby {
         if (m.to === this.t.self) return this.onPass?.(m.to, true, tokens);
         // follow the new host, and say hello: it answers with the room as it runs it
         this.follow(m.to);
-        this.send(m.to, { k: 'hello', proto: PROTOCOL_VERSION, build: this.o.build, mobile: this.o.mobile, char: this.o.char >>> 0, token: this.o.token });
+        this.send(m.to, { k: 'hello', proto: PROTOCOL_VERSION, build: this.o.build, mobile: this.o.mobile, char: this.o.char >>> 0, token: this.o.token, ...(this.o.cell ? { cell: true } : {}) });
         this.onPass?.(m.to, false, []);
         return;
       }
@@ -706,7 +735,7 @@ export class GuestLobby {
         if (!this.host) return;
         try {
           const setup = JSON.parse(m.setup) as MatchSetup;
-          this.onStart?.({ setup, seat: m.seat, host: peer, tick: m.tick });
+          this.onStart?.({ setup, seat: m.seat, host: peer, tick: m.tick, ...(m.runner ? { runner: m.runner } : {}) });
         } catch {
           /* a host that sends a bad setup gets no game */
         }

@@ -668,10 +668,11 @@ export class NetSession implements Session {
       // stepped again after a resync: already announced
       if (c.tick === this.lastDesync) return;
       this.lastDesync = c.tick;
-    } else {
+    } else if (c.k === 'seat') {
       applySeatCtrl(this.world, c);
       if (c.seat === this.localSeat) this.own = c.state;
     }
+    // rank and owner (#190) are for the match around us
     this.onCtrl?.(tick, c);
   }
 

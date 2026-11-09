@@ -43,6 +43,7 @@ describe('wire codec (#157)', () => {
   it('round-trips every message kind', () => {
     const msgs: Msg[] = [
       { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: true, char: 0xdeadbeef, token: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' },
+      { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: false, char: 1, token: '', cell: true },
       { k: 'lobby', state: JSON.stringify({ seed: 'ember-tide-4', name: 'Zoë 🐝', rows: [] }) },
       { k: 'pick', seat: 5, team: 3, char: 0 },
       { k: 'ready' },
@@ -54,8 +55,12 @@ describe('wire codec (#157)', () => {
       { k: 'snapreq', tick: 0 },
       { k: 'snapreq', tick: 54321 },
       { k: 'desync', tick: 330, text: 'factions[2].energy' },
-      { k: 'beat', epoch: 15, ok: false, hidden: true, syncing: false },
-      { k: 'beat', epoch: 0, ok: true, hidden: false, syncing: true },
+      { k: 'beat', epoch: 15, ok: false, hidden: true, syncing: false, t: 65535, echo: 0, held: 480 },
+      { k: 'beat', epoch: 0, ok: true, hidden: false, syncing: true, t: 0, echo: -1, held: 0 },
+      { k: 'links', rtt: [[0, 35], [5, 412]] },
+      { k: 'links', rtt: [] },
+      { k: 'ask', what: 'resync' },
+      { k: 'rebind', seat: 4, peer: 'peer-new' },
       { k: 'claim', epoch: 23, held: 12345 },
       { k: 'lead', epoch: 23, next: 12346 },
       { k: 'handoff', epoch: 22, state: JSON.stringify({ epoch: 22, next: 900, pending: [], ctrlNext: [], seats: [], pause: null }) },
@@ -66,9 +71,10 @@ describe('wire codec (#157)', () => {
       { k: 'seats', you: 1, table: [{ seat: 0, team: 0, name: 'host', state: 'human' }, { seat: 3, team: 1, name: '', state: 'bot' }] },
       { k: 'seats', you: -1, table: [] },
       { k: 'start', setup: JSON.stringify(botMatch(4)), seat: 5, tick: 0 },
+      { k: 'start', setup: JSON.stringify(botMatch(4)), seat: 1, tick: 900, runner: 'peer-run' },
       turnsMsg(0, [{ entries: [] }]),
       turnsMsg(99999, [
-        { entries: CMDS.map((cmd, i) => ({ seat: 2, seq: i + 1, cmd })), ctrl: [{ k: 'pause', seat: 2 }, { k: 'desync', tick: 99990 }] },
+        { entries: CMDS.map((cmd, i) => ({ seat: 2, seq: i + 1, cmd })), ctrl: [{ k: 'pause', seat: 2 }, { k: 'desync', tick: 99990 }, { k: 'rank', seats: [3, 0, 5] }, { k: 'owner', seat: 3 }, { k: 'rank', seats: [] }] },
         { entries: [] },
         {
           entries: [],
