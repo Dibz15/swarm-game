@@ -60,6 +60,10 @@ interface Room {
   view: LobbyView;
   router: Router | null;
   lobby: HostLobby | GuestLobby | null;
+  /** the lobby state the screen last showed, for join and leave notices (#184) */
+  seen: LobbyState | null;
+  /** measures our links to the others every few seconds, for the roster (#184) */
+  linkPoll: ReturnType<typeof setInterval> | null;
 }
 
 const ROOM_CHARS = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -248,7 +252,8 @@ class App {
     this.modal?.remove();
     this.modal = m;
     if (m) this.ui.appendChild(m);
-    this.covered = !!m?.classList.contains('runmap');
+    // the run map and the room (#184) cover everything: the demo battle stops under them
+    this.covered = !!m && (m.classList.contains('runmap') || m.classList.contains('opaque'));
     this.ui.classList.toggle('covered', this.covered);
   }
 
@@ -696,7 +701,7 @@ class App {
     const last = mp.loadCharacter();
     const choices = mp.characterChoices(last ? 3 : 4, last ? [last.name] : []);
     if (last) choices.unshift(last);
-    const room: Room = { id, secret, host, link, choices, view: null as unknown as LobbyView, router: null, lobby: null };
+    const room: Room = { id, secret, host, link, choices, view: null as unknown as LobbyView, router: null, lobby: null, seen: null, linkPoll: null };
     const view = (room.view = this.roomView(mp, room));
     this.room = room;
     this.setModal(view.el);
@@ -706,7 +711,7 @@ class App {
     try {
       t = await this.openTransport(mp, id, secret, view);
     } catch (e) {
-      view.status(e instanceof Error && e.message.startsWith('Hide my IP') ? e.message : 'Couldn’t open the room. Check your connection and try again.', true);
+      view.fail('Couldn’t connect', e instanceof Error && e.message.startsWith('Hide my IP') ? e.message : 'Couldn’t open the room. Check your connection and try again.', true);
       return;
     }
     if (this.room !== room) return t.close(); // left while it opened
@@ -715,11 +720,45 @@ class App {
     const clock = () => performance.now();
     if (host) {
       room.lobby = this.wireHostLobby(new mp.HostLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, prefs: loadPrefs(), seed: randomSeed(), clock, mobile: isMobile() }));
-      view.status('Send the link to your friends, then start when everyone is in.');
+      room.seen = structuredClone(room.lobby.state);
+      view.status('Send the link to your friends. They appear here as they join.');
     } else {
       room.lobby = this.wireGuestLobby(new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), token: seatToken(id), clock }));
     }
+    room.linkPoll = setInterval(() => this.pollLinks(room), 3000);
     this.renderRoom();
+  }
+
+  /** How our link to each player in the room is doing (#184): ping, and whether it's through the relay. */
+  private pollLinks(room: Room): void {
+    const t = room.router?.transport;
+    const s = room.lobby?.state;
+    if (this.room !== room || this.game || !t?.linkInfo || !s) return;
+    const peers = s.rows.flatMap((r) => (r.k === 'human' && r.peer !== t.self ? [r.peer] : []));
+    void Promise.all(peers.map(async (p) => [p, await t.linkInfo!(p).catch(() => ({}))] as const)).then((got) => {
+      if (this.room === room) room.view.links(new Map(got));
+    });
+  }
+
+  /** Who came and went since the screen last looked (#184): a note and a sound for each. */
+  private rosterNews(st: LobbyState): void {
+    const r = this.room, mp = this.mp;
+    if (!r || !mp) return;
+    const prev = r.seen;
+    r.seen = structuredClone(st);
+    if (this.game) return; // mid-match, the match says who's away
+    const self = r.router?.transport.self;
+    const { joined, left } = mp.rosterChanges(prev, st);
+    for (const seat of joined) {
+      const row = st.rows[seat];
+      if (row.k !== 'human' || row.peer === self) continue;
+      r.view.notice(`${mp.playerCharacter(row.char).name} joined`, FACTION_HEX[seat]);
+      this.sfx.joined();
+    }
+    for (const l of left) {
+      r.view.notice(`${mp.playerCharacter(l.char).name} left`, FACTION_HEX[l.seat]);
+      this.sfx.left();
+    }
   }
 
   /** The room's screen: with the host's controls when we run the room. */
@@ -727,6 +766,9 @@ class App {
     const hostLobby = () => (room.lobby instanceof mp.HostLobby ? room.lobby : null);
     return mp.lobbyScreen(room.link, room.choices, {
       leave: () => this.leaveRoom(),
+      retry: () => void this.openRoom(room.id, room.secret, room.host),
+      tick: (n) => this.sfx.countTick(n),
+      ready: (on) => (room.lobby instanceof mp.GuestLobby ? room.lobby.mark(on) : undefined),
       pick: (seat, team, char) => {
         mp.saveCharacter(mp.playerCharacter(char));
         const l = room.lobby;
@@ -742,13 +784,17 @@ class App {
             row: (seat, row) => hostLobby()?.setRow(seat, row),
             kick: (seat) => hostLobby()?.kick(seat),
             start: () => hostLobby()?.start(),
+            cancel: () => hostLobby()?.cancelStart(),
+            lock: (on) => hostLobby()?.setLocked(on),
+            fillBots: () => hostLobby()?.fillBots(),
           }
         : undefined,
     });
   }
 
   private wireHostLobby(lobby: HostLobby): HostLobby {
-    lobby.onChange = () => {
+    lobby.onChange = (st) => {
+      this.rosterNews(st);
       this.renderRoom();
       this.peersChanged();
     };
@@ -762,9 +808,14 @@ class App {
     const status = (text: string, error = false) => this.room?.view.status(text, error);
     lobby.onChange = (st) => {
       this.peersChanged();
+      // in: say so, once (#184)
+      const self = this.room?.router?.transport.self;
+      const wasIn = !!this.room?.seen?.rows.some((r) => r.k === 'human' && r.peer === self);
+      if (!wasIn && st.rows.some((r) => r.k === 'human' && r.peer === self)) this.sfx.joined();
+      this.rosterNews(st);
       // back in the lobby while the match was still on: the host ended it (#183)
       const ended = st.phase === 'lobby' && !!this.match && !this.game?.world.over;
-      status(st.phase === 'lobby' ? (ended ? 'The host ended the match. Waiting for the host to start the next one.' : 'Waiting for the host to start the match.') : 'The match is starting…');
+      status(ended ? 'The host ended the match.' : st.phase === 'playing' ? 'The match is starting…' : '');
       this.renderRoom();
       // the host brought everyone back after a match
       if (st.phase === 'lobby' && this.match) this.backToRoom();
@@ -776,7 +827,8 @@ class App {
         this.setModal(this.mp.messageCard('You left this match', why, [{ label: 'Menu', primary: true, on: () => this.leaveRoom() }]));
         return;
       }
-      status(why, true);
+      // a version mismatch won't go away by trying again
+      this.room?.view.fail(/removed you/.test(why) ? 'Removed from the room' : 'Couldn’t join', why, !/different version|removed you/.test(why));
     };
     // in a match, the match itself watches the host (and finds a new one, #166)
     lobby.onNoHost = (why) => {
@@ -785,7 +837,7 @@ class App {
     lobby.onHostLink = (state) => {
       if (this.match) return;
       if (state === 'lost') status('Lost connection to the host. Reconnecting…', true);
-      else status(lobby.state?.phase === 'playing' ? 'The match is starting…' : 'Waiting for the host to start the match.');
+      else status(lobby.state?.phase === 'playing' ? 'The match is starting…' : '');
     };
     lobby.onStart = (st) => this.guestGo(st);
     return lobby;
@@ -886,7 +938,7 @@ class App {
     if (!r) return this.showMenu();
     if (r.host) (r.lobby as HostLobby | null)?.backToLobby();
     this.endGame();
-    this.startDemo();
+    // nothing runs behind the room (#184): the menu starts the demo again when we leave it
     this.setScreen(null);
     this.setModal(r.view.el);
     this.renderRoom();
@@ -914,10 +966,9 @@ class App {
       );
       return;
     }
-    r.view.status(
-      why === 'left' ? 'The host left the room.' : why === 'lost' ? 'Lost connection to the host, and it didn’t come back. Check your connection and open the link again.' : 'No one is hosting this room. Check the link, or ask the host to open it again.',
-      true,
-    );
+    if (why === 'left') r.view.fail('The host left', 'The host closed the room. Ask them to open a new one and send you the link.');
+    else if (why === 'lost') r.view.fail('Lost the host', 'The connection to the host dropped and didn’t come back. Check your connection and try again.', true);
+    else r.view.fail('No one is hosting', 'Nobody answered on this link. Check that it’s the latest one, or ask the host to open the room again.', true);
   }
 
   /** Leave the room for good, and go back to the menu. */
@@ -930,6 +981,7 @@ class App {
     const r = this.room;
     if (!r) return;
     this.room = null;
+    if (r.linkPoll) clearInterval(r.linkPoll);
     this.match?.close();
     this.match = null;
     r.lobby?.close();
