@@ -1,7 +1,7 @@
 import type { Command } from '../sim/commands';
 import { DT } from '../sim/constants';
 import { normalizeCommand, sanitizeCommand, type CommandLimits } from '../sim/sanitize';
-import { MAX_ENTRIES_PER_TURN, MAX_TURNS_PER_MSG, type Ctrl, type Entry, type LatRow, type Msg, type SeatBot, type SeatState, type Turn } from './protocol';
+import { MAX_ENTRIES_PER_TURN, MAX_TURNS_PER_MSG, type Ctrl, type CtrlSeatState, type Entry, type LatRow, type Msg, type SeatBot, type SeatState, type Turn } from './protocol';
 
 /**
  * The Sequencer (#158): the one place that decides which tick each command
@@ -56,6 +56,8 @@ export interface SequencerOptions {
   hashTicks: number;
   /** how often everyone hears the latency table (`lat`, #161) */
   latMs: number;
+  /** stop the match at the first hash mismatch, until resumed or resynced (#165) */
+  haltOnDesync: boolean;
 }
 
 export const SEQUENCER_DEFAULTS: SequencerOptions = {
@@ -74,6 +76,7 @@ export const SEQUENCER_DEFAULTS: SequencerOptions = {
   statusMs: 1000,
   hashTicks: 300,
   latMs: 2000,
+  haltOnDesync: true,
 };
 
 /** A human seat in the match, and the peer that plays it (null: nobody yet). */
@@ -163,7 +166,15 @@ export class Sequencer {
   /** every closed turn, as it closes */
   onTurn: ((tick: number, turn: Turn) => void) | null = null;
   /** clients disagree about the world after `tick` */
-  onDesync: ((tick: number, hashes: Map<number, number>) => void) | null = null;
+  /**
+   * The first time clients disagree (#165): the tick, every seat's hash, and
+   * the seats outside the majority (all of them when there's no majority).
+   * Once only, until `clearDesync`: a world that diverged stays diverged.
+   */
+  onDesync: ((tick: number, hashes: Map<number, number>, odd: number[]) => void) | null = null;
+  /** every mismatch reported, for the report bundle */
+  readonly desyncs: { tick: number; hashes: Record<number, number> }[] = [];
+  private desyncAt = -1;
   /** every tick whose hash reports were compared, agreeing or not (for the net-sim) */
   onHashes: ((tick: number, hashes: Map<number, number>) => void) | null = null;
   /** commands dropped, by reason (for tests and the debug overlay) */
@@ -219,6 +230,21 @@ export class Sequencer {
     return this.pause !== null;
   }
 
+  /** The last tick a peer said it holds (its ack): a successor is sent the turns after it (#166). */
+  ackOf(peer: string): number {
+    return this.byPeer.get(peer)?.ackTick ?? 0;
+  }
+
+  /** The seat a peer is bound to, or -1. */
+  seatOfPeer(peer: string): number {
+    return this.byPeer.get(peer)?.seat ?? -1;
+  }
+
+  /** The highest order seq seen from this seat: a rejoining client numbers its orders above it (#164). */
+  seatSeq(seat: number): number {
+    return this.seats.get(seat)?.highSeq ?? 0;
+  }
+
   seatState(seat: number): SeatState | undefined {
     return this.seats.get(seat)?.state;
   }
@@ -260,6 +286,11 @@ export class Sequencer {
     if (!rec) return;
     const now = this.clock();
     rec.heardAt = now;
+    // the page went hidden (#164): away now, not after a silence; anything else it sends brings it back
+    if (msg.k === 'away') {
+      if (rec.state === 'human') this.setState(rec, 'away', now);
+      return;
+    }
     if (rec.state === 'away') this.setState(rec, 'human', now);
     switch (msg.k) {
       case 'cmd':
@@ -338,7 +369,17 @@ export class Sequencer {
     this.broadcastStatus(now);
   }
 
-  private setState(rec: SeatRec, state: SeatState, now: number): void {
+  /**
+   * This seat's faction is out (#183): the player watches the rest. No
+   * control entry (nothing in the sim changes), no away/bot timers, no
+   * commands; its hashes are still compared while it's heard from.
+   */
+  setSpectating(seat: number): void {
+    const rec = this.seats.get(seat);
+    if (rec) rec.state = 'spectating';
+  }
+
+  private setState(rec: SeatRec, state: CtrlSeatState, now: number): void {
     if (rec.state === state) return;
     rec.state = state;
     if (state === 'away') rec.awayAt = now;
@@ -351,15 +392,54 @@ export class Sequencer {
     let m = this.hashes.get(tick);
     if (!m) this.hashes.set(tick, (m = new Map()));
     m.set(seat, h);
+    // humans, and spectators still here: a defeated player's world is checked too
+    const now = this.clock();
     let expected = 0;
-    for (const r of this.seats.values()) if (r.state === 'human') expected++;
+    for (const r of this.seats.values()) if (r.state === 'human' || (r.state === 'spectating' && now - r.heardAt <= this.opts.awayMs)) expected++;
     if (m.size >= expected) this.judge(tick, m);
   }
 
   private judge(tick: number, m: Map<number, number>): void {
     this.hashes.delete(tick);
     this.onHashes?.(tick, m);
-    if (new Set(m.values()).size > 1) this.onDesync?.(tick, m);
+    const odd = oddOnes(m);
+    if (!odd.length || this.desyncAt >= 0) return;
+    this.desyncAt = tick;
+    this.desyncs.push({ tick, hashes: Object.fromEntries(m) });
+    this.onDesync?.(tick, m, odd);
+    if (this.opts.haltOnDesync) this.halt(tick, this.clock());
+  }
+
+  /**
+   * Stop the match for everyone (#165): a pause nobody's allowance pays for,
+   * that never ends by itself. The `desync` entry rides on the turn now open,
+   * so every client stops on the same tick.
+   */
+  private halt(tick: number, now: number): void {
+    if (this.pause) {
+      // already paused: it just won't end by itself now. If the clock has
+      // stopped, every client is stopped on the same tick already; an entry
+      // would only go out on resume, and halt everyone again.
+      if (this.pauseAfter >= 0) this.ctrlNext.push({ k: 'desync', tick });
+      this.pause.by = -1;
+      this.pause.resumeAt = Infinity;
+      this.broadcastStatus(now);
+      return;
+    }
+    this.ctrlNext.push({ k: 'desync', tick });
+    this.pause = { by: -1, at: now, resumeAt: Infinity };
+    this.pauseAfter = this.next;
+  }
+
+  /** Watch for the next mismatch again (after a resync, #165). */
+  clearDesync(): void {
+    this.desyncAt = -1;
+    this.hashes.clear();
+  }
+
+  /** The peer playing a seat (null: the host's own, or nobody). */
+  peerOfSeat(seat: number): string | null {
+    return this.seats.get(seat)?.peer ?? null;
   }
 
   // ---- clock -----------------------------------------------------------------
@@ -394,7 +474,8 @@ export class Sequencer {
     }
     if (now >= p.resumeAt) {
       this.pause = null;
-      this.ctrlNext.push({ k: 'resume', seat: p.by });
+      // a halt (by -1, #165) has no seat to name: turns simply flow again
+      if (p.by >= 0) this.ctrlNext.push({ k: 'resume', seat: p.by });
       // the next turn closes one tick after play resumes
       this.t0 = p.resumeAt - (this.next - 1) * DT_MS;
       this.broadcastStatus(now);
@@ -500,4 +581,101 @@ export class Sequencer {
   closedTurns(): { first: number; turns: Turn[] } {
     return { first: this.base, turns: this.history.slice() };
   }
+}
+
+/**
+ * A successor's state built from the turn log alone (#166), when the old
+ * sequencer vanished without handing over: what it knew that matters can be
+ * read back from the closed turns.
+ *
+ * - Each seat's seen seqs (the dedupe window) come from its entries, so a
+ *   resent order that already landed isn't run twice.
+ * - Seat states and a pause or halt come from the control entries; pauses
+ *   called count against their allowance.
+ * - Orders the old sequencer took but hadn't closed are gone: their clients
+ *   see them unlanded and resend them.
+ */
+export function rebuildState(o: {
+  epoch: number;
+  /** the first turn the successor closes */
+  next: number;
+  /** every human seat, with the peer that plays it (HOST_SELF for the successor's own) */
+  seats: SeatConfig[];
+  history: { first: number; turns: Turn[] };
+  opts?: Partial<SequencerOptions>;
+  /** the latest latency table, for each seat's round trip */
+  lat?: LatRow[];
+  /** what's left of each seat's pause allowance, as last heard (default: all of it) */
+  pauseMsLeft?: ReadonlyMap<number, number>;
+}): SequencerState {
+  const opts = { ...SEQUENCER_DEFAULTS, ...o.opts };
+  const high = new Map<number, number>();
+  const seqs = new Map<number, number[]>();
+  const state = new Map<number, SeatState>();
+  const pausesUsed = new Map<number, number>();
+  let pause: SequencerState['pause'] = null;
+  const lastTick = o.history.first + o.history.turns.length - 1;
+  o.history.turns.forEach((turn, i) => {
+    const tick = o.history.first + i;
+    for (const e of turn.entries) {
+      high.set(e.seat, Math.max(high.get(e.seat) ?? 0, e.seq));
+      (seqs.get(e.seat) ?? seqs.set(e.seat, []).get(e.seat)!).push(e.seq);
+    }
+    for (const c of turn.ctrl ?? []) {
+      if (c.k === 'seat') state.set(c.seat, c.state);
+      else if (c.k === 'pause') {
+        pausesUsed.set(c.seat, (pausesUsed.get(c.seat) ?? 0) + 1);
+        pause = { by: c.seat, since: 0, resumeIn: -1, after: tick === lastTick ? -1 : tick };
+      } else if (c.k === 'resume') pause = null;
+      // a halt holds only if nothing closed after it (a resumed halt has no entry of its own)
+      else if (c.k === 'desync') pause = tick === lastTick ? { by: -1, since: 0, resumeIn: -1, after: -1 } : pause;
+    }
+  });
+  // a pause whose turn closed with more after it was resumed (or the log would end there)
+  if (pause && (pause as { after: number }).after >= 0) pause = null;
+  return {
+    epoch: o.epoch,
+    next: o.next,
+    pending: [],
+    ctrlNext: [],
+    pause,
+    seats: o.seats.map((c) => {
+      const h = high.get(c.seat) ?? 0;
+      const rtt = o.lat?.find((r) => r.seat === c.seat)?.rtt ?? 0;
+      return {
+        seat: c.seat,
+        team: c.team,
+        peer: c.peer,
+        state: state.get(c.seat) ?? 'human',
+        heardAt: 0,
+        awayAt: 0,
+        highSeq: h,
+        seen: (seqs.get(c.seat) ?? []).filter((s) => s > h - SEQ_WINDOW),
+        tokens: opts.burst,
+        tokensAt: 0,
+        d: opts.dMin,
+        dAt: 0,
+        lastExec: o.next - 1,
+        rtt,
+        buffer: 0,
+        ackTick: o.next - 1,
+        pausesLeft: Math.max(0, opts.pauses - (pausesUsed.get(c.seat) ?? 0)),
+        pauseMsLeft: Math.min(opts.pauseMs, o.pauseMsLeft?.get(c.seat) ?? opts.pauseMs),
+      };
+    }),
+  };
+}
+
+/**
+ * The seats outside the majority's hash (#165): every seat when no hash is
+ * held by more seats than any other (with two seats there never is a
+ * majority), none when they all agree.
+ */
+export function oddOnes(hashes: ReadonlyMap<number, number>): number[] {
+  const counts = new Map<number, number>();
+  for (const h of hashes.values()) counts.set(h, (counts.get(h) ?? 0) + 1);
+  if (counts.size <= 1) return [];
+  const top = Math.max(...counts.values());
+  const tops = [...counts].filter(([, n]) => n === top);
+  return (tops.length === 1 ? [...hashes].filter(([, h]) => h !== tops[0][0]).map(([s]) => s) : [...hashes.keys()]).sort((a, b) => a - b);
 }

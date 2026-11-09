@@ -438,6 +438,16 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .dom.urgent .dom-time { font-size: 42px; }
 @keyframes dom-pulse { from { box-shadow: 0 0 10px color-mix(in srgb, var(--c) 30%, transparent); } to { box-shadow: 0 0 34px color-mix(in srgb, var(--c) 70%, transparent); } }
 
+/* A line that stays (#183): out and watching, rejoining, a bot playing for you… Sits above the bottom bar (none while watching). */
+.hud-banner {
+  position: absolute; left: 50%; bottom: calc(var(--hudb, 80px) + 14px); transform: translateX(-50%); max-width: calc(100% - 24px);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 14px; padding: 10px 16px;
+  font-size: 15px; font-weight: 600; text-align: center;
+  border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(10, 13, 28, 0.92); pointer-events: auto;
+}
+.hud-banner[hidden] { display: none; }
+.hud-banner .banner-btns { display: flex; gap: 8px; }
+.hud-bottom[hidden], .counters[hidden] { display: none !important; }
 .toasts { position: absolute; top: 90px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .toast {
   background: var(--panel);

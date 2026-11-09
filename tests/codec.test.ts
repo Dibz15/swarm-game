@@ -42,11 +42,21 @@ describe('wire codec (#157)', () => {
 
   it('round-trips every message kind', () => {
     const msgs: Msg[] = [
-      { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: true, char: 0xdeadbeef },
+      { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: true, char: 0xdeadbeef, token: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' },
       { k: 'lobby', state: JSON.stringify({ seed: 'ember-tide-4', name: 'Zoë 🐝', rows: [] }) },
       { k: 'pick', seat: 5, team: 3, char: 0 },
       { k: 'ready' },
-      { k: 'lat', rows: [{ seat: 0, state: 'human', rtt: 12, delay: 145 }, { seat: 4, state: 'away', rtt: 340, delay: 610 }] },
+      { k: 'away' },
+      { k: 'snapreq', tick: 0 },
+      { k: 'snapreq', tick: 54321 },
+      { k: 'desync', tick: 330, text: 'factions[2].energy' },
+      { k: 'beat', epoch: 15, ok: false, hidden: true, syncing: false },
+      { k: 'beat', epoch: 0, ok: true, hidden: false, syncing: true },
+      { k: 'claim', epoch: 23, held: 12345 },
+      { k: 'lead', epoch: 23, next: 12346 },
+      { k: 'handoff', epoch: 22, state: JSON.stringify({ epoch: 22, next: 900, pending: [], ctrlNext: [], seats: [], pause: null }) },
+      { k: 'snap', tick: 900, part: 3, of: 40, bytes: new Uint8Array([1, 2, 3]) },
+      { k: 'lat', rows: [{ seat: 0, state: 'human', rtt: 12, delay: 145 }, { seat: 4, state: 'away', rtt: 340, delay: 610 }, { seat: 2, state: 'spectating', rtt: 80, delay: 200 }] },
       { k: 'lat', rows: [] },
       { k: 'refuse', reason: 'build mismatch: refresh the page' },
       { k: 'seats', you: 1, table: [{ seat: 0, team: 0, name: 'host', state: 'human' }, { seat: 3, team: 1, name: '', state: 'bot' }] },
@@ -54,7 +64,7 @@ describe('wire codec (#157)', () => {
       { k: 'start', setup: JSON.stringify(botMatch(4)), seat: 5, tick: 0 },
       turnsMsg(0, [{ entries: [] }]),
       turnsMsg(99999, [
-        { entries: CMDS.map((cmd, i) => ({ seat: 2, seq: i + 1, cmd })), ctrl: [{ k: 'pause', seat: 2 }] },
+        { entries: CMDS.map((cmd, i) => ({ seat: 2, seq: i + 1, cmd })), ctrl: [{ k: 'pause', seat: 2 }, { k: 'desync', tick: 99990 }] },
         { entries: [] },
         {
           entries: [],
@@ -119,6 +129,8 @@ describe('wire codec (#157)', () => {
     expect(() => encodeMsg(turnsMsg(0, [{ entries: [{ seat: 1, seq: 1, cmd: { t: 'boon', p: 2, k: 0 } }] }]))).toThrow(/seat/);
     expect(() => encodeMsg(turnsMsg(0, [{ entries: [{ seat: 6, seq: 1, cmd: { t: 'boon', p: 6, k: 0 } }] }]))).toThrow(/seat/);
     expect(() => encodeMsg(turnsMsg(0, []))).toThrow();
+    // watching (#183) changes nothing in the sim: never a control entry
+    expect(() => encodeMsg(turnsMsg(0, [{ entries: [], ctrl: [{ k: 'seat', seat: 1, state: 'spectating' as 'human' }] }]))).toThrow(/seat state/);
     expect(() => encodeMsg(turnsMsg(0, Array.from({ length: MAX_TURNS_PER_MSG + 1 }, () => ({ entries: [] }))))).toThrow();
   });
 
@@ -137,7 +149,7 @@ describe('wire codec (#157)', () => {
     // mutations of real messages: truncations, bit flips, a trailing byte
     const real = [
       encodeMsg(turnsMsg(812, [{ entries: CMDS.map((cmd, j) => ({ seat: 2, seq: j + 1, cmd })), ctrl: [{ k: 'seat', seat: 2, state: 'bot', bot: { difficulty: 0, personality: 'rusher' } }] }])),
-      encodeMsg({ k: 'hello', proto: 1, build: 'x', mobile: false, char: 77 }),
+      encodeMsg({ k: 'hello', proto: 1, build: 'x', mobile: false, char: 77, token: '' }),
       encodeMsg({ k: 'pick', seat: 1, team: 2, char: 123456 }),
       encodeMsg({ k: 'lobby', state: '{"rows":[]}' }),
       encodeMsg({ k: 'ack', tick: 4, seq: 2, rtt: 40, buffer: 3, want: [5, 9] }),

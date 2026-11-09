@@ -3,7 +3,7 @@ import type { Command } from '../sim/commands';
 import { FACTION_UNIT_CAP, NEUTRAL } from '../sim/constants';
 import { QUANTUM } from '../sim/sanitize';
 import {
-  MAX_BUILD, MAX_CTRL_PER_TURN, MAX_ENTRIES_PER_TURN, MAX_LOBBY, MAX_NAME, MAX_REASON, MAX_SEATS, MAX_SETUP, MAX_TURNS_PER_MSG,
+  MAX_BUILD, MAX_CTRL_PER_TURN, MAX_ENTRIES_PER_TURN, MAX_LOBBY, MAX_NAME, MAX_REASON, MAX_SEATS, MAX_HANDOFF, MAX_SETUP, MAX_SNAP_PARTS, MAX_TOKEN, MAX_TURNS_PER_MSG,
   SEAT_STATES, SNAP_CHUNK, type Ctrl, type Entry, type LatRow, type Msg, type MsgKind, type SeatInfo, type Turn,
 } from './protocol';
 
@@ -301,16 +301,17 @@ function readSeat(r: Reader): number {
   return s;
 }
 
-const CTRL_KINDS = ['pause', 'resume', 'seat'] as const;
+const CTRL_KINDS = ['pause', 'resume', 'seat', 'desync'] as const;
 
 function writeCtrl(w: Writer, c: Ctrl): void {
   const k = CTRL_KINDS.indexOf(c.k);
   if (k < 0) throw new Error(`codec: unknown control entry ${c.k}`);
   w.u8(k);
+  if (c.k === 'desync') return void w.uv(c.tick);
   seat(w, c.seat);
   if (c.k !== 'seat') return;
   const st = SEAT_STATES.indexOf(c.state);
-  if (st < 0) throw new Error(`codec: bad seat state ${c.state}`);
+  if (st < 0 || c.state === ('spectating' as string)) throw new Error(`codec: bad seat state ${c.state}`);
   // state in the low bits, a has-bot flag above
   w.u8(st | (c.bot ? 4 : 0));
   if (c.bot) {
@@ -323,11 +324,12 @@ function writeCtrl(w: Writer, c: Ctrl): void {
 function readCtrl(r: Reader): Ctrl {
   const k = CTRL_KINDS[r.u8()];
   if (!k) throw new Bad();
+  if (k === 'desync') return { k, tick: r.uv() };
   const s = readSeat(r);
   if (k !== 'seat') return { k, seat: s };
   const b = r.u8();
   const state = SEAT_STATES[b & 3];
-  if (!state || b > 7) throw new Bad();
+  if (!state || state === 'spectating' || b > 7) throw new Bad();
   if (!(b & 4)) return { k, seat: s, state };
   const bb = r.u8();
   const personality = PERSONALITIES[bb & 3];
@@ -375,7 +377,7 @@ function readTurn(r: Reader): Turn {
 
 // ---- messages ---------------------------------------------------------------
 
-const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat'] as const;
+const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff'] as const;
 const KIND_INDEX = new Map<string, number>(KINDS.map((k, i) => [k, i]));
 
 /** The kind of the message in `bytes` from its first byte alone (for routing), or null. */
@@ -392,6 +394,7 @@ export function encodeMsg(m: Msg): Uint8Array {
       w.str(m.build, MAX_BUILD);
       w.u8(m.mobile ? 1 : 0);
       u32(w, m.char);
+      w.str(m.token, MAX_TOKEN);
       break;
     case 'refuse':
       w.str(m.reason, MAX_REASON);
@@ -445,7 +448,7 @@ export function encodeMsg(m: Msg): Uint8Array {
       w.uv(m.hash);
       break;
     case 'snap':
-      if (m.bytes.length > SNAP_CHUNK || m.part >= m.of) throw new Error('codec: bad snapshot chunk');
+      if (m.bytes.length > SNAP_CHUNK || m.part >= m.of || m.of > MAX_SNAP_PARTS) throw new Error('codec: bad snapshot chunk');
       w.uv(m.tick);
       w.uv(m.part);
       w.uv(m.of);
@@ -462,6 +465,30 @@ export function encodeMsg(m: Msg): Uint8Array {
       break;
     case 'reclaim':
     case 'ready':
+    case 'away':
+      break;
+    case 'snapreq':
+      w.uv(m.tick);
+      break;
+    case 'desync':
+      w.uv(m.tick);
+      w.str(m.text, MAX_REASON);
+      break;
+    case 'beat':
+      w.uv(m.epoch);
+      w.u8((m.ok ? 1 : 0) | (m.hidden ? 2 : 0) | (m.syncing ? 4 : 0));
+      break;
+    case 'claim':
+      w.uv(m.epoch);
+      w.uv(m.held);
+      break;
+    case 'lead':
+      w.uv(m.epoch);
+      w.uv(m.next);
+      break;
+    case 'handoff':
+      w.uv(m.epoch);
+      w.str(m.state, MAX_HANDOFF);
       break;
     case 'lobby':
       w.str(m.state, MAX_LOBBY);
@@ -505,8 +532,8 @@ function readMsg(r: Reader): Msg {
   const k = KINDS[r.u8()];
   switch (k) {
     case 'hello': {
-      const proto = r.uv(), build = r.str(MAX_BUILD), mobile = r.bool();
-      return { k, proto, build, mobile, char: r.upTo(0xffffffff) };
+      const proto = r.uv(), build = r.str(MAX_BUILD), mobile = r.bool(), char = r.upTo(0xffffffff);
+      return { k, proto, build, mobile, char, token: r.str(MAX_TOKEN) };
     }
     case 'refuse':
       return { k, reason: r.str(MAX_REASON) };
@@ -555,7 +582,7 @@ function readMsg(r: Reader): Msg {
     }
     case 'snap': {
       const tick = r.uv(), part = r.uv(), of = r.uv();
-      if (part >= of) throw new Bad();
+      if (part >= of || of > MAX_SNAP_PARTS) throw new Bad();
       return { k, tick, part, of, bytes: r.bytes(SNAP_CHUNK) };
     }
     case 'pause':
@@ -566,7 +593,31 @@ function readMsg(r: Reader): Msg {
     }
     case 'reclaim':
     case 'ready':
+    case 'away':
       return { k };
+    case 'snapreq':
+      return { k, tick: r.uv() };
+    case 'desync': {
+      const tick = r.uv();
+      return { k, tick, text: r.str(MAX_REASON) };
+    }
+    case 'beat': {
+      const epoch = r.uv(), f = r.u8();
+      if (f > 7) throw new Bad();
+      return { k, epoch, ok: !!(f & 1), hidden: !!(f & 2), syncing: !!(f & 4) };
+    }
+    case 'claim': {
+      const epoch = r.uv();
+      return { k, epoch, held: r.uv() };
+    }
+    case 'lead': {
+      const epoch = r.uv();
+      return { k, epoch, next: r.uv() };
+    }
+    case 'handoff': {
+      const epoch = r.uv();
+      return { k, epoch, state: r.str(MAX_HANDOFF) };
+    }
     case 'lobby':
       return { k, state: r.str(MAX_LOBBY) };
     case 'lat': {

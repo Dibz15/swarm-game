@@ -1,5 +1,7 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
+
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 import { isMobile, LAYOUT_EVENT } from './mobile';
 import { MISSIONS } from '../game/tutorial';
 import { ALLY_MARK, sideOf, teamLayout, teamName, teamsLine, teamsList, verb, type TeamGroup, type TeamLayout } from './teams';
@@ -94,6 +96,11 @@ export class Hud {
   private energyText: HTMLSpanElement;
   private btn: Record<string, HTMLButtonElement> = {};
   private toasts: HTMLDivElement;
+  /** a line that stays up (#183): you're out, rejoining, a bot is playing for you… */
+  private bannerEl: HTMLDivElement;
+  private bannerKey = '';
+  /** a faction's name as players know it: their character's in a room, else the colour's */
+  names: (faction: number) => string = (f) => FACTION_NAMES[f];
   private dom: HTMLDivElement;
   private heartBar: HTMLDivElement;
   private warlordChip: HTMLDivElement;
@@ -164,6 +171,7 @@ export class Hud {
       <div class="heartbar"><div class="heart-name">The Bloom's heart</div><div class="heart-hp"><i></i></div><div class="heart-ward"></div></div>
       <div class="dom"><div class="dom-time"></div><div class="dom-text"></div><div class="dom-bar"><i></i></div></div>
       <div class="toasts"></div>
+      <div class="hud-banner" hidden><span></span><div class="banner-btns"></div></div>
       <div class="nestcard"></div>
       <div class="aimhint"><span></span><button class="cancel">Cancel</button></div>
       <div class="tip"><span></span><button class="x" title="Hide tips">✕</button></div>
@@ -253,6 +261,7 @@ export class Hud {
     this.energyFill = q('.energy .fill');
     this.energyText = q('.energy span');
     this.toasts = q('.toasts');
+    this.bannerEl = q('.hud-banner');
     this.dom = q('.dom');
     this.heartBar = q('.heartbar');
     this.warlordChip = q('.warlord-chip');
@@ -310,6 +319,24 @@ export class Hud {
 
   setMuted(m: boolean): void {
     this.btn.mute.classList.toggle('off', m);
+  }
+
+  /** Show a line that stays until replaced or cleared (null), with optional buttons. */
+  banner(text: string | null, buttons: { label: string; on: () => void; primary?: boolean }[] = []): void {
+    const key = text === null ? '' : `${text}|${buttons.map((b) => b.label).join('|')}`;
+    if (key === this.bannerKey) return;
+    this.bannerKey = key;
+    this.bannerEl.hidden = text === null;
+    (this.bannerEl.firstElementChild as HTMLElement).textContent = text ?? '';
+    const row = this.bannerEl.lastElementChild as HTMLElement;
+    row.innerHTML = '';
+    for (const b of buttons) {
+      const btn = document.createElement('button');
+      btn.className = `small${b.primary ? ' primary' : ''}`;
+      btn.textContent = b.label;
+      btn.addEventListener('click', b.on);
+      row.append(btn);
+    }
   }
 
   toast(msg: string, color = '#cfd6ff'): void {
@@ -556,6 +583,11 @@ export class Hud {
     const w = g.world;
     const mobile = isMobile();
     this.clock.textContent = formatTime(w.tick);
+    // Out and watching (#183): nothing to command, so no bar of orders
+    if (this.bottom.hidden !== g.spectating) {
+      this.bottom.hidden = g.spectating;
+      this.counters.hidden = g.spectating;
+    }
     // Floating panels sit above the bottom bar, whose height depends on what's in it.
     this.el.style.setProperty('--hudb', `${this.bottom.offsetHeight}px`);
     this.updateCoach(g, mobile);
@@ -617,10 +649,10 @@ export class Hud {
       const side = layout.team ? this.groupOf.get(f.id) : undefined;
       chip.title =
         f.id === g.human
-          ? `${FACTION_NAMES[f.id]} (you). Army / supply cap: nests stop producing at the cap. Take or upgrade nests to raise it.`
+          ? `${this.names(f.id)} (you). Army / supply cap: nests stop producing at the cap. Take or upgrade nests to raise it.`
           : side
-            ? `${FACTION_NAMES[f.id]}: ${side.mine ? 'your ally' : 'enemy'} (team ${side.letter}). Tap the strip for every team.`
-            : FACTION_NAMES[f.id];
+            ? `${this.names(f.id)}: ${side.mine ? 'your ally' : 'enemy'} (team ${side.letter}). Tap the strip for every team.`
+            : this.names(f.id);
     });
 
     // Nest share: one segment per faction, unheld nests left empty.
@@ -773,6 +805,14 @@ export class Hud {
     // for the selected nest, only while no dots are selected with it.
     let hn = w.nests[g.hoverNest];
     if (!hn && mobile && nUnits === 0) for (const id of g.selection.nests) hn = hn ?? w.nests[id];
+    // A spectator taps to see whose things are whose (#183).
+    const ins = g.spectating ? g.inspect : null;
+    if (!hn && ins && 'nest' in ins) hn = w.nests[ins.nest];
+    if (!hn && ins && 'owner' in ins) {
+      this.nestCard.innerHTML = `<b style="color:${hex(ins.owner)}">${esc(this.names(ins.owner))}</b><br><small>${ins.count} dots here · ${w.unitCount[ins.owner]} in all · ⬡${w.nests.filter((n) => n.owner === ins.owner).length}</small>`;
+      this.nestCard.style.display = 'block';
+      return;
+    }
     if (hn && mobile) {
       const next = hn.owner === g.human && hn.level < MAX_LEVEL ? `<br><small>Upgrade: ${UPGRADE_COST[hn.level]} dots → ${LEVEL_PERKS[hn.level + 1]}</small>` : '';
       const s = layout.team ? sideOf(w, g.human, hn.owner) : null;
@@ -789,10 +829,10 @@ export class Hud {
             : s === 'you'
               ? 'Yours'
               : !layout.team
-                ? FACTION_NAMES[hn.owner]
+                ? this.names(hn.owner)
                 : s === 'ally'
-                  ? `${ALLY_MARK} Ally: ${FACTION_NAMES[hn.owner]}`
-                  : `Enemy: ${FACTION_NAMES[hn.owner]}`;
+                  ? `${ALLY_MARK} Ally: ${this.names(hn.owner)}`
+                  : `Enemy: ${this.names(hn.owner)}`;
       const next = hn.level < MAX_LEVEL ? `<br>Next: <b>Lv${hn.level + 1}</b> for ${UPGRADE_COST[hn.level]} dots (U): ${LEVEL_PERKS[hn.level + 1]}` : '';
       const has = hn.level > 1 ? `<br>Lv${hn.level}: ${LEVEL_PERKS.slice(2, hn.level + 1).join('; ')}` : '';
       this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${has}${hn.owner === g.human ? next : ''}</small>`;

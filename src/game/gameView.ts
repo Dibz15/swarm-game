@@ -12,6 +12,7 @@ import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, KEYS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
 import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, surgeCost } from '../sim/commands';
 import { inArmy, type Nest, type World } from '../sim/world';
+import { placingOf, type Placing } from './standing';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
 import { LocalSession, type OrderFail, type Session } from './session';
@@ -95,6 +96,17 @@ export class GameView {
   brush: { x: number; y: number; r: number } | null = null;
   result: MatchResult | null = null;
   resultTime = 0;
+  /**
+   * Out of the match but watching the rest (#183): a room match, where the
+   * others play on. Orders are off; clicks inspect instead of selecting.
+   */
+  spectating = false;
+  /** where you finished, once out: 4th of 6 */
+  placing: Placing | null = null;
+  /** what a spectator last clicked: a nest, or someone's dots */
+  inspect: { nest: number } | { owner: number; count: number } | null = null;
+  /** watch on after your defeat instead of ending (a room match: the others play on) */
+  private readonly watchOnDefeat: boolean;
   /** match recorder (#29), when the player opted in */
   readonly rec: Recorder | null;
   /** tutorial mission being played, if any (#17) */
@@ -143,8 +155,9 @@ export class GameView {
     readonly setup: MatchSetup,
     private readonly s: Services,
     record: { scenario?: string; mobile: boolean } | null = null,
-    opts: { seat?: number; session?: Session } = {},
+    opts: { seat?: number; session?: Session; spectate?: boolean } = {},
   ) {
+    this.watchOnDefeat = !!opts.spectate;
     // a networked match brings its own session (#159); otherwise play locally
     this.session = opts.session ?? new LocalSession(setup, localSeat(setup, opts.seat));
     this.human = this.session.localSeat;
@@ -181,10 +194,11 @@ export class GameView {
     this.rec?.frame(w, this.s.camera);
     if (!this.result) {
       const me = w.factions[this.human];
-      if (me?.eliminated) this.finish('defeat', time);
-      else if (w.over) this.finish(w.winnerTeam === w.teamOf[this.human] ? 'victory' : 'defeat', time);
+      if (w.over) this.finish(w.winnerTeam === w.teamOf[this.human] ? 'victory' : 'defeat', time);
+      else if (me?.eliminated && this.watchOnDefeat) this.spectate();
+      else if (me?.eliminated) this.finish('defeat', time);
     }
-    if (!this.result) this.checkSupply();
+    if (!this.result && !this.spectating) this.checkSupply();
     if (!this.result && this.mission) this.updateMission(time);
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
     // Domination countdown ticks in the last ten seconds.
@@ -277,6 +291,7 @@ export class GameView {
 
   /** A mission hides this action: say so instead of doing it. */
   private blocked(a: Lock): boolean {
+    if (this.spectating || this.session.syncing || this.session.seatBot) return true;
     if (!this.locked.has(a)) return false;
     this.s.toast(this.lockReason.get(a) ?? 'Not in this lesson: it comes later', '#9aa4c7');
     return true;
@@ -293,7 +308,19 @@ export class GameView {
     this.resultTime = time;
     if (r === 'victory' && this.world.winReason === 'held') this.s.sfx.lineHeld();
     if (r === 'victory') this.s.sfx.victory();
-    else this.s.sfx.defeat();
+    // a spectator heard the defeat when it happened
+    else if (!this.spectating) this.s.sfx.defeat();
+  }
+
+  /** Out, with the match going on (#183): watch the rest. */
+  private spectate(): void {
+    if (this.spectating) return;
+    this.spectating = true;
+    this.placing = placingOf(this.world, this.human);
+    this.aim = null;
+    this.selection.clear();
+    this.pending.clear();
+    this.s.sfx.defeat();
   }
 
   render(time: number): void {
@@ -858,6 +885,7 @@ export class GameView {
    */
   selectAt(wx: number, wy: number, radius: number, additive: boolean): boolean {
     this.typeCycle = null;
+    if (this.spectating) return this.inspectAt(wx, wy, radius);
     const n = this.nestAt(wx, wy);
     const own = n && n.owner === this.human ? n : null;
     const units = this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= radius * radius);
@@ -888,6 +916,31 @@ export class GameView {
     }
     if (!additive) this.selection.clear();
     return false;
+  }
+
+  /** A spectator's click (#183): whose nest, or whose dots, is this? */
+  private inspectAt(wx: number, wy: number, radius: number): boolean {
+    const n = this.nestAt(wx, wy);
+    if (n) {
+      this.inspect = { nest: n.id };
+      return true;
+    }
+    const w = this.world;
+    let best = -1, bd = radius * radius;
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.owner[i] < 0 || w.owner[i] === NEUTRAL) continue;
+      const d = (w.x[i] - wx) ** 2 + (w.y[i] - wy) ** 2;
+      if (d <= bd) (best = i), (bd = d);
+    }
+    if (best < 0) {
+      this.inspect = null;
+      return false;
+    }
+    const owner = w.owner[best], R = radius * 2.2;
+    let count = 0;
+    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === owner && (w.x[i] - wx) ** 2 + (w.y[i] - wy) ** 2 <= R * R) count++;
+    this.inspect = { owner, count };
+    return true;
   }
 
   /** Brush selection (hold Space and move): adds own dots under the brush. */
@@ -1019,6 +1072,8 @@ export class GameView {
 
   /** Give an order; networked, show it until it runs. `cost`: the energy it will spend. */
   private order(cmd: Command, cost = 0): void {
+    // out and watching (#183), rejoining, or a bot has the seat until we take it back (#164)
+    if (this.spectating || this.session.syncing || this.session.seatBot) return;
     const id = this.session.issue(cmd);
     if (!this.session.net) return;
     // Blood price pays in units, not energy (#60): nothing to take off the bar
@@ -1081,7 +1136,7 @@ export class GameView {
 
   /** Holding the line (#67): take boon `k` of the offer. */
   pickBoon(k: number): void {
-    if (this.world.siege?.offer) this.session.issue({ t: 'boon', p: this.human, k });
+    if (this.world.siege?.offer && !this.spectating) this.session.issue({ t: 'boon', p: this.human, k });
   }
 
   surge(): void {

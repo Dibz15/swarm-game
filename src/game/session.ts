@@ -58,6 +58,10 @@ export interface Session {
   issue(order: Command): number;
   /** about how long an order issued now takes to run, ms */
   expectedDelayMs(): number;
+  /** rejoining (#164): waiting for a snapshot of the match, nothing to show or command yet */
+  readonly syncing: boolean;
+  /** an Easy bot drives our seat for now (#164): our orders would be refused */
+  readonly seatBot: boolean;
   /** advance by dt seconds of real time; returns the ticks stepped */
   update(dt: number): number;
 }
@@ -66,6 +70,8 @@ export interface Session {
 export class LocalSession implements Session {
   readonly world: World;
   readonly net = false;
+  readonly syncing = false;
+  readonly seatBot = false;
   readonly localSeat: number;
   readonly setup: MatchSetup;
   /** seed + this log fully reproduce the match */
