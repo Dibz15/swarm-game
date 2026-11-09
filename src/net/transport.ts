@@ -24,10 +24,20 @@ export interface Transport {
    * `onPeer(peer, false)`). Transports that never drop links don't call it.
    */
   onLink?: ((peer: string, state: LinkState) => void) | null;
+  /**
+   * Optional: how this peer's link to `peer` is doing (#184), for the room's
+   * roster: the round trip in ms, and whether it goes through a TURN relay.
+   * Either may be unknown.
+   */
+  linkInfo?(peer: string): Promise<LinkInfo>;
   close(): void;
 }
 
 export type LinkState = 'lost' | 'back' | 'gone';
+export interface LinkInfo {
+  rtt?: number;
+  relay?: boolean;
+}
 
 /**
  * Holds a lost peer for `graceMs` before reporting it gone. WebRTC links
@@ -165,6 +175,7 @@ export class Router {
   view(kinds: readonly MsgKind[]): Transport {
     const base = this.transport;
     const t: Transport = { self: base.self, onMessage: null, onPeer: null, onLink: null, send: (peer, bytes) => base.send(peer, bytes), close: () => this.drop(t) };
+    if (base.linkInfo) t.linkInfo = (peer) => base.linkInfo!(peer);
     this.views.push({ kinds: new Set(kinds), t });
     return t;
   }
