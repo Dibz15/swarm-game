@@ -38,7 +38,7 @@ import type { DesyncReport } from './net/desync';
 import type { GuestLobby, HostGo, HostLobby, LobbyState, StartInfo } from './net/lobby';
 import type { NetMatch } from './net/match';
 import type { Router, Transport } from './net/transport';
-import { formatTime } from './ui/hud';
+import { DELAY_BAD_MS, DELAY_WARN_MS, formatTime } from './ui/hud';
 import type { LobbyView } from './ui/lobby';
 import { FACTION_NAMES } from './content/factions';
 import { relayOnly } from './net/ice';
@@ -1297,7 +1297,7 @@ class App {
     const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
     const rows = lat.map((r) => {
       const tag = r.state === 'away' ? ' <small>away</small>' : r.state === 'bot' ? ' <small>bot playing</small>' : r.state === 'spectating' ? ' <small>watching</small>' : '';
-      const cls = r.delay >= 350 ? 'bad' : r.delay >= 200 ? 'warn' : '';
+      const cls = r.delay >= DELAY_BAD_MS ? 'bad' : r.delay >= DELAY_WARN_MS ? 'warn' : '';
       // what the delay is made of (#198): the network, the turn it's scheduled for, evening out PvP, smoothing out jitter
       const tick = 1000 / TICK_HZ;
       const ms = (ticks: number) => Math.round(ticks * tick);
