@@ -3,6 +3,7 @@ import { TICK_HZ } from '../sim/constants';
 import { worldHash } from '../sim/hash';
 import { supplyCap } from '../sim/nests';
 import type { MatchSetup } from '../sim/setup';
+import type { Ctrl } from '../net/protocol';
 import type { World } from '../sim/world';
 import type { TimedCommand } from './session';
 
@@ -22,6 +23,8 @@ export interface Recording {
   setup: MatchSetup;
   human: number;
   log: TimedCommand[];
+  /** a networked match's control entries (seats to a bot and back, pauses), by the tick they applied before (#164) */
+  ctrl?: { tick: number; ctrl: Ctrl }[];
   end: { reason: EndReason; tick: number; hash: number };
   client: { mobile: boolean; touch: boolean; w: number; h: number };
   trace: Trace;
@@ -140,7 +143,7 @@ export class Recorder {
     }
   }
 
-  finish(w: World, log: TimedCommand[], reason: EndReason): Recording {
+  finish(w: World, log: TimedCommand[], reason: EndReason, ctrl?: { tick: number; ctrl: Ctrl }[]): Recording {
     return {
       v: 1,
       id: this.id,
@@ -150,6 +153,7 @@ export class Recorder {
       setup: this.setup,
       human: this.human,
       log: log.slice(),
+      ...(ctrl?.length ? { ctrl: ctrl.slice() } : {}),
       end: { reason, tick: w.tick, hash: worldHash(w) },
       client: this.client,
       trace: this.trace,

@@ -40,7 +40,13 @@ export interface LobbyState {
   teams: boolean;
   seed: string;
   rows: SeatRow[];
+  /** how long a dropped player's seat idles before an Easy bot takes it, seconds (#164) */
+  botSecs: BotSecs;
 }
+
+/** The bot timeouts a host can choose (#164). */
+export const BOT_SECS = [30, 60, 120] as const;
+export type BotSecs = (typeof BOT_SECS)[number];
 
 const SIZES: readonly MapSize[] = ['small', 'medium', 'large'];
 const TERRAINS: readonly TerrainLevel[] = ['none', 'light', 'standard', 'heavy'];
@@ -86,9 +92,10 @@ export function parseLobby(json: string): LobbyState | null {
       LAYOUTS.includes(m.layout) &&
       Array.isArray(o.rows) &&
       o.rows.length === MAX_SEATS &&
-      o.rows.every(validRow);
+      o.rows.every(validRow) &&
+      BOT_SECS.includes(o.botSecs);
     if (!ok) return null;
-    return { host: o.host, phase: o.phase, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, teams: o.teams, seed: o.seed, rows: o.rows };
+    return { host: o.host, phase: o.phase, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs };
   } catch {
     return null;
   }
@@ -114,6 +121,8 @@ export interface StartInfo {
   setup: MatchSetup;
   seat: number;
   host: string;
+  /** 0: a new match; ≥ 1: rejoining one under way, from a snapshot (#164) */
+  tick: number;
 }
 
 // ---- host -------------------------------------------------------------------
@@ -134,6 +143,8 @@ export interface HostGo {
   setup: MatchSetup;
   hostSeat: number;
   seats: { seat: number; team: number; peer: string | null }[];
+  /** a dropped seat's idle time before its Easy bot, ms (#164) */
+  botMs: number;
 }
 
 export class HostLobby {
@@ -141,9 +152,20 @@ export class HostLobby {
   onChange: ((s: LobbyState) => void) | null = null;
   /** every guest is ready (or the wait ran out): build the sequencer now */
   onGo: ((go: HostGo) => void) | null = null;
+  /** a player came back mid-match on a new connection (#164): bind their seat to `peer` */
+  onRejoin: ((seat: number, peer: string, oldPeer: string) => void) | null = null;
   private readonly t: Transport;
   private readonly o: HostLobbyOptions;
   private readonly connected = new Set<string>();
+  /**
+   * Each guest's seat token (#164), never sent to anyone: a page reloaded
+   * mid-match has a new peer id, and proves its seat with the token alone.
+   */
+  private readonly tokens = new Map<string, string>();
+  /** the tokens of the match under way, by seat, frozen at Start */
+  private seatTokens = new Map<number, string>();
+  /** the match under way, for a rejoining player */
+  private setupJson = '';
   private waiting: { go: HostGo; until: number; ready: Set<string> } | null = null;
 
   constructor(t: Transport, o: HostLobbyOptions) {
@@ -162,6 +184,7 @@ export class HostLobby {
       teams: p.teams,
       seed: o.seed.slice(0, MAX_SEED_TEXT),
       rows,
+      botSecs: 60,
     };
     t.onPeer = (peer, up) => {
       if (up) this.connected.add(peer);
@@ -185,6 +208,11 @@ export class HostLobby {
 
   setTeams(on: boolean): void {
     this.edit(() => (this.state.teams = on));
+  }
+
+  /** how long a dropped player's seat idles before an Easy bot takes it (#164) */
+  setBotSecs(s: BotSecs): void {
+    if (BOT_SECS.includes(s)) this.edit(() => (this.state.botSecs = s));
   }
 
   setSeed(text: string): void {
@@ -221,6 +249,8 @@ export class HostLobby {
     const setup = buildNetSetup(this.state);
     this.edit(() => (this.state.phase = 'playing'));
     const json = JSON.stringify(setup);
+    this.setupJson = json;
+    this.seatTokens = new Map();
     const seats: HostGo['seats'] = [];
     const ready = new Set<string>();
     this.state.rows.forEach((r, i) => {
@@ -230,10 +260,12 @@ export class HostLobby {
         seats.push({ seat: i, team, peer: null });
         return;
       }
+      const token = this.tokens.get(r.peer);
+      if (token) this.seatTokens.set(i, token);
       seats.push({ seat: i, team, peer: r.peer });
       this.send(r.peer, { k: 'start', setup: json, seat: i, tick: 0 });
     });
-    this.waiting = { go: { setup, hostSeat: this.mySeat, seats }, until: this.o.clock() + (this.o.readyMs ?? 10000), ready };
+    this.waiting = { go: { setup, hostSeat: this.mySeat, seats, botMs: this.state.botSecs * 1000 }, until: this.o.clock() + (this.o.readyMs ?? 10000), ready };
     this.update();
     return setup;
   }
@@ -276,11 +308,28 @@ export class HostLobby {
   private hello(peer: string, m: Extract<Msg, { k: 'hello' }>): void {
     this.connected.add(peer);
     if (m.proto !== PROTOCOL_VERSION || m.build !== this.o.build) return this.send(peer, { k: 'refuse', reason: 'This room runs a different version of the game. Refresh the page to update, then open the link again.' });
+    if (m.token) this.tokens.set(peer, m.token);
     if (seatOf(this.state, peer) >= 0) return this.send(peer, { k: 'lobby', state: this.json() });
-    if (this.state.phase !== 'lobby') return this.send(peer, { k: 'refuse', reason: 'This match has already started.' });
+    if (this.state.phase !== 'lobby') {
+      // a player back from a reload proves their seat with its token (#164)
+      const seat = m.token ? [...this.seatTokens].find(([, t]) => t === m.token)?.[0] : undefined;
+      if (seat === undefined || this.state.rows[seat]?.k !== 'human') return this.send(peer, { k: 'refuse', reason: 'This match has already started.' });
+      return this.rejoin(peer, seat);
+    }
     const seat = this.state.rows.findIndex((r) => r.k === 'open');
     if (seat < 0) return this.send(peer, { k: 'refuse', reason: 'This room is full.' });
     this.edit(() => (this.state.rows[seat] = { k: 'human', team: seat, peer, char: this.freeChar(m.char >>> 0, -1) }));
+  }
+
+  /** Seat `seat`'s player is back on a new connection: hand them the match, and the seat. */
+  private rejoin(peer: string, seat: number): void {
+    const row = this.state.rows[seat] as Extract<SeatRow, { k: 'human' }>;
+    const old = row.peer;
+    this.edit(() => (this.state.rows[seat] = { ...row, peer }));
+    this.onRejoin?.(seat, peer, old);
+    this.send(peer, { k: 'start', setup: this.setupJson, seat, tick: 1 });
+    // the same seat open twice (a duplicated tab): the newer one has it
+    if (old !== peer && this.connected.has(old)) this.send(old, { k: 'refuse', reason: 'You joined this match again from another tab or window, so this one has left it.' });
   }
 
   private pick(peer: string, seat: number, team: number, char: number): void {
@@ -344,6 +393,8 @@ export interface GuestLobbyOptions {
   build: string;
   char: number;
   mobile: boolean;
+  /** this room's seat token, kept across reloads (sessionStorage), to get the seat back mid-match (#164) */
+  token: string;
   clock: () => number;
   /** how long to wait for a host before giving up */
   hostMs?: number;
@@ -373,7 +424,7 @@ export class GuestLobby {
     t.onPeer = (peer, up) => {
       // a new peer may be the host; the host reconnecting in the lobby gets told again who we are (it may have freed our seat)
       const hello = up && (!this.host || (peer === this.host && this.state?.phase === 'lobby'));
-      if (hello) this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0 });
+      if (hello) this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0, token: o.token });
       if (!up && peer === this.host) this.onNoHost?.(this.dropped ? 'lost' : 'left');
     };
     t.onLink = (peer, state) => {
@@ -426,7 +477,7 @@ export class GuestLobby {
         if (!this.host) return;
         try {
           const setup = JSON.parse(m.setup) as MatchSetup;
-          this.onStart?.({ setup, seat: m.seat, host: peer });
+          this.onStart?.({ setup, seat: m.seat, host: peer, tick: m.tick });
         } catch {
           /* a host that sends a bad setup gets no game */
         }

@@ -14,10 +14,14 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;
+/** Most chunks in one snapshot: 4 MB, well above the largest world. */
+export const MAX_SNAP_PARTS = 256;
+/** A seat token's longest form (#164): the secret a reloaded page reclaims its seat with. */
+export const MAX_TOKEN = 64;
 /** Most turns one `turns` message carries (a resend batch, or the last K repeated). */
 export const MAX_TURNS_PER_MSG = 64;
 /** Most entries one turn holds: six seats' rate limits allow far fewer. */
@@ -86,13 +90,17 @@ export interface SeatInfo {
 }
 
 export type Msg =
-  /** client → host, first thing on a connection; `char` is the seed of the character it plays as (#162) */
-  | { k: 'hello'; proto: number; build: string; mobile: boolean; char: number }
+  /**
+   * client → host, first thing on a connection; `char` is the seed of the
+   * character it plays as (#162); `token`, its seat secret for this room,
+   * kept across reloads (#164)
+   */
+  | { k: 'hello'; proto: number; build: string; mobile: boolean; char: number; token: string }
   /** host → client: not accepted (version or build mismatch, room full) */
   | { k: 'refuse'; reason: string }
   /** host → clients: the seat table, and which row is yours (-1: none) */
   | { k: 'seats'; you: number; table: SeatInfo[] }
-  /** host → client: the match begins (or resumes) with this setup; turns from `tick` on follow */
+  /** host → client: the match begins with this setup (`tick` 0), or is joined again after a reload (`tick` ≥ 1: ask for a snapshot, #164) */
   | { k: 'start'; setup: string; seat: number; tick: number }
   /** host → clients: the whole lobby (`LobbyState` as JSON, #162) */
   | { k: 'lobby'; state: string }
@@ -127,6 +135,10 @@ export type Msg =
    */
   | { k: 'status'; paused: boolean; by: number; resumeIn: number; auto: number }
   /** client → sequencer: take my seat back from its bot */
-  | { k: 'reclaim' };
+  | { k: 'reclaim' }
+  /** client → sequencer: my page is hidden; my seat is away now, not after a silence (#164) */
+  | { k: 'away' }
+  /** client → host: send me a world snapshot (`tick` 0: your current world, to rejoin; #164) */
+  | { k: 'snapreq'; tick: number };
 
 export type MsgKind = Msg['k'];

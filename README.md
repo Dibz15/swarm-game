@@ -40,8 +40,9 @@ Dev URL flags:
 ### Multiplayer
 Menu > Multiplayer > **Host a game** opens a room and gives you a link (`…#room=<id>.<secret>`). Anyone who opens it joins the lobby: they pick a character, a colour and a team, and the host fills the other seats with bots and starts.
 - **No server of ours.** Peers find each other through public Nostr relays ([Trystero](https://github.com/dmotz/trystero)) and then talk directly over WebRTC. The secret in the link encrypts that signaling, so only people with the link can join.
-- **The host runs the match** (the Sequencer) for everyone, and only the host can pause it. If the host leaves, the match ends (host migration is #166).
-- A guest who drops is shown as away, and after a minute an Easy bot takes their seat.
+- **The host runs the match** (the Sequencer) for everyone, and only the host can pause it. From the pause menu the host can also End match (everyone back to the room, to change settings or let someone in) or Restart it. If the host leaves, the match ends (host migration is #166).
+- **Drops and rejoins:** a player whose page is hidden or whose connection drops is shown as away, and after the room's timeout (30 s, 1 min or 2 min, a lobby setting) an Easy bot plays their colour. Back on the same tab, even after a reload, they rejoin from a snapshot of the match and get their colour back. The seat token that proves it lives in that tab's sessionStorage and only the host sees it.
+- **Defeated players watch** the rest of the match; everyone gets the end screen together.
 - The room link must open the same build: a player on another version is asked to refresh.
 - **Hide my IP** (Settings, or the Multiplayer card): connect only through the relay, so other players never see your address.
 

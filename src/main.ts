@@ -3,7 +3,7 @@ import { teamLayout, teamsList } from './ui/teams';
 import { AudioEngine } from './audio/engine';
 import { FACTION_HEX, FACTION_RGB } from './content/factions';
 import { GameView, type Services } from './game/gameView';
-import type { EndReason } from './game/recording';
+import type { EndReason, Recording } from './game/recording';
 import { recordingEnabled, saveRecording } from './game/recordStore';
 import { LocalSession } from './game/session';
 import { ordinal } from './game/standing';
@@ -60,6 +60,28 @@ interface Room {
 const ROOM_CHARS = 'abcdefghijkmnpqrstuvwxyz23456789';
 const roomCode = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => ROOM_CHARS[b % ROOM_CHARS.length]).join('');
 /** `#room=<id>.<secret>` anywhere in a link or hash */
+/**
+ * This tab's seat token for a room (#164): kept in sessionStorage, so a
+ * reload (same tab) gets its seat back mid-match; a new tab is a new player.
+ * The host keeps it private; it never reaches other players.
+ */
+function seatToken(room: string): string {
+  const key = `swarm-seat:${room}`;
+  try {
+    const have = sessionStorage.getItem(key);
+    if (have && /^[0-9a-f]{32}$/.test(have)) return have;
+  } catch {
+    /* no storage: a reload will be a new player */
+  }
+  const t = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  try {
+    sessionStorage.setItem(key, t);
+  } catch {
+    /* as above */
+  }
+  return t;
+}
+
 function parseRoom(s: string): { id: string; secret: string } | null {
   const m = /#room=([a-z0-9]{6,32})\.([a-z0-9]{8,64})/.exec(s.trim());
   return m ? { id: m[1], secret: m[2] } : null;
@@ -104,6 +126,8 @@ class App {
   /** a full-screen modal (the run map) hides the menu and the demo: both pause under it (#130) */
   private covered = false;
   private endShown = false;
+  /** an Easy bot had our seat (#164): its return is worth a word */
+  private ownBot = false;
   /** the current match's recording was saved at its end */
   private recSaved = false;
   /** difficulty of the current quick match, so "New map" rolls another one */
@@ -157,6 +181,8 @@ class App {
       if (hidden) this.saveRec('unload', false);
       // Hidden, the music can't keep time: sleep, and wake (or recover from an interruption) on return.
       this.sfx.setHidden(hidden);
+      // In a room match, a hidden page's seat is away at once (#164); back, it's ours again.
+      this.match?.session.setHidden(hidden);
     });
     window.addEventListener('keydown', (e) => {
       this.sfx.unlock();
@@ -669,6 +695,7 @@ class App {
         ? {
             map: (patch) => hostLobby()?.setMap(patch),
             teams: (on) => hostLobby()?.setTeams(on),
+            botSecs: (secs) => hostLobby()?.setBotSecs(secs),
             seed: (text) => hostLobby()?.setSeed(text),
             row: (seat, row) => hostLobby()?.setRow(seat, row),
             kick: (seat) => hostLobby()?.kick(seat),
@@ -696,10 +723,12 @@ class App {
       const lobby = new mp.HostLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, prefs: loadPrefs(), seed: randomSeed(), clock });
       lobby.onChange = () => this.renderRoom();
       lobby.onGo = (go) => this.hostGo(go);
+      // a guest reloaded mid-match and proved their seat: it answers to their new connection (#164)
+      lobby.onRejoin = (seat, peer) => this.match?.rebind(seat, peer);
       room.lobby = lobby;
       view.status('Send the link to your friends, then start when everyone is in.');
     } else {
-      const lobby = new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), clock });
+      const lobby = new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), token: seatToken(id), clock });
       lobby.onChange = (s) => {
         // back in the lobby while the match was still on: the host ended it (#183)
         const ended = s.phase === 'lobby' && !!this.match && !this.game?.world.over;
@@ -708,7 +737,15 @@ class App {
         // the host brought everyone back after a match
         if (s.phase === 'lobby' && this.match) this.backToRoom();
       };
-      lobby.onRefused = (why) => view.status(why, true);
+      lobby.onRefused = (why) => {
+        // mid-match: this tab's seat moved to another tab (#164), or the host removed us
+        if (this.match && this.mp) {
+          this.input.enabled = false;
+          this.setModal(this.mp.messageCard('You left this match', why, [{ label: 'Menu', primary: true, on: () => this.leaveRoom() }]));
+          return;
+        }
+        view.status(why, true);
+      };
       // in a match, the match reports the host (below, in startGame)
       lobby.onNoHost = (why) => {
         if (!this.match) this.roomLost(why);
@@ -742,13 +779,15 @@ class App {
     const r = this.room;
     const mp = this.mp;
     if (!r?.router || r.host || !mp) return;
+    // back after a reload (#164): the match is under way, a snapshot of it is on its way
+    const resume = s.tick > 0;
     try {
-      this.startGame(s.setup, { seat: s.seat, match: mp.NetMatch.guest(r.router.view(mp.MATCH_KINDS), s.setup, s.seat, s.host), record: false });
+      this.startGame(s.setup, { seat: s.seat, match: mp.NetMatch.guest(r.router.view(mp.MATCH_KINDS), s.setup, s.seat, s.host, { resume }), record: false });
     } catch {
       r.view.status('The host sent a match this version can’t play.', true);
       return;
     }
-    (r.lobby as GuestLobby).ready();
+    if (!resume) (r.lobby as GuestLobby).ready();
   }
 
   /** After a match: back to the room's lobby (the host brings everyone). */
@@ -829,6 +868,9 @@ class App {
   private updateBanner(g: GameView): void {
     const h = this.hud;
     if (!h) return;
+    if (g.session.syncing) return h.banner('Rejoining the match…');
+    if (g.session.seatBot) this.ownBot = true; // back from a reload with a bot in our seat: no control entry said so
+    if (g.session.seatBot && !g.spectating && !g.result) return h.banner('An Easy bot is playing for you. Taking your seat back…');
     if (!g.spectating || g.result) return h.banner(null);
     const p = g.placing;
     h.banner(`You've been defeated${p ? ` · ${ordinal(p.place)} of ${p.of}` : ''}. Watching the rest of the match.`, [{ label: 'Leave', on: () => this.leaveMatch() }]);
@@ -1001,7 +1043,11 @@ class App {
     if (this.match) {
       this.match.events = {
         onSeat: (seat, state) => {
-          if (seat === this.game?.human) return;
+          if (seat === this.game?.human) {
+            if (state === 'human' && this.ownBot) this.hud?.toast('You’re back in control', '#8aa0b8');
+            this.ownBot = state === 'bot';
+            return;
+          }
           const who = this.seatName(seat);
           if (state === 'away') this.hud?.toast(`${who} lost connection`, '#8aa0b8');
           else if (state === 'bot') this.hud?.toast(`${who} dropped: an Easy bot took over`, '#ffb627');
@@ -1046,6 +1092,7 @@ class App {
     this.saveRec(reason, true);
     this.match?.close();
     this.match = null;
+    this.ownBot = false;
     this.netMenu = null;
     this.netNote = null;
     this.netPlayers = null;
@@ -1174,7 +1221,8 @@ class App {
     const log = g.session.log;
     // A match left within seconds with no orders tells us nothing.
     if (!log.length && g.world.tick < 15 * TICK_HZ) return;
-    void saveRecording(g.rec.finish(g.world, log, reason));
+    const ctrl = 'ctrlLog' in g.session ? (g.session.ctrlLog as Recording['ctrl']) : undefined;
+    void saveRecording(g.rec.finish(g.world, log, reason, ctrl));
     if (final) this.recSaved = true;
   }
 

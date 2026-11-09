@@ -125,11 +125,12 @@ export class LoopbackHub {
  * A Sequencer speaking bytes over a transport: decodes what peers send (bad
  * bytes are dropped), encodes what it sends, and marks lost peers away.
  */
-export function hostSequencer(transport: Transport, cfg: Omit<SequencerConfig, 'send'>): Sequencer {
+export function hostSequencer(transport: Transport, cfg: Omit<SequencerConfig, 'send'>, intercept?: (peer: string, m: Msg) => boolean): Sequencer {
   const seq = new Sequencer({ ...cfg, send: (peer, m: Msg) => transport.send(peer, encodeMsg(m)) });
   transport.onMessage = (peer, bytes) => {
     const m = decodeMsg(bytes);
-    if (m) seq.onMessage(peer, m);
+    // what the match itself answers (a snapshot request, #164) never reaches the sequencer
+    if (m && !intercept?.(peer, m)) seq.onMessage(peer, m);
   };
   transport.onPeer = (peer, up) => {
     if (!up) seq.peerLost(peer);
@@ -179,7 +180,7 @@ export class Router {
 }
 
 /** The kinds a match's sequencer and sessions use; the rest belong to the lobby. */
-export const MATCH_KINDS: readonly MsgKind[] = ['cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lat'];
+export const MATCH_KINDS: readonly MsgKind[] = ['cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lat', 'away', 'snapreq'];
 export const LOBBY_KINDS: readonly MsgKind[] = ['hello', 'refuse', 'seats', 'start', 'lobby', 'pick', 'ready'];
 
 /** The id the host's own client has on the host's sequencer transport. */

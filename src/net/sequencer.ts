@@ -219,6 +219,16 @@ export class Sequencer {
     return this.pause !== null;
   }
 
+  /** The seat a peer is bound to, or -1. */
+  seatOfPeer(peer: string): number {
+    return this.byPeer.get(peer)?.seat ?? -1;
+  }
+
+  /** The highest order seq seen from this seat: a rejoining client numbers its orders above it (#164). */
+  seatSeq(seat: number): number {
+    return this.seats.get(seat)?.highSeq ?? 0;
+  }
+
   seatState(seat: number): SeatState | undefined {
     return this.seats.get(seat)?.state;
   }
@@ -260,6 +270,11 @@ export class Sequencer {
     if (!rec) return;
     const now = this.clock();
     rec.heardAt = now;
+    // the page went hidden (#164): away now, not after a silence; anything else it sends brings it back
+    if (msg.k === 'away') {
+      if (rec.state === 'human') this.setState(rec, 'away', now);
+      return;
+    }
     if (rec.state === 'away') this.setState(rec, 'human', now);
     switch (msg.k) {
       case 'cmd':

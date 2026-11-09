@@ -7,7 +7,7 @@ import { creatureCanvas } from '../art/creature';
 import { FACTION_HEX, FACTION_NAMES } from '../content/factions';
 import { characterCreature, playerCharacter, type Character } from '../game/character';
 import { randomSeed } from '../game/matchSetup';
-import type { LobbyState, SeatRow } from '../net/lobby';
+import { BOT_SECS, type BotSecs, type LobbyState, type SeatRow } from '../net/lobby';
 import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import { relayOnly } from '../net/ice';
 import { mapFields, relayField, type MapChoice } from './screens';
@@ -74,6 +74,8 @@ export interface LobbyHandlers {
   host?: {
     map: (patch: Partial<MapChoice>) => void;
     teams: (on: boolean) => void;
+    /** how long a dropped player's seat idles before an Easy bot takes it (#164) */
+    botSecs: (s: BotSecs) => void;
     seed: (text: string) => void;
     row: (seat: number, row: Exclude<SeatRow, { k: 'human' }>) => void;
     kick: (seat: number) => void;
@@ -108,6 +110,10 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
           <label>Players <small>${isHost ? 'fill empty colours with bots, or close them' : 'click an open colour to move there'}</small></label>
           <div class="seats"></div>
           <label class="check"${isHost ? '' : ' hidden'}><input type="checkbox" data-a="teams"> Teams</label>
+        </div>
+        <div class="field">
+          <label>If a player drops <small>their colour idles, then an Easy bot plays it until they're back</small></label>
+          <select data-a="botsecs"${isHost ? '' : ' disabled'}>${BOT_SECS.map((s) => `<option value="${s}">Easy bot after ${s < 60 ? `${s} s` : `${s / 60} min`}</option>`).join('')}</select>
         </div>
         <div class="mapfields"></div>
         <div class="field">
@@ -195,6 +201,8 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
 
   // ---- host controls
   teamsBox?.addEventListener('change', () => h.host?.teams(teamsBox.checked));
+  const botBox = m.querySelector('[data-a=botsecs]') as HTMLSelectElement;
+  botBox.addEventListener('change', () => h.host?.botSecs(Number(botBox.value) as BotSecs));
   seedInput.addEventListener('change', () => h.host?.seed(seedInput.value));
   m.querySelector('[data-a=dice]')?.addEventListener('click', () => {
     seedInput.value = randomSeed();
@@ -268,6 +276,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
     renderChars();
     fields.render(s.map, !isHost);
     if (teamsBox) teamsBox.checked = s.teams;
+    if (document.activeElement !== botBox) botBox.value = String(s.botSecs);
     if (document.activeElement !== seedInput) seedInput.value = s.seed;
   };
 

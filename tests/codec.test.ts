@@ -42,10 +42,14 @@ describe('wire codec (#157)', () => {
 
   it('round-trips every message kind', () => {
     const msgs: Msg[] = [
-      { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: true, char: 0xdeadbeef },
+      { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: true, char: 0xdeadbeef, token: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' },
       { k: 'lobby', state: JSON.stringify({ seed: 'ember-tide-4', name: 'Zoë 🐝', rows: [] }) },
       { k: 'pick', seat: 5, team: 3, char: 0 },
       { k: 'ready' },
+      { k: 'away' },
+      { k: 'snapreq', tick: 0 },
+      { k: 'snapreq', tick: 54321 },
+      { k: 'snap', tick: 900, part: 3, of: 40, bytes: new Uint8Array([1, 2, 3]) },
       { k: 'lat', rows: [{ seat: 0, state: 'human', rtt: 12, delay: 145 }, { seat: 4, state: 'away', rtt: 340, delay: 610 }, { seat: 2, state: 'spectating', rtt: 80, delay: 200 }] },
       { k: 'lat', rows: [] },
       { k: 'refuse', reason: 'build mismatch: refresh the page' },
@@ -139,7 +143,7 @@ describe('wire codec (#157)', () => {
     // mutations of real messages: truncations, bit flips, a trailing byte
     const real = [
       encodeMsg(turnsMsg(812, [{ entries: CMDS.map((cmd, j) => ({ seat: 2, seq: j + 1, cmd })), ctrl: [{ k: 'seat', seat: 2, state: 'bot', bot: { difficulty: 0, personality: 'rusher' } }] }])),
-      encodeMsg({ k: 'hello', proto: 1, build: 'x', mobile: false, char: 77 }),
+      encodeMsg({ k: 'hello', proto: 1, build: 'x', mobile: false, char: 77, token: '' }),
       encodeMsg({ k: 'pick', seat: 1, team: 2, char: 123456 }),
       encodeMsg({ k: 'lobby', state: '{"rows":[]}' }),
       encodeMsg({ k: 'ack', tick: 4, seq: 2, rtt: 40, buffer: 3, want: [5, 9] }),

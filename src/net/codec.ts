@@ -3,7 +3,7 @@ import type { Command } from '../sim/commands';
 import { FACTION_UNIT_CAP, NEUTRAL } from '../sim/constants';
 import { QUANTUM } from '../sim/sanitize';
 import {
-  MAX_BUILD, MAX_CTRL_PER_TURN, MAX_ENTRIES_PER_TURN, MAX_LOBBY, MAX_NAME, MAX_REASON, MAX_SEATS, MAX_SETUP, MAX_TURNS_PER_MSG,
+  MAX_BUILD, MAX_CTRL_PER_TURN, MAX_ENTRIES_PER_TURN, MAX_LOBBY, MAX_NAME, MAX_REASON, MAX_SEATS, MAX_SETUP, MAX_SNAP_PARTS, MAX_TOKEN, MAX_TURNS_PER_MSG,
   SEAT_STATES, SNAP_CHUNK, type Ctrl, type Entry, type LatRow, type Msg, type MsgKind, type SeatInfo, type Turn,
 } from './protocol';
 
@@ -375,7 +375,7 @@ function readTurn(r: Reader): Turn {
 
 // ---- messages ---------------------------------------------------------------
 
-const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat'] as const;
+const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq'] as const;
 const KIND_INDEX = new Map<string, number>(KINDS.map((k, i) => [k, i]));
 
 /** The kind of the message in `bytes` from its first byte alone (for routing), or null. */
@@ -392,6 +392,7 @@ export function encodeMsg(m: Msg): Uint8Array {
       w.str(m.build, MAX_BUILD);
       w.u8(m.mobile ? 1 : 0);
       u32(w, m.char);
+      w.str(m.token, MAX_TOKEN);
       break;
     case 'refuse':
       w.str(m.reason, MAX_REASON);
@@ -445,7 +446,7 @@ export function encodeMsg(m: Msg): Uint8Array {
       w.uv(m.hash);
       break;
     case 'snap':
-      if (m.bytes.length > SNAP_CHUNK || m.part >= m.of) throw new Error('codec: bad snapshot chunk');
+      if (m.bytes.length > SNAP_CHUNK || m.part >= m.of || m.of > MAX_SNAP_PARTS) throw new Error('codec: bad snapshot chunk');
       w.uv(m.tick);
       w.uv(m.part);
       w.uv(m.of);
@@ -462,6 +463,10 @@ export function encodeMsg(m: Msg): Uint8Array {
       break;
     case 'reclaim':
     case 'ready':
+    case 'away':
+      break;
+    case 'snapreq':
+      w.uv(m.tick);
       break;
     case 'lobby':
       w.str(m.state, MAX_LOBBY);
@@ -505,8 +510,8 @@ function readMsg(r: Reader): Msg {
   const k = KINDS[r.u8()];
   switch (k) {
     case 'hello': {
-      const proto = r.uv(), build = r.str(MAX_BUILD), mobile = r.bool();
-      return { k, proto, build, mobile, char: r.upTo(0xffffffff) };
+      const proto = r.uv(), build = r.str(MAX_BUILD), mobile = r.bool(), char = r.upTo(0xffffffff);
+      return { k, proto, build, mobile, char, token: r.str(MAX_TOKEN) };
     }
     case 'refuse':
       return { k, reason: r.str(MAX_REASON) };
@@ -555,7 +560,7 @@ function readMsg(r: Reader): Msg {
     }
     case 'snap': {
       const tick = r.uv(), part = r.uv(), of = r.uv();
-      if (part >= of) throw new Bad();
+      if (part >= of || of > MAX_SNAP_PARTS) throw new Bad();
       return { k, tick, part, of, bytes: r.bytes(SNAP_CHUNK) };
     }
     case 'pause':
@@ -566,7 +571,10 @@ function readMsg(r: Reader): Msg {
     }
     case 'reclaim':
     case 'ready':
+    case 'away':
       return { k };
+    case 'snapreq':
+      return { k, tick: r.uv() };
     case 'lobby':
       return { k, state: r.str(MAX_LOBBY) };
     case 'lat': {

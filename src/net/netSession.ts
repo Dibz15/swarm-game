@@ -2,13 +2,14 @@ import { rejectedIn, type OrderFail, type Session, type TimedCommand } from '../
 import type { Command } from '../sim/commands';
 import { DT } from '../sim/constants';
 import { normalizeCommand } from '../sim/sanitize';
-import { seatHasBot, seatToBot, seatToHuman } from '../sim/seats';
+import { applySeatCtrl, seatHasBot } from '../sim/seats';
 import { createWorld, type MatchSetup } from '../sim/setup';
-import { fullHash } from '../sim/snapshot';
+import { decodeSnap, fullHash, restoreWorld } from '../sim/snapshot';
 import { step } from '../sim/step';
 import type { World } from '../sim/world';
 import { decodeMsg, encodeMsg } from './codec';
-import { MAX_TURNS_PER_MSG, type Ctrl, type LatRow, type Msg, type Turn } from './protocol';
+import { MAX_TURNS_PER_MSG, type Ctrl, type CtrlSeatState, type LatRow, type Msg, type Turn } from './protocol';
+import { settle, SnapAssembler, unpackSnap, type SnapMeta } from './snapwire';
 import type { Transport } from './transport';
 
 /**
@@ -73,6 +74,11 @@ export interface NetSessionConfig {
   /** ms */
   clock: () => number;
   opts?: Partial<NetSessionOptions>;
+  /**
+   * Rejoining a match already under way (#164): ask the host for a snapshot
+   * and step nothing until it comes, then catch up from the turns after it.
+   */
+  resume?: boolean;
 }
 
 interface Pending {
@@ -85,7 +91,7 @@ interface Pending {
 }
 
 export class NetSession implements Session {
-  readonly world: World;
+  private world_: World;
   readonly setup: MatchSetup;
   readonly localSeat: number;
   readonly net = true;
@@ -116,6 +122,21 @@ export class NetSession implements Session {
   beforeStep: ((tick: number, w: World) => void) | null = null;
   /** a control entry applied (a pause, a resume, a seat going away or to a bot), as the step before `tick` runs */
   onCtrl: ((tick: number, ctrl: Ctrl) => void) | null = null;
+  /** a snapshot became this session's world (#164): the world at `tick`, with the turns after it to come */
+  onAdopt: ((tick: number) => void) | null = null;
+
+  /** rejoining: no world to play yet, a snapshot is on its way (#164) */
+  syncing = false;
+  /** the page is hidden (#164): the seat is away; no pings, acks or resends until it's back */
+  hidden = false;
+  /** who drives our seat, from the control entries (#164) */
+  private own: CtrlSeatState = 'human';
+  private reclaimAt = -Infinity;
+  private snapReqAt = -Infinity;
+  private readonly snaps: SnapAssembler;
+  /** closed turns stepped, from `historyFrom` on: the match's log as this client holds it (#164) */
+  private history: Turn[] = [];
+  private historyFrom = 1;
 
   /** paused by a control entry (someone pressed pause), and the sequencer's latest word on it */
   private pausedBy = -1;
@@ -164,13 +185,15 @@ export class NetSession implements Session {
   constructor(cfg: NetSessionConfig) {
     this.opts = { ...NET_SESSION_DEFAULTS, ...cfg.opts };
     this.setup = cfg.setup;
-    this.world = createWorld(cfg.setup);
+    this.world_ = createWorld(cfg.setup);
+    this.syncing = !!cfg.resume;
+    this.snaps = new SnapAssembler(cfg.clock);
     this.localSeat = cfg.seat;
     this.transport = cfg.transport;
     this.host = cfg.host;
     this.clock = cfg.clock;
     this.target = this.clampTarget(this.opts.minBuffer);
-    this.held_ = this.world.tick;
+    this.held_ = this.world_.tick;
     this.bufferHist = new Array(this.opts.maxBuffer * 4 + 1).fill(0);
     if (this.opts.stepCostMs !== undefined) this.stepCost = this.opts.stepCostMs;
     this.transport.onMessage = (peer, bytes) => {
@@ -181,8 +204,44 @@ export class NetSession implements Session {
     };
   }
 
+  get world(): World {
+    return this.world_;
+  }
+
   get paused(): boolean {
     return this.pausedBy >= 0;
+  }
+
+  /** who has the match paused (-1: nobody) */
+  get pausedSeat(): number {
+    return this.pausedBy;
+  }
+
+  /** an Easy bot drives our seat for now: our orders would be refused until we take it back (#164) */
+  get seatBot(): boolean {
+    return this.own === 'bot';
+  }
+
+  /**
+   * The page was hidden or shown again (#164). Hidden, the seat goes away at
+   * once (an explicit `away`) and this client goes quiet; shown, an ack goes
+   * out at once and the seat is ours again.
+   */
+  setHidden(on: boolean): void {
+    if (on === this.hidden) return;
+    this.hidden = on;
+    if (on) this.send({ k: 'away' });
+    else this.ackAt = -Infinity;
+  }
+
+  /**
+   * Every closed turn this client holds, stepped or buffered, from
+   * `historyFrom` (the first after the snapshot it started from, or 1).
+   */
+  closedTurns(): { first: number; turns: Turn[] } {
+    const turns = this.history.slice();
+    for (let t = this.world_.tick + 1; t <= this.held_; t++) turns.push(this.turns.get(t)!);
+    return { first: this.historyFrom, turns };
   }
 
   setPaused(on: boolean): void {
@@ -201,7 +260,7 @@ export class NetSession implements Session {
 
   /** turns held beyond the world's tick */
   get buffered(): number {
-    return this.held_ - this.world.tick;
+    return this.held_ - this.world_.tick;
   }
 
   /**
@@ -250,13 +309,65 @@ export class NetSession implements Session {
       case 'status':
         this.status = { paused: m.paused, by: m.by, resumeIn: m.resumeIn, auto: m.auto, at: now };
         return;
+      case 'snap': {
+        if (!this.syncing) return;
+        const packed = this.snaps.add(this.host, m);
+        if (!packed) return;
+        try {
+          settle(unpackSnap(packed), (s) => this.fromSnap(s.meta, s.world), () => this.badMessages++);
+        } catch {
+          this.badMessages++;
+        }
+        return;
+      }
       default:
         return;
     }
   }
 
+  private fromSnap(meta: SnapMeta, bytes: Uint8Array): void {
+    if (!this.syncing) return;
+    let w: World;
+    try {
+      w = restoreWorld(this.setup, decodeSnap(bytes));
+    } catch {
+      this.badMessages++;
+      return;
+    }
+    if (w.tick !== meta.tick) return void this.badMessages++;
+    this.adopt(w, meta);
+  }
+
+  /**
+   * Take a snapshot's world as ours (#164): the turns after it, buffered while
+   * it came, play on from here. Our next orders are numbered above any of
+   * this seat's the sequencer has seen, so none is taken for a duplicate.
+   */
+  adopt(w: World, meta: SnapMeta): void {
+    const tick = w.tick;
+    this.world_ = w;
+    for (const t of [...this.turns.keys()]) if (t <= tick) this.turns.delete(t);
+    this.held_ = tick;
+    while (this.turns.has(this.held_ + 1)) this.held_++;
+    this.maxSeen = Math.max(this.maxSeen, this.held_);
+    this.pausedBy = meta.pausedBy;
+    this.seq = Math.max(this.seq, meta.seqBase);
+    this.own = this.localSeat >= 0 && seatHasBot(w, this.localSeat) ? 'bot' : 'human';
+    this.history = [];
+    this.historyFrom = tick + 1;
+    this.syncing = false;
+    this.started = false;
+    this.acc = 0;
+    this.gapSince = -1;
+    this.wantAt = -Infinity;
+    this.ackAt = -Infinity;
+    // the turns that came while syncing came in a burst: their timing says nothing about the link
+    this.offsets.length = 0;
+    this.onAdopt?.(tick);
+  }
+
   private turnIn(tick: number, turn: Turn, now: number): void {
-    if (tick <= this.world.tick || this.turns.has(tick)) return;
+    if (tick <= this.world_.tick || this.turns.has(tick)) return;
     this.turns.set(tick, turn);
     this.turnAt = now;
     if (turn.ctrl?.some((c) => c.k === 'resume')) this.offsets.length = 0; // the clock restarted: old timing says nothing
@@ -279,9 +390,23 @@ export class NetSession implements Session {
 
   update(dt: number): number {
     const now = this.clock();
+    if (this.syncing) {
+      // no world yet: ask for one (again, if the last ask got nowhere), and keep the line warm
+      if (now - this.snapReqAt >= 3000) {
+        this.snapReqAt = now;
+        this.send({ k: 'snapreq', tick: 0 });
+      }
+      if (now - this.pingAt >= this.opts.pingMs) {
+        this.pingAt = now;
+        this.send({ k: 'ping', t: now });
+      }
+      this.alpha = 1;
+      return 0;
+    }
     this.timers(now);
     this.retarget(now);
-    if (this.world.over) {
+    this.reclaimSeat(now);
+    if (this.world_.over) {
       // the match is decided: step() no longer advances, so neither do we
       this.alpha = 1;
       return 0;
@@ -299,7 +424,7 @@ export class NetSession implements Session {
     if (buffered > this.target + this.opts.catchupLag) {
       // far behind: as many steps as the budget allows, down to the target
       const most = Math.max(1, Math.floor(this.opts.catchupMs / Math.max(0.05, this.stepCost)));
-      while (steps < most && this.buffered > this.target && !this.world.over) {
+      while (steps < most && this.buffered > this.target && !this.world_.over) {
         this.stepOne();
         steps++;
       }
@@ -308,12 +433,12 @@ export class NetSession implements Session {
     } else {
       const rate = Math.min(1.25, Math.max(0.9, 1 + 0.05 * (buffered - this.target)));
       this.acc += dt * rate;
-      while (this.acc >= DT && steps < 6 && this.turns.has(this.world.tick + 1) && !this.world.over) {
+      while (this.acc >= DT && steps < 6 && this.turns.has(this.world_.tick + 1) && !this.world_.over) {
         this.stepOne();
         this.acc -= DT;
         steps++;
       }
-      if (this.acc >= DT && !this.turns.has(this.world.tick + 1)) {
+      if (this.acc >= DT && !this.turns.has(this.world_.tick + 1)) {
         // starved: wait for the turn, but don't bank time to burn through later (a pause isn't a stall)
         if (!this.paused) this.stallMs += (this.acc - DT) * 1000;
         this.acc = DT;
@@ -323,11 +448,20 @@ export class NetSession implements Session {
     return steps;
   }
 
+  /** Back and caught up while a bot plays for us: take the seat back (#164), at most every 2 s until it's ours. */
+  private reclaimSeat(now: number): void {
+    if (this.own !== 'bot' || this.hidden || now - this.reclaimAt < 2000) return;
+    if (this.world_.factions[this.localSeat]?.eliminated || this.buffered > this.target + 2) return;
+    this.reclaimAt = now;
+    this.reclaim();
+  }
+
   private stepOne(): void {
-    const t = this.world.tick + 1;
+    const t = this.world_.tick + 1;
     const turn = this.turns.get(t)!;
     this.turns.delete(t);
-    const w = this.world;
+    this.history.push(turn);
+    const w = this.world_;
     for (const c of turn.ctrl ?? []) this.applyCtrl(t, c);
     const cmds: Command[] = [];
     for (const e of turn.entries) {
@@ -361,17 +495,20 @@ export class NetSession implements Session {
 
   private applyCtrl(tick: number, c: Ctrl): void {
     this.ctrlLog.push({ tick, ctrl: c });
-    const w = this.world;
     if (c.k === 'pause') this.pausedBy = c.seat;
     else if (c.k === 'resume') this.pausedBy = -1;
-    else if (c.state === 'bot') seatToBot(w, c.seat, { difficulty: c.bot?.difficulty ?? 0, personality: c.bot?.personality ?? 'expander' });
-    else if (seatHasBot(w, c.seat)) seatToHuman(w, c.seat);
+    else {
+      applySeatCtrl(this.world, c);
+      if (c.seat === this.localSeat) this.own = c.state;
+    }
     this.onCtrl?.(tick, c);
   }
 
   // ---- upkeep ----------------------------------------------------------------
 
   private timers(now: number): void {
+    // hidden: quiet, so the seat stays away (any message would bring it back)
+    if (this.hidden) return;
     if (now - this.pingAt >= this.opts.pingMs) {
       this.pingAt = now;
       this.send({ k: 'ping', t: now });

@@ -175,22 +175,19 @@ describe('NetSession (#159)', () => {
     expect(a.stallMs - stalled).toBeLessThan(50); // nobody waits for b
     expect(seq.seatState(2)).toBe('bot');
     expect(b.buffered).toBeGreaterThan(100);
+    // b catches up (stepping the bot's entry on the way); once caught up it takes the seat back by itself (#164)
     run(1500, null);
     expect(b.caughtUp).toBeGreaterThan(100);
     expect(b.buffered).toBeLessThanOrEqual(b.target + 1);
-    expect(seq.seatState(2)).toBe('bot'); // heard again, but the bot keeps the seat until reclaimed
     run(2000, null);
     expect(desyncs).toEqual([]);
-    const seatCtrl = (n: NetSession) => n.ctrlLog.filter((c) => c.ctrl.k === 'seat');
-    expect(seatCtrl(a).map((c) => [c.ctrl.k === 'seat' && c.ctrl.state])).toEqual([['away'], ['bot']]);
-    expect(seatCtrl(b)).toEqual(seatCtrl(a));
-    expect(seatHasBot(a.world, 2) && seatHasBot(b.world, 2)).toBe(true);
-    // reclaimed: the bot leaves on every client at the same tick
-    b.reclaim();
-    run(1000, null);
     expect(seq.seatState(2)).toBe('human');
-    expect(seatHasBot(a.world, 2) || seatHasBot(b.world, 2)).toBe(false);
+    expect(b.seatBot).toBe(false);
+    const seatCtrl = (n: NetSession) => n.ctrlLog.filter((c) => c.ctrl.k === 'seat');
+    expect(seatCtrl(a).map((c) => [c.ctrl.k === 'seat' && c.ctrl.state])).toEqual([['away'], ['bot'], ['human']]);
+    // the bot left on every client at the same tick
     expect(seatCtrl(b)).toEqual(seatCtrl(a));
+    expect(seatHasBot(a.world, 2) || seatHasBot(b.world, 2)).toBe(false);
   });
 
   it('asks again for the last turn when it is lost with nothing behind it', () => {

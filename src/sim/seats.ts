@@ -45,3 +45,14 @@ export function seatToHuman(w: World, f: number): void {
 export function seatHasBot(w: World, f: number): boolean {
   return w.bots.some((b) => b.faction === f);
 }
+
+/**
+ * Apply a seat control entry (#164): a bot takes the seat, or the player has
+ * it again. Shared by networked sessions and by replays of their logs, so
+ * both reproduce the same seat changes at the same ticks. (The entry's type
+ * is spelled out here so the sim doesn't depend on the net code.)
+ */
+export function applySeatCtrl(w: World, c: { seat: number; state: 'human' | 'away' | 'bot'; bot?: Pick<BotConfig, 'difficulty' | 'personality'> }): void {
+  if (c.state === 'bot') seatToBot(w, c.seat, { difficulty: c.bot?.difficulty ?? 0, personality: c.bot?.personality ?? 'expander' });
+  else if (seatHasBot(w, c.seat)) seatToHuman(w, c.seat);
+}

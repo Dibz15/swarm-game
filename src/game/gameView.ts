@@ -291,7 +291,7 @@ export class GameView {
 
   /** A mission hides this action: say so instead of doing it. */
   private blocked(a: Lock): boolean {
-    if (this.spectating) return true;
+    if (this.spectating || this.session.syncing || this.session.seatBot) return true;
     if (!this.locked.has(a)) return false;
     this.s.toast(this.lockReason.get(a) ?? 'Not in this lesson: it comes later', '#9aa4c7');
     return true;
@@ -1072,7 +1072,8 @@ export class GameView {
 
   /** Give an order; networked, show it until it runs. `cost`: the energy it will spend. */
   private order(cmd: Command, cost = 0): void {
-    if (this.spectating) return;
+    // out and watching (#183), rejoining, or a bot has the seat until we take it back (#164)
+    if (this.spectating || this.session.syncing || this.session.seatBot) return;
     const id = this.session.issue(cmd);
     if (!this.session.net) return;
     // Blood price pays in units, not energy (#60): nothing to take off the bar
