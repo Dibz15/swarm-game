@@ -49,6 +49,7 @@ describe('wire codec (#157)', () => {
       { k: 'away' },
       { k: 'snapreq', tick: 0 },
       { k: 'snapreq', tick: 54321 },
+      { k: 'desync', tick: 330, text: 'factions[2].energy' },
       { k: 'snap', tick: 900, part: 3, of: 40, bytes: new Uint8Array([1, 2, 3]) },
       { k: 'lat', rows: [{ seat: 0, state: 'human', rtt: 12, delay: 145 }, { seat: 4, state: 'away', rtt: 340, delay: 610 }, { seat: 2, state: 'spectating', rtt: 80, delay: 200 }] },
       { k: 'lat', rows: [] },
@@ -58,7 +59,7 @@ describe('wire codec (#157)', () => {
       { k: 'start', setup: JSON.stringify(botMatch(4)), seat: 5, tick: 0 },
       turnsMsg(0, [{ entries: [] }]),
       turnsMsg(99999, [
-        { entries: CMDS.map((cmd, i) => ({ seat: 2, seq: i + 1, cmd })), ctrl: [{ k: 'pause', seat: 2 }] },
+        { entries: CMDS.map((cmd, i) => ({ seat: 2, seq: i + 1, cmd })), ctrl: [{ k: 'pause', seat: 2 }, { k: 'desync', tick: 99990 }] },
         { entries: [] },
         {
           entries: [],

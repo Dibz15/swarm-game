@@ -36,6 +36,7 @@ Dev URL flags:
 - `?theme=<id>` forces one music theme everywhere, to audition it (ids in `src/audio/themes.ts`, e.g. `f-lydian`). Settings > Sound > Theme does the same without the URL, and with `?debug` you can call `swarm.sfx.setTheme(id)`.
 - `?lag=400[&jitter=80&loss=0.02]` runs skirmishes on a networked session behind a simulated link (round trip in ms), to feel and tune multiplayer latency alone.
 - `?net=local` makes multiplayer rooms use a BroadcastChannel instead of WebRTC: host in one tab, open the room link in others in the same browser. No internet needed.
+- `?desync=<tick>` (with `?net=local`, in one tab) nudges that tab's world at the tick, to see a desync end to end: every tab stops with the desync screen, the host's names the first differing field, and Resync puts everyone back in step.
 
 ### Multiplayer
 Menu > Multiplayer > **Host a game** opens a room and gives you a link (`…#room=<id>.<secret>`). Anyone who opens it joins the lobby: they pick a character, a colour and a team, and the host fills the other seats with bots and starts.
@@ -43,6 +44,7 @@ Menu > Multiplayer > **Host a game** opens a room and gives you a link (`…#roo
 - **The host runs the match** (the Sequencer) for everyone, and only the host can pause it. From the pause menu the host can also End match (everyone back to the room, to change settings or let someone in) or Restart it. If the host leaves, the match ends (host migration is #166).
 - **Drops and rejoins:** a player whose page is hidden or whose connection drops is shown as away, and after the room's timeout (30 s, 1 min or 2 min, a lobby setting) an Easy bot plays their colour. Back on the same tab, even after a reload, they rejoin from a snapshot of the match and get their colour back. The seat token that proves it lives in that tab's sessionStorage and only the host sees it.
 - **Defeated players watch** the rest of the match; everyone gets the end screen together.
+- **Desyncs** stop the match for everyone at the first hash mismatch. The host compares everyone's world at that tick and shows the first field that differs; anyone can download a report, and the host can resync everyone to the majority's world or play on. `npx vite-node scripts/desync.ts <report.json>` replays the host's report and says whose world left the true course, when, and where.
 - The room link must open the same build: a player on another version is asked to refresh.
 - **Hide my IP** (Settings, or the Multiplayer card): connect only through the relay, so other players never see your address.
 

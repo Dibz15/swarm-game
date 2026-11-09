@@ -4,12 +4,12 @@ import { DT } from '../sim/constants';
 import { normalizeCommand } from '../sim/sanitize';
 import { applySeatCtrl, seatHasBot } from '../sim/seats';
 import { createWorld, type MatchSetup } from '../sim/setup';
-import { decodeSnap, fullHash, restoreWorld } from '../sim/snapshot';
+import { decodeSnap, hashBytes, restoreWorld, serializeWorld } from '../sim/snapshot';
 import { step } from '../sim/step';
 import type { World } from '../sim/world';
 import { decodeMsg, encodeMsg } from './codec';
 import { MAX_TURNS_PER_MSG, type Ctrl, type CtrlSeatState, type LatRow, type Msg, type Turn } from './protocol';
-import { settle, SnapAssembler, unpackSnap, type SnapMeta } from './snapwire';
+import { chunkSnap, packSnap, settle, SnapAssembler, unpackSnap, type SnapMeta } from './snapwire';
 import type { Transport } from './transport';
 
 /**
@@ -30,6 +30,13 @@ import type { Transport } from './transport';
 
 const DT_MS = DT * 1000;
 
+/** Drop a tick-ordered log's entries after `tick`, in place. */
+function keepUntil(log: { tick: number }[], tick: number): void {
+  let n = log.length;
+  while (n > 0 && log[n - 1].tick > tick) n--;
+  log.length = n;
+}
+
 export interface NetSessionOptions {
   minBuffer: number;
   maxBuffer: number;
@@ -49,6 +56,10 @@ export interface NetSessionOptions {
   /** an order unseen this long past 2·RTT is resent; after maxResends it's given up */
   resendMs: number;
   maxResends: number;
+  /** world snapshots kept, one per hash tick, to show the host after a desync (#165) */
+  keepSnaps: number;
+  /** gzip snapshots this client sends (off in the headless rig, which can't wait on streams) */
+  gzipSnaps: boolean;
 }
 
 export const NET_SESSION_DEFAULTS: NetSessionOptions = {
@@ -63,6 +74,8 @@ export const NET_SESSION_DEFAULTS: NetSessionOptions = {
   lowerMs: 5000,
   resendMs: 750,
   maxResends: 8,
+  keepSnaps: 6,
+  gzipSnaps: true,
 };
 
 export interface NetSessionConfig {
@@ -124,6 +137,18 @@ export class NetSession implements Session {
   onCtrl: ((tick: number, ctrl: Ctrl) => void) | null = null;
   /** a snapshot became this session's world (#164): the world at `tick`, with the turns after it to come */
   onAdopt: ((tick: number) => void) | null = null;
+  /** the host's word on a desync (#165): the first field that differs, as far as it could tell */
+  onDesyncNote: ((tick: number, text: string) => void) | null = null;
+  /** halted after a desync at this tick (#165), until turns flow again; -1: not halted */
+  halted = -1;
+  /** the turn the halt came on */
+  private haltTurn = -1;
+  /** the last desync announced, so a resync's re-stepping doesn't announce it again */
+  private lastDesync = -1;
+  /** every hash this client reported lately, [tick, hash] (#165): for its report bundle */
+  readonly hashLog: [number, number][] = [];
+  /** the last few hash ticks' worlds, as bytes (#165): what the host asks for after a desync */
+  private readonly kept = new Map<number, Uint8Array>();
 
   /** rejoining: no world to play yet, a snapshot is on its way (#164) */
   syncing = false;
@@ -209,7 +234,12 @@ export class NetSession implements Session {
   }
 
   get paused(): boolean {
-    return this.pausedBy >= 0;
+    return this.pausedBy >= 0 || this.halted >= 0;
+  }
+
+  /** This client's world at a recent hash tick, as bytes, if still kept (#165). */
+  keptSnap(tick: number): Uint8Array | undefined {
+    return this.kept.get(tick);
   }
 
   /** who has the match paused (-1: nobody) */
@@ -309,8 +339,23 @@ export class NetSession implements Session {
       case 'status':
         this.status = { paused: m.paused, by: m.by, resumeIn: m.resumeIn, auto: m.auto, at: now };
         return;
+      case 'snapreq': {
+        // the host wants our world at a desync's tick (#165)
+        const bytes = m.tick > 0 ? this.kept.get(m.tick) : undefined;
+        if (!bytes) return;
+        settle(
+          packSnap({ tick: m.tick, pausedBy: this.pausedBy, seqBase: 0 }, bytes, this.opts.gzipSnaps),
+          (packed) => {
+            for (const c of chunkSnap(m.tick, packed)) this.send(c);
+          },
+          () => undefined,
+        );
+        return;
+      }
+      case 'desync':
+        this.onDesyncNote?.(m.tick, m.text);
+        return;
       case 'snap': {
-        if (!this.syncing) return;
         const packed = this.snaps.add(this.host, m);
         if (!packed) return;
         try {
@@ -326,7 +371,8 @@ export class NetSession implements Session {
   }
 
   private fromSnap(meta: SnapMeta, bytes: Uint8Array): void {
-    if (!this.syncing) return;
+    // a rejoin's snapshot only while waiting for one; a resync's any time (#165)
+    if (!this.syncing && !meta.resync) return;
     let w: World;
     try {
       w = restoreWorld(this.setup, decodeSnap(bytes));
@@ -335,7 +381,7 @@ export class NetSession implements Session {
       return;
     }
     if (w.tick !== meta.tick) return void this.badMessages++;
-    this.adopt(w, meta);
+    this.adopt(w, meta, { restep: !!meta.resync && !this.syncing });
   }
 
   /**
@@ -343,8 +389,20 @@ export class NetSession implements Session {
    * it came, play on from here. Our next orders are numbered above any of
    * this seat's the sequencer has seen, so none is taken for a duplicate.
    */
-  adopt(w: World, meta: SnapMeta): void {
+  adopt(w: World, meta: SnapMeta, o: { restep?: boolean } = {}): void {
     const tick = w.tick;
+    if (o.restep) {
+      // a resync (#165): the turns we stepped past `tick` run again on the agreed world
+      const from = this.historyFrom;
+      for (let t = tick + 1; t <= this.world_.tick; t++) {
+        const turn = this.history[t - from];
+        if (turn && !this.turns.has(t)) this.turns.set(t, turn);
+      }
+      this.history = this.history.slice(0, Math.max(0, tick + 1 - from));
+      keepUntil(this.log, tick);
+      keepUntil(this.ctrlLog, tick);
+      for (const k of [...this.kept.keys()]) if (k > tick) this.kept.delete(k);
+    }
     this.world_ = w;
     for (const t of [...this.turns.keys()]) if (t <= tick) this.turns.delete(t);
     this.held_ = tick;
@@ -353,8 +411,10 @@ export class NetSession implements Session {
     this.pausedBy = meta.pausedBy;
     this.seq = Math.max(this.seq, meta.seqBase);
     this.own = this.localSeat >= 0 && seatHasBot(w, this.localSeat) ? 'bot' : 'human';
-    this.history = [];
-    this.historyFrom = tick + 1;
+    if (!o.restep) {
+      this.history = [];
+      this.historyFrom = tick + 1;
+    }
     this.syncing = false;
     this.started = false;
     this.acc = 0;
@@ -461,6 +521,8 @@ export class NetSession implements Session {
     const turn = this.turns.get(t)!;
     this.turns.delete(t);
     this.history.push(turn);
+    // turns flow again after a halt: resumed, or resynced (#165)
+    if (this.halted >= 0 && t > this.haltTurn) this.halted = -1;
     const w = this.world_;
     for (const c of turn.ctrl ?? []) this.applyCtrl(t, c);
     const cmds: Command[] = [];
@@ -487,7 +549,13 @@ export class NetSession implements Session {
       else this.onEffect?.(e.seq, now - p.issuedAt);
     });
     if (t % this.opts.hashTicks === 0) {
-      const hash = fullHash(w);
+      // fullHash is the hash of these bytes: keep them, for a desync report (#165)
+      const bytes = serializeWorld(w);
+      const hash = hashBytes(bytes);
+      this.kept.set(t, bytes);
+      if (this.kept.size > this.opts.keepSnaps) this.kept.delete(this.kept.keys().next().value!);
+      this.hashLog.push([t, hash]);
+      if (this.hashLog.length > 600) this.hashLog.shift();
       this.onHash?.(t, hash);
       this.send({ k: 'hash', tick: t, hash });
     }
@@ -497,7 +565,13 @@ export class NetSession implements Session {
     this.ctrlLog.push({ tick, ctrl: c });
     if (c.k === 'pause') this.pausedBy = c.seat;
     else if (c.k === 'resume') this.pausedBy = -1;
-    else {
+    else if (c.k === 'desync') {
+      this.halted = c.tick;
+      this.haltTurn = tick;
+      // stepped again after a resync: already announced
+      if (c.tick === this.lastDesync) return;
+      this.lastDesync = c.tick;
+    } else {
       applySeatCtrl(this.world, c);
       if (c.seat === this.localSeat) this.own = c.state;
     }

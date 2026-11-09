@@ -38,6 +38,49 @@ export function messageCard(title: string, text: string, buttons: { label: strin
   return m;
 }
 
+/**
+ * Players' games stopped matching (#165): the match is halted. Everyone can
+ * download a report; the host can send everyone the agreed world (resync)
+ * or play on as is.
+ */
+export function desyncCard(o: {
+  when: string;
+  host: boolean;
+  download: () => void;
+  resync?: () => void;
+  resume?: () => void;
+  leave: () => void;
+}): { el: HTMLDivElement; detail: (text: string) => void; canResync: (on: boolean) => void } {
+  const m = el(`
+    <div class="screen modal dim">
+      <div class="card">
+        <h2>The games stopped matching</h2>
+        <p></p>
+        <p class="hint detail">${o.host ? 'Comparing everyone’s game…' : 'Waiting for the host to compare everyone’s game…'}</p>
+        <p class="hint">A report helps us find the cause: download it and send it to the developers.</p>
+        <div class="menu-buttons">
+          ${o.host ? '<button class="primary" data-a="resync" disabled>Resync and continue</button><button data-a="resume">Play on as is</button>' : ''}
+          <button data-a="download">Download report</button>
+          <button data-a="leave">Leave match</button>
+        </div>
+      </div>
+    </div>`);
+  m.querySelector('p')!.textContent = `At ${o.when}, players’ games disagreed about the match, so it has stopped for everyone.${o.host ? '' : ' The host can resync everyone, or play on.'}`;
+  const detail = m.querySelector('.detail') as HTMLElement;
+  const resync = m.querySelector('[data-a=resync]') as HTMLButtonElement | null;
+  resync?.addEventListener('click', () => o.resync?.());
+  m.querySelector('[data-a=resume]')?.addEventListener('click', () => o.resume?.());
+  m.querySelector('[data-a=download]')!.addEventListener('click', o.download);
+  m.querySelector('[data-a=leave]')!.addEventListener('click', o.leave);
+  return {
+    el: m,
+    detail: (text) => (detail.textContent = text),
+    canResync: (on) => {
+      if (resync) resync.disabled = !on;
+    },
+  };
+}
+
 /** The Multiplayer entry: host a room, or paste a link to join one. */
 export function multiplayerMenu(h: { host: () => void; join: (link: string) => void; back: () => void }): HTMLDivElement {
   const m = el(`

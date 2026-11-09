@@ -10,4 +10,5 @@ export { GuestLobby, HostLobby } from './lobby';
 export { NetMatch } from './match';
 export { LOBBY_KINDS, MATCH_KINDS, Router } from './transport';
 export { webrtcTransport } from './webrtc';
-export { lobbyScreen, messageCard, multiplayerMenu } from '../ui/lobby';
+export { desyncCard, lobbyScreen, messageCard, multiplayerMenu } from '../ui/lobby';
+export { buildBundle, nudgeWorld } from './desync';

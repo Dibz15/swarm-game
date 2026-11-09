@@ -38,7 +38,7 @@ export interface WebRtcRoom {
 export const RECONNECT_GRACE_MS = 20_000;
 
 /** Namespaces our rooms on the relays: bumped with the protocol so old clients never meet new ones there. */
-const APP_ID = 'swarm-game.fourthcontact.v4';
+const APP_ID = 'swarm-game.fourthcontact.v5';
 
 export async function webrtcTransport(o: WebRtcRoom): Promise<Transport> {
   const { joinRoom, selfId } = await import('trystero/nostr');

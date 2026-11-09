@@ -117,11 +117,11 @@ export function play(o: { botSecs?: 30 | 60 | 120 } = {}) {
     const s = g.start()!;
     expect(s.setup).toEqual(setup);
     expect(s.seat).toBe(g.lobby.mySeat);
-    add(g.id, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now }));
+    add(g.id, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, net: { gzipSnaps: false } }));
     g.lobby.ready();
   }
   expect(go).not.toBeNull();
-  add('H', NetMatch.host(h.r.view(MATCH_KINDS), go!, { clock: () => rm.clock.now, heartbeat: false, gzip: false }));
+  add('H', NetMatch.host(h.r.view(MATCH_KINDS), go!, { clock: () => rm.clock.now, heartbeat: false, gzip: false, net: { gzipSnaps: false } }));
   // a guest back from a reload: its seat answers to its new connection (main.ts does the same)
   h.lobby.onRejoin = (seat, peer) => matches.get('H')!.rebind(seat, peer);
   const run = (ms: number, frozen: string[] = []) => {
@@ -151,7 +151,7 @@ export function play(o: { botSecs?: 30 | 60 | 120 } = {}) {
   const rejoin = (id: string, newId: string, token = tokenOf(id)): Guest => {
     const g = rm.guest(newId, { token });
     const s = g.start();
-    if (s) add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, resume: s.tick > 0 }));
+    if (s) add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, resume: s.tick > 0, net: { gzipSnaps: false } }));
     return g;
   };
   /** A reload: gone, then straight back. */

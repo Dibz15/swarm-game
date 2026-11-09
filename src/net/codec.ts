@@ -301,12 +301,13 @@ function readSeat(r: Reader): number {
   return s;
 }
 
-const CTRL_KINDS = ['pause', 'resume', 'seat'] as const;
+const CTRL_KINDS = ['pause', 'resume', 'seat', 'desync'] as const;
 
 function writeCtrl(w: Writer, c: Ctrl): void {
   const k = CTRL_KINDS.indexOf(c.k);
   if (k < 0) throw new Error(`codec: unknown control entry ${c.k}`);
   w.u8(k);
+  if (c.k === 'desync') return void w.uv(c.tick);
   seat(w, c.seat);
   if (c.k !== 'seat') return;
   const st = SEAT_STATES.indexOf(c.state);
@@ -323,6 +324,7 @@ function writeCtrl(w: Writer, c: Ctrl): void {
 function readCtrl(r: Reader): Ctrl {
   const k = CTRL_KINDS[r.u8()];
   if (!k) throw new Bad();
+  if (k === 'desync') return { k, tick: r.uv() };
   const s = readSeat(r);
   if (k !== 'seat') return { k, seat: s };
   const b = r.u8();
@@ -375,7 +377,7 @@ function readTurn(r: Reader): Turn {
 
 // ---- messages ---------------------------------------------------------------
 
-const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq'] as const;
+const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync'] as const;
 const KIND_INDEX = new Map<string, number>(KINDS.map((k, i) => [k, i]));
 
 /** The kind of the message in `bytes` from its first byte alone (for routing), or null. */
@@ -467,6 +469,10 @@ export function encodeMsg(m: Msg): Uint8Array {
       break;
     case 'snapreq':
       w.uv(m.tick);
+      break;
+    case 'desync':
+      w.uv(m.tick);
+      w.str(m.text, MAX_REASON);
       break;
     case 'lobby':
       w.str(m.state, MAX_LOBBY);
@@ -575,6 +581,10 @@ function readMsg(r: Reader): Msg {
       return { k };
     case 'snapreq':
       return { k, tick: r.uv() };
+    case 'desync': {
+      const tick = r.uv();
+      return { k, tick, text: r.str(MAX_REASON) };
+    }
     case 'lobby':
       return { k, state: r.str(MAX_LOBBY) };
     case 'lat': {

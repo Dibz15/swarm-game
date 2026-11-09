@@ -64,17 +64,22 @@ export function clearRecordings(): Promise<unknown> {
   return run('readwrite', (s) => s.clear());
 }
 
-/** Hand every recording to the browser as one JSON download. */
-export async function downloadRecordings(): Promise<number> {
-  const all = await allRecordings();
-  all.sort((a, b) => a.date.localeCompare(b.date));
-  const blob = new Blob([JSON.stringify({ swarmRecordings: 1, recordings: all })], { type: 'application/json' });
+/** Hand a value to the browser as a JSON file to save. */
+export function downloadJson(name: string, value: unknown): void {
+  const blob = new Blob([JSON.stringify(value)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `swarm-recordings-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+}
+
+/** Hand every recording to the browser as one JSON download. */
+export async function downloadRecordings(): Promise<number> {
+  const all = await allRecordings();
+  all.sort((a, b) => a.date.localeCompare(b.date));
+  downloadJson(`swarm-recordings-${new Date().toISOString().slice(0, 10)}.json`, { swarmRecordings: 1, recordings: all });
   return all.length;
 }

@@ -1,13 +1,14 @@
 import { limitsOf } from '../sim/sanitize';
 import type { MatchSetup } from '../sim/setup';
-import { serializeWorld } from '../sim/snapshot';
+import { decodeSnap, restoreWorld, serializeWorld } from '../sim/snapshot';
 import { encodeMsg } from './codec';
+import { analyzeDesync, type DesyncReport } from './desync';
 import { FakeNetwork, VirtualClock, type LinkSpec } from './fakeTransport';
 import type { HostGo } from './lobby';
 import { NetSession, type NetSessionOptions } from './netSession';
-import type { Ctrl } from './protocol';
+import type { Ctrl, Msg } from './protocol';
 import type { Sequencer, SequencerOptions } from './sequencer';
-import { canGzip, chunkSnap, packSnap, settle } from './snapwire';
+import { canGzip, chunkSnap, packSnap, settle, SnapAssembler, unpackSnap } from './snapwire';
 import { HOST_SELF, hostSequencer, splitHost, type Transport } from './transport';
 
 /**
@@ -30,8 +31,12 @@ export interface NetMatchEvents {
   onHostLost?: (why: 'left' | 'lost') => void;
   /** guests: the link to the host dropped (the match waits for it), or came back */
   onHostLink?: (state: 'lost' | 'back') => void;
-  /** host: clients disagree about the world at `tick` */
+  /** players' worlds stopped matching at `tick` (#165): the match halted for everyone */
   onDesync?: (tick: number) => void;
+  /** host: what it found once every world came in (or the wait ran out) */
+  onDesyncReport?: (report: DesyncReport) => void;
+  /** guests: the host's word on it, the first field that differs */
+  onDesyncNote?: (tick: number, text: string) => void;
 }
 
 export class NetMatch {
@@ -44,6 +49,11 @@ export class NetMatch {
   private readonly heartbeat: boolean;
   private readonly clockSync: (() => void) | null;
   private readonly cleanup: () => void;
+  /** host: wiring for a sequencer once made, and work each tick (a desync's collection, #165) */
+  private onSeqMade: ((seq: Sequencer) => void) | null = null;
+  private onTick: (() => void) | null = null;
+  /** host: what the last desync looked like, and how to send everyone the agreed world (#165) */
+  private desync_: { report: DesyncReport | null; resync: () => boolean; reported: () => Record<number, [number, number][]> } | null = null;
 
   /**
    * The host's sequencer is made on the first `update()` or heartbeat, not
@@ -63,8 +73,29 @@ export class NetMatch {
     if (this.heartbeat) this.startHeartbeat();
     session.onCtrl = (_t, c: Ctrl) => {
       if (c.k === 'seat') this.events.onSeat?.(c.seat, c.state);
+      else if (c.k === 'desync') this.events.onDesync?.(c.tick);
       else this.events.onPause?.(c.k === 'pause');
     };
+    session.onDesyncNote = (t, text) => this.events.onDesyncNote?.(t, text);
+  }
+
+  /** Host: the last desync's report, once the worlds came in (#165). */
+  get desyncReport(): DesyncReport | null {
+    return this.desync_?.report ?? null;
+  }
+
+  /** Host: every hash each seat reported lately, for the report bundle. */
+  reportedHashes(): Record<number, [number, number][]> {
+    return this.desync_?.reported() ?? {};
+  }
+
+  /**
+   * Host, after a desync (#165): send everyone the majority's world at the
+   * tick it happened, have every client re-run its turns since on it, and
+   * resume. False when there's no agreed world to send.
+   */
+  resync(): boolean {
+    return this.desync_?.resync() ?? false;
   }
 
   /** Host: a player came back on a new connection (a reload, #164): their seat now answers to `peer`. */
@@ -92,6 +123,7 @@ export class NetMatch {
     const { seq: seqT, client } = splitHost(remote);
     const session = new NetSession({ setup: go.setup, seat: go.hostSeat, transport: client, host: remote.self, clock, opts: o.net });
     let seqRef: Sequencer | null = null;
+    let snapIn: ((peer: string, m: Extract<Msg, { k: 'snap' }>) => void) | null = null;
     /**
      * A rejoining player's snapshot (#164): the host's own world, which every
      * client agrees on up to its tick, then the closed turns after it.
@@ -122,12 +154,16 @@ export class NetMatch {
           opts: { pausers: [go.hostSeat], botMs: go.botMs, ...o.seq },
         },
         (peer, m) => {
+          if (m.k === 'snap') {
+            snapIn?.(peer, m);
+            return true;
+          }
           if (m.k !== 'snapreq') return false;
           serveSnap(peer, m.tick);
           return true;
         },
       ));
-    return new NetMatch(
+    const m = new NetMatch(
       session,
       makeSeq,
       () => {
@@ -136,6 +172,88 @@ export class NetMatch {
       },
       { heartbeat: o.heartbeat !== false },
     );
+
+    // ---- desyncs (#165): collect every world at the first tick that differs, compare, tell everyone
+    const snaps = new SnapAssembler(clock);
+    const reported = new Map<number, [number, number][]>();
+    let collect: { tick: number; hashes: Map<number, number>; odd: number[]; got: Map<number, Uint8Array>; until: number } | null = null;
+    const desync: NonNullable<NetMatch['desync_']> = {
+      report: null,
+      reported: () => Object.fromEntries(reported),
+      resync: () => {
+        const r = desync.report;
+        const seq = seqRef;
+        if (!r || r.ref < 0 || !seq) return false;
+        const bytes = r.snaps.get(r.ref)!;
+        const meta = { tick: r.tick, pausedBy: -1, seqBase: 0, resync: true };
+        // everyone else first, then ourselves; then watch for the next mismatch, and resume
+        for (const s of Object.keys(r.hashes).map(Number)) {
+          const peer = seq.peerOfSeat(s);
+          if (!peer || peer === HOST_SELF) continue;
+          settle(packSnap(meta, bytes, gzip), (packed) => chunkSnap(r.tick, packed).forEach((c) => seqT.send(peer, encodeMsg(c))), () => undefined);
+        }
+        session.adopt(restoreWorld(go.setup, decodeSnap(bytes)), meta, { restep: true });
+        seq.clearDesync();
+        desync.report = null;
+        session.setPaused(false);
+        return true;
+      },
+    };
+    m.desync_ = desync;
+    const finish = () => {
+      const c = collect!;
+      collect = null;
+      const report = analyzeDesync(c.tick, c.hashes, c.odd, c.got, go.hostSeat);
+      desync.report = report;
+      m.events.onDesyncReport?.(report);
+      const text = report.first ?? (report.ref < 0 ? 'no world to compare with came in' : 'no field differs (only the hash)');
+      for (const s of c.hashes.keys()) {
+        const peer = seqRef?.peerOfSeat(s);
+        if (peer && peer !== HOST_SELF) seqT.send(peer, encodeMsg({ k: 'desync', tick: c.tick, text }));
+      }
+    };
+    const check = () => {
+      if (!collect) return;
+      if ([...collect.hashes.keys()].every((s) => collect!.got.has(s)) || clock() >= collect.until) finish();
+    };
+    m.onTick = check;
+    m.onSeqMade = (seq) => {
+      seq.onHashes = (tick, hs) => {
+        for (const [s, h] of hs) {
+          const rows = reported.get(s) ?? [];
+          rows.push([tick, h]);
+          if (rows.length > 600) rows.shift();
+          reported.set(s, rows);
+        }
+      };
+      seq.onDesync = (tick, hashes, odd) => {
+        collect = { tick, hashes, odd, got: new Map(), until: clock() + 5000 };
+        const own = session.keptSnap(tick);
+        if (own) collect.got.set(go.hostSeat, own);
+        for (const s of hashes.keys()) {
+          const peer = seq.peerOfSeat(s);
+          if (peer && peer !== HOST_SELF) seqT.send(peer, encodeMsg({ k: 'snapreq', tick }));
+        }
+        check();
+      };
+    };
+    // their worlds, as they come back
+    snapIn = (peer, msg) => {
+      const whole = snaps.add(peer, msg);
+      const c = collect;
+      if (!whole || !c || msg.tick !== c.tick) return;
+      const seat = seqRef?.seatOfPeer(peer) ?? -1;
+      settle(
+        unpackSnap(whole),
+        (s) => {
+          if (collect !== c || seat < 0) return;
+          c.got.set(seat, s.world);
+          check();
+        },
+        () => undefined,
+      );
+    };
+    return m;
   }
 
   /** A guest's side: its NetSession, talking to the host's sequencer. `resume`: rejoining a match under way (#164). */
@@ -192,10 +310,11 @@ export class NetMatch {
   private tick(): void {
     if (!this.seq_ && this.makeSeq) {
       this.seq_ = this.makeSeq();
-      this.seq_.onDesync = (t) => this.events.onDesync?.(t);
+      this.onSeqMade?.(this.seq_);
     }
     this.seq_?.update();
     this.markSpectators();
+    this.onTick?.();
   }
 
   /** seats already marked spectating */

@@ -4,7 +4,7 @@ import { AudioEngine } from './audio/engine';
 import { FACTION_HEX, FACTION_RGB } from './content/factions';
 import { GameView, type Services } from './game/gameView';
 import type { EndReason, Recording } from './game/recording';
-import { recordingEnabled, saveRecording } from './game/recordStore';
+import { downloadJson, recordingEnabled, saveRecording } from './game/recordStore';
 import { LocalSession } from './game/session';
 import { ordinal } from './game/standing';
 import { loadProgress, MISSIONS, MissionRun, nextMission, saveProgress } from './game/tutorial';
@@ -33,6 +33,7 @@ import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobile
 import { buildSetup, campaignMenu, randomSetup, skirmishMenu, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
 import { creatureGrid } from './ui/creatures';
 import { BUILD } from './game/recording';
+import type { DesyncReport } from './net/desync';
 import type { GuestLobby, HostGo, HostLobby, StartInfo } from './net/lobby';
 import type { NetMatch } from './net/match';
 import type { Router, Transport } from './net/transport';
@@ -128,6 +129,10 @@ class App {
   private endShown = false;
   /** an Easy bot had our seat (#164): its return is worth a word */
   private ownBot = false;
+  /** the desync card (#165), while the match is halted for one */
+  private desyncView: { el: HTMLDivElement; detail: (text: string) => void; canResync: (on: boolean) => void } | null = null;
+  /** the host's word on the last desync, which may come before the halt does */
+  private desyncNote: { tick: number; text: string } | null = null;
   /** the current match's recording was saved at its end */
   private recSaved = false;
   /** difficulty of the current quick match, so "New map" rolls another one */
@@ -864,6 +869,68 @@ class App {
     this.openNetMenu('user');
   }
 
+  /** Players' games stopped matching (#165): the match halted for everyone; say so, and what can be done. */
+  private showDesync(tick: number): void {
+    const mp = this.mp, m = this.match, g = this.game;
+    if (!mp || !m || !g) return;
+    this.netMenu = null;
+    this.netNote = null;
+    this.netPlayers = null;
+    this.input.enabled = false;
+    this.input.reset();
+    const card = mp.desyncCard({
+      when: formatTime(tick),
+      host: m.host,
+      download: () => this.downloadDesync(tick),
+      resync: () => {
+        if (m.resync()) this.closeDesync();
+      },
+      resume: () => {
+        g.session.setPaused(false);
+        this.closeDesync();
+      },
+      leave: () => this.leaveMatch(),
+    });
+    this.desyncView = card;
+    this.setModal(card.el);
+    const r = m.desyncReport;
+    if (r?.tick === tick) this.desyncDetail(r);
+    if (this.desyncNote?.tick === tick) card.detail(`First difference: ${this.desyncNote.text}`);
+  }
+
+  /** The host's findings, on its desync card. */
+  private desyncDetail(r: DesyncReport): void {
+    const v = this.desyncView;
+    if (!v) return;
+    const who = r.odd.length < Object.keys(r.hashes).length ? ` Out of step: ${r.odd.map((s) => this.seatName(s)).join(', ')}.` : ' No majority to tell who is out of step.';
+    v.detail(r.first ? `First difference: ${r.first}.${who}` : r.ref < 0 ? `No game to compare with came in.${who}` : `No field differs, only the hash.${who}`);
+    v.canResync(r.ref >= 0);
+  }
+
+  private closeDesync(): void {
+    if (!this.desyncView) return;
+    this.desyncView = null;
+    this.setModal(null);
+    this.input.enabled = true;
+  }
+
+  /** Everything needed to see this desync again, as a file (#165). The host's has the whole match. */
+  private downloadDesync(tick: number): void {
+    const mp = this.mp, m = this.match, g = this.game;
+    if (!mp || !m || !g) return;
+    const s = m.session;
+    const r = m.desyncReport;
+    const own = s.keptSnap(tick);
+    const ownHash = s.hashLog.find(([t]) => t === tick)?.[1];
+    const report =
+      r && r.tick === tick
+        ? r
+        : { tick, hashes: ownHash === undefined ? {} : { [g.human]: ownHash }, odd: [], snaps: new Map(own ? [[g.human, own]] : []), diffs: {} };
+    const reported = m.host ? m.reportedHashes() : { [g.human]: s.hashLog.slice() };
+    const turns = m.host && m.seq ? m.seq.closedTurns() : s.closedTurns();
+    downloadJson(`swarm-desync-${tick}.json`, mp.buildBundle({ setup: g.setup, seat: g.human, host: m.host, report, reported, turns }));
+  }
+
   /** The line that stays on screen while you watch after your defeat (#183). */
   private updateBanner(g: GameView): void {
     const h = this.hud;
@@ -967,7 +1034,8 @@ class App {
     const secs = (ms: number) => formatTime(Math.max(0, Math.ceil((ms - since) / 1000)) * TICK_HZ);
     let text: string;
     if (g.session.paused) {
-      if (st?.paused && st.resumeIn >= 0) text = `Resuming in ${Math.max(1, Math.ceil((st.resumeIn - since) / 1000))}…`;
+      if (st?.paused && st.by < 0) text = 'Stopped: players’ games stopped matching.';
+      else if (st?.paused && st.resumeIn >= 0) text = `Resuming in ${Math.max(1, Math.ceil((st.resumeIn - since) / 1000))}…`;
       else if (st?.paused) text = `${host ? 'The match is paused for everyone' : 'The host paused the match'}. It resumes by itself in ${secs(st.auto)}.`;
       else text = host ? 'The match is paused for everyone.' : 'The host paused the match.';
     } else if (g.spectating) text = 'You’re out. The match keeps going while this menu is open.';
@@ -1056,8 +1124,20 @@ class App {
         onPause: (p) => this.netPaused(p),
         onHostLost: (why) => this.roomLost(why),
         onHostLink: (state) => this.hud?.toast(state === 'lost' ? 'Lost connection to the host. Reconnecting…' : 'Reconnected to the host', state === 'lost' ? '#ffb627' : '#8aa0b8'),
-        onDesync: (t) => this.hud?.toast(`Desync at ${formatTime(t)}: players’ games may differ from here`, '#ff3cac'),
+        onDesync: (t) => this.showDesync(t),
+        onDesyncReport: (r) => this.desyncDetail(r),
+        // the host's word can come before our halt turn does: keep it for the card
+        onDesyncNote: (t, text) => {
+          this.desyncNote = { tick: t, text };
+          this.desyncView?.detail(`First difference: ${text}`);
+        },
       };
+    }
+    // dev (#165): `?desync=<tick>` nudges this tab's world at that tick, to see a desync end to end
+    const nudgeAt = Number(new URLSearchParams(location.search).get('desync'));
+    if (this.match && this.mp && nudgeAt > 0) {
+      const nudge = this.mp.nudgeWorld;
+      this.match.session.beforeStep = (t, w) => void (t === nudgeAt && nudge(w));
     }
     this.sfx.useTheme(setup.seed);
     this.input.game = this.game;
@@ -1093,6 +1173,8 @@ class App {
     this.match?.close();
     this.match = null;
     this.ownBot = false;
+    this.desyncView = null;
+    this.desyncNote = null;
     this.netMenu = null;
     this.netNote = null;
     this.netPlayers = null;
@@ -1325,6 +1407,8 @@ class App {
       this.hud?.update(g, dt);
       this.hud?.syncPending(g);
       this.updateBanner(g);
+      // resynced or resumed: turns flow again, so the card goes (#165)
+      if (this.desyncView && !g.session.paused) this.closeDesync();
       this.applyInsets();
       this.updateDemo(g, dt);
       g.render(this.time);

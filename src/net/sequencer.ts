@@ -56,6 +56,8 @@ export interface SequencerOptions {
   hashTicks: number;
   /** how often everyone hears the latency table (`lat`, #161) */
   latMs: number;
+  /** stop the match at the first hash mismatch, until resumed or resynced (#165) */
+  haltOnDesync: boolean;
 }
 
 export const SEQUENCER_DEFAULTS: SequencerOptions = {
@@ -74,6 +76,7 @@ export const SEQUENCER_DEFAULTS: SequencerOptions = {
   statusMs: 1000,
   hashTicks: 300,
   latMs: 2000,
+  haltOnDesync: true,
 };
 
 /** A human seat in the match, and the peer that plays it (null: nobody yet). */
@@ -163,7 +166,15 @@ export class Sequencer {
   /** every closed turn, as it closes */
   onTurn: ((tick: number, turn: Turn) => void) | null = null;
   /** clients disagree about the world after `tick` */
-  onDesync: ((tick: number, hashes: Map<number, number>) => void) | null = null;
+  /**
+   * The first time clients disagree (#165): the tick, every seat's hash, and
+   * the seats outside the majority (all of them when there's no majority).
+   * Once only, until `clearDesync`: a world that diverged stays diverged.
+   */
+  onDesync: ((tick: number, hashes: Map<number, number>, odd: number[]) => void) | null = null;
+  /** every mismatch reported, for the report bundle */
+  readonly desyncs: { tick: number; hashes: Record<number, number> }[] = [];
+  private desyncAt = -1;
   /** every tick whose hash reports were compared, agreeing or not (for the net-sim) */
   onHashes: ((tick: number, hashes: Map<number, number>) => void) | null = null;
   /** commands dropped, by reason (for tests and the debug overlay) */
@@ -386,7 +397,49 @@ export class Sequencer {
   private judge(tick: number, m: Map<number, number>): void {
     this.hashes.delete(tick);
     this.onHashes?.(tick, m);
-    if (new Set(m.values()).size > 1) this.onDesync?.(tick, m);
+    const counts = new Map<number, number>();
+    for (const h of m.values()) counts.set(h, (counts.get(h) ?? 0) + 1);
+    if (counts.size <= 1 || this.desyncAt >= 0) return;
+    this.desyncAt = tick;
+    // the majority's hash, if there is one (with two seats there never is)
+    const top = Math.max(...counts.values());
+    const tops = [...counts].filter(([, n]) => n === top);
+    const odd = tops.length === 1 ? [...m].filter(([, h]) => h !== tops[0][0]).map(([s]) => s) : [...m.keys()];
+    this.desyncs.push({ tick, hashes: Object.fromEntries(m) });
+    this.onDesync?.(tick, m, odd.sort((a, b) => a - b));
+    if (this.opts.haltOnDesync) this.halt(tick, this.clock());
+  }
+
+  /**
+   * Stop the match for everyone (#165): a pause nobody's allowance pays for,
+   * that never ends by itself. The `desync` entry rides on the turn now open,
+   * so every client stops on the same tick.
+   */
+  private halt(tick: number, now: number): void {
+    if (this.pause) {
+      // already paused: it just won't end by itself now. If the clock has
+      // stopped, every client is stopped on the same tick already; an entry
+      // would only go out on resume, and halt everyone again.
+      if (this.pauseAfter >= 0) this.ctrlNext.push({ k: 'desync', tick });
+      this.pause.by = -1;
+      this.pause.resumeAt = Infinity;
+      this.broadcastStatus(now);
+      return;
+    }
+    this.ctrlNext.push({ k: 'desync', tick });
+    this.pause = { by: -1, at: now, resumeAt: Infinity };
+    this.pauseAfter = this.next;
+  }
+
+  /** Watch for the next mismatch again (after a resync, #165). */
+  clearDesync(): void {
+    this.desyncAt = -1;
+    this.hashes.clear();
+  }
+
+  /** The peer playing a seat (null: the host's own, or nobody). */
+  peerOfSeat(seat: number): string | null {
+    return this.seats.get(seat)?.peer ?? null;
   }
 
   // ---- clock -----------------------------------------------------------------
@@ -421,7 +474,8 @@ export class Sequencer {
     }
     if (now >= p.resumeAt) {
       this.pause = null;
-      this.ctrlNext.push({ k: 'resume', seat: p.by });
+      // a halt (by -1, #165) has no seat to name: turns simply flow again
+      if (p.by >= 0) this.ctrlNext.push({ k: 'resume', seat: p.by });
       // the next turn closes one tick after play resumes
       this.t0 = p.resumeAt - (this.next - 1) * DT_MS;
       this.broadcastStatus(now);

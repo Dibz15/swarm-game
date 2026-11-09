@@ -21,6 +21,8 @@ export interface SnapMeta {
   pausedBy: number;
   /** the receiver's seat's highest seq the sequencer has seen: number new orders above it */
   seqBase: number;
+  /** the agreed world after a desync (#165): re-run the turns since on it, don't start over */
+  resync?: boolean;
 }
 
 const GZIP = 1;

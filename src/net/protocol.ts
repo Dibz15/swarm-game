@@ -14,7 +14,7 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;
@@ -64,7 +64,13 @@ export interface Entry {
 export type Ctrl =
   | { k: 'pause'; seat: number }
   | { k: 'resume'; seat: number }
-  | { k: 'seat'; seat: number; state: CtrlSeatState; bot?: SeatBot };
+  | { k: 'seat'; seat: number; state: CtrlSeatState; bot?: SeatBot }
+  /**
+   * Players' worlds stopped matching at `tick` (#165): the match halts after
+   * this turn, on every client at the same tick, until the host resyncs or
+   * resumes it.
+   */
+  | { k: 'desync'; tick: number };
 
 /** The bot a dropped seat gets: only difficulty and personality travel. */
 export type SeatBot = Pick<BotConfig, 'difficulty' | 'personality'>;
@@ -138,7 +144,9 @@ export type Msg =
   | { k: 'reclaim' }
   /** client → sequencer: my page is hidden; my seat is away now, not after a silence (#164) */
   | { k: 'away' }
-  /** client → host: send me a world snapshot (`tick` 0: your current world, to rejoin; #164) */
-  | { k: 'snapreq'; tick: number };
+  /** client → host: send me a world snapshot (`tick` 0: your current world, to rejoin; #164). Host → client: your kept snapshot at `tick` (a desync, #165) */
+  | { k: 'snapreq'; tick: number }
+  /** host → clients: what the desync at `tick` is, as far as the host could tell (the first field that differs, #165) */
+  | { k: 'desync'; tick: number; text: string };
 
 export type MsgKind = Msg['k'];
