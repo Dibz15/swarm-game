@@ -56,7 +56,7 @@ export interface SequencerOptions {
   pauseMs: number;
   /** the seats that may pause and resume the match (null: every human seat); a networked match passes only the host's (#162) */
   pausers: number[] | null;
-  /** countdown between a resume and the next turn */
+  /** countdown between a resume and the next turn: everyone sees it, so nobody is caught mid-click (2 s since #198) */
   resumeMs: number;
   /** how often clients hear `status` while paused */
   statusMs: number;
@@ -81,7 +81,7 @@ export const SEQUENCER_DEFAULTS: SequencerOptions = {
   pauses: 3,
   pauseMs: 120000,
   pausers: null,
-  resumeMs: 3000,
+  resumeMs: 2000,
   statusMs: 1000,
   hashTicks: 300,
   latMs: 2000,

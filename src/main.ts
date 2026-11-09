@@ -158,6 +158,8 @@ class App {
   private endShown = false;
   /** an Easy bot had our seat (#164): its return is worth a word */
   private ownBot = false;
+  /** the resume countdown's last second shown, for its tick (#198) */
+  private resumeShown = -1;
   /** no word from the host; the match waits while a new one is found (#166) */
   private stalled = false;
   /** the desync card (#165), while the match is halted for one */
@@ -1161,12 +1163,37 @@ class App {
     downloadJson(`swarm-desync-${tick}.json`, mp.buildBundle({ setup: g.setup, seat: g.human, host: m.host, report, reported, turns }));
   }
 
+  /**
+   * A networked match is paused (not halted by a desync) and no menu shows
+   * it: the resume's countdown for everyone, with a tick each second, or who
+   * paused it. Null when it isn't paused.
+   */
+  private pauseLine(g: GameView): string | null {
+    const m = this.match;
+    const st = m?.session.status;
+    if (!m || !g.session.paused || this.netMenu || this.desyncView || (st?.paused && st.by < 0)) {
+      this.resumeShown = -1;
+      return null;
+    }
+    if (st?.paused && st.resumeIn >= 0) {
+      const n = Math.max(1, Math.ceil((st.resumeIn - (performance.now() - st.at)) / 1000));
+      if (n !== this.resumeShown) this.sfx.countTick(n);
+      this.resumeShown = n;
+      return `Resuming in ${n}…`;
+    }
+    this.resumeShown = -1;
+    return m.host ? 'Resuming…' : 'The host paused the match.';
+  }
+
   /** The line that stays on screen while you watch after your defeat (#183). */
   private updateBanner(g: GameView): void {
     const h = this.hud;
     if (!h) return;
     // first: no host to be had, rejoining or not; there's a way out
     if (this.stalled && !g.result) return h.banner('Lost touch with the host. Finding a new one…', [{ label: 'Leave', on: () => this.leaveRoom() }]);
+    // paused with the menu closed: say so, and count down a resume, so it never looks like a hang (#198)
+    const pause = this.pauseLine(g);
+    if (pause) return h.banner(pause);
     if (g.session.syncing) return h.banner('Rejoining the match…');
     if (g.session.seatBot) this.ownBot = true; // back from a reload with a bot in our seat: no control entry said so
     if (g.session.seatBot && !g.spectating && !g.result) return h.banner('An Easy bot is playing for you. Taking your seat back…');
@@ -1663,6 +1690,8 @@ class App {
       this.input.update(dt);
       this.match?.update();
       g.update(dt, this.time);
+      // the host resumed: guests' pause menus give way to the countdown over the map (#198)
+      if (this.netMenu === 'pause' && (this.match?.session.status?.resumeIn ?? -1) >= 0) this.closeNetMenu();
       if (this.netMenu) this.updateNetNote();
       if (g.result) this.saveRec(g.result, true);
       this.hud?.update(g, dt);
