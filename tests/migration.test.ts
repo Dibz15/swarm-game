@@ -196,7 +196,8 @@ describe('hosting moves (#166)', () => {
   });
 
   it('the room moves with hosting: the new host ends the match, everyone is back in its lobby, and it starts the next one', () => {
-    const { matches, run, gs, leave } = play();
+    const rm = play();
+    const { matches, run, gs, leave } = rm;
     run(10_000);
     const host = matches.get('H')!;
     expect(host.handOff()).toBe(true);
@@ -219,7 +220,7 @@ describe('hosting moves (#166)', () => {
       char: 0,
       prefs: prefs(),
       seed: a.lobby.state!.seed,
-      clock: () => 0,
+      clock: () => rm.clock.now,
       takeOver: { state: a.lobby.state!, connected: matches.get('A')!.livePeers() },
     });
     b.lobby.follow('A');
@@ -232,7 +233,7 @@ describe('hosting moves (#166)', () => {
     room.setMap({ size: 'medium' });
     const starts: StartInfo[] = [];
     b.lobby.onStart = (s) => starts.push(s);
-    const setup = room.start()!;
+    const setup = rm.startNow({ lobby: room })!;
     expect(setup.size).toBe('medium');
     expect(starts.length).toBe(1);
     expect(starts[0].host).toBe('A');

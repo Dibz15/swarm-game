@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { GuestLobby, HostLobby, matchPeers, type HostGo, type StartInfo } from '../src/net/lobby';
+import { COUNTDOWN_MS, GuestLobby, HostLobby, matchPeers, type HostGo, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
@@ -99,7 +99,16 @@ export function room() {
   /** send raw bytes as `from` would, straight to `to` (forged or out-of-turn messages in tests) */
   const inject = (from: string, to: string, bytes: Uint8Array) => routers.get(from)!.transport.send(to, bytes);
   const routerOf = (id: string) => routers.get(id)!;
-  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf };
+  /** Start, and let the 3, 2, 1 run out (#184): the match is sent to everyone. */
+  const startNow = (h: { lobby: HostLobby }) => {
+    const setup = h.lobby.start();
+    if (setup) {
+      clock.now += COUNTDOWN_MS;
+      h.lobby.update();
+    }
+    return setup;
+  };
+  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow };
 }
 
 export type Guest = ReturnType<ReturnType<typeof room>['guest']>;
@@ -113,11 +122,13 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
   const mobile = new Set(o.mobile ?? []);
   const bots = o.bot === false ? [] : [{ faction: 5, difficulty: 1, personality: 'expander' as const, team: 1 }];
   const h = rm.host({ prefs: prefs({ bots }), mobile: mobile.has('H') });
+  // the room opens empty (#184): the host seats its bots by hand
+  for (const b of bots) h.lobby.setRow(b.faction, { k: 'bot', team: b.team, difficulty: b.difficulty, personality: b.personality });
   if (o.botSecs) h.lobby.setBotSecs(o.botSecs);
   const gs = (o.guests ?? ['A', 'B']).map((id) => rm.guest(id, { mobile: mobile.has(id) }));
   let go: HostGo | null = null;
   h.lobby.onGo = (g) => (go = g);
-  const setup = h.lobby.start()!;
+  const setup = rm.startNow(h)!;
   expect(setup).not.toBeNull();
   const matches = new Map<string, NetMatch>();
   const proxies = new Map<string, Proxy>();

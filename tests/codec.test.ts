@@ -46,6 +46,8 @@ describe('wire codec (#157)', () => {
       { k: 'lobby', state: JSON.stringify({ seed: 'ember-tide-4', name: 'Zoë 🐝', rows: [] }) },
       { k: 'pick', seat: 5, team: 3, char: 0 },
       { k: 'ready' },
+      { k: 'mark', ready: true },
+      { k: 'mark', ready: false },
       { k: 'away' },
       { k: 'snapreq', tick: 0 },
       { k: 'snapreq', tick: 54321 },
