@@ -402,16 +402,11 @@ export class Sequencer {
   private judge(tick: number, m: Map<number, number>): void {
     this.hashes.delete(tick);
     this.onHashes?.(tick, m);
-    const counts = new Map<number, number>();
-    for (const h of m.values()) counts.set(h, (counts.get(h) ?? 0) + 1);
-    if (counts.size <= 1 || this.desyncAt >= 0) return;
+    const odd = oddOnes(m);
+    if (!odd.length || this.desyncAt >= 0) return;
     this.desyncAt = tick;
-    // the majority's hash, if there is one (with two seats there never is)
-    const top = Math.max(...counts.values());
-    const tops = [...counts].filter(([, n]) => n === top);
-    const odd = tops.length === 1 ? [...m].filter(([, h]) => h !== tops[0][0]).map(([s]) => s) : [...m.keys()];
     this.desyncs.push({ tick, hashes: Object.fromEntries(m) });
-    this.onDesync?.(tick, m, odd.sort((a, b) => a - b));
+    this.onDesync?.(tick, m, odd);
     if (this.opts.haltOnDesync) this.halt(tick, this.clock());
   }
 
@@ -610,6 +605,8 @@ export function rebuildState(o: {
   opts?: Partial<SequencerOptions>;
   /** the latest latency table, for each seat's round trip */
   lat?: LatRow[];
+  /** what's left of each seat's pause allowance, as last heard (default: all of it) */
+  pauseMsLeft?: ReadonlyMap<number, number>;
 }): SequencerState {
   const opts = { ...SEQUENCER_DEFAULTS, ...o.opts };
   const high = new Map<number, number>();
@@ -663,8 +660,22 @@ export function rebuildState(o: {
         buffer: 0,
         ackTick: o.next - 1,
         pausesLeft: Math.max(0, opts.pauses - (pausesUsed.get(c.seat) ?? 0)),
-        pauseMsLeft: opts.pauseMs,
+        pauseMsLeft: Math.min(opts.pauseMs, o.pauseMsLeft?.get(c.seat) ?? opts.pauseMs),
       };
     }),
   };
+}
+
+/**
+ * The seats outside the majority's hash (#165): every seat when no hash is
+ * held by more seats than any other (with two seats there never is a
+ * majority), none when they all agree.
+ */
+export function oddOnes(hashes: ReadonlyMap<number, number>): number[] {
+  const counts = new Map<number, number>();
+  for (const h of hashes.values()) counts.set(h, (counts.get(h) ?? 0) + 1);
+  if (counts.size <= 1) return [];
+  const top = Math.max(...counts.values());
+  const tops = [...counts].filter(([, n]) => n === top);
+  return (tops.length === 1 ? [...hashes].filter(([, h]) => h !== tops[0][0]).map(([s]) => s) : [...hashes.keys()]).sort((a, b) => a - b);
 }

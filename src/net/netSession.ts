@@ -175,6 +175,12 @@ export class NetSession implements Session {
   lat: LatRow[] = [];
   /** the sequencer's last word while paused; `at` is when it came (this session's clock), to count down from */
   status: { paused: boolean; by: number; resumeIn: number; auto: number; at: number } | null = null;
+  /**
+   * per seat that paused, the sequencer's last word while it counted that
+   * seat's allowance down (`auto`: what's left plus the resume countdown),
+   * and when it came (#166): a successor carries the allowance on from it
+   */
+  readonly pauseSeen = new Map<number, { auto: number; at: number }>();
 
   /** round-trip estimate to the sequencer, ms */
   rtt = 0;
@@ -193,8 +199,8 @@ export class NetSession implements Session {
   private host: string;
   private readonly clock: () => number;
   private epoch = 0;
-  /** our orders that ran lately, by seq: a fork past them (#166) sends them again */
-  private landed = new Map<number, { cmd: Command; tick: number; at: number }>();
+  /** our orders that ran lately, by seq: a fork past them (#166) sends them again. `at`: when it ran (kept 30 s) */
+  private landed = new Map<number, { cmd: Command; tick: number; at: number; issuedAt: number }>();
   private turns = new Map<number, Turn>();
   /** highest tick held with no gap from the world's tick */
   private held_ = 0;
@@ -276,10 +282,13 @@ export class NetSession implements Session {
   /**
    * Every closed turn this client holds, stepped or buffered, from
    * `historyFrom` (the first after the snapshot it started from, or 1).
+   * After a fork (#166), the turns we stepped past the new host's first
+   * were never confirmed by anyone: they're left out.
    */
   closedTurns(): { first: number; turns: Turn[] } {
-    const turns = this.history.slice();
-    for (let t = this.world_.tick + 1; t <= this.held_; t++) turns.push(this.turns.get(t)!);
+    const upto = this.forkFloor >= 0 ? Math.min(this.forkFloor, this.world_.tick) : this.world_.tick;
+    const turns = this.history.slice(0, Math.max(0, upto + 1 - this.historyFrom));
+    for (let t = upto + 1; t <= this.held_; t++) turns.push(this.turns.get(t)!);
     return { first: this.historyFrom, turns };
   }
 
@@ -348,7 +357,7 @@ export class NetSession implements Session {
     if (this.world_.tick >= next) {
       // forked: the orders that ran in the lost stretch go again, with the agreed world
       for (const [s, l] of this.landed) {
-        if (l.tick >= next && !this.pending.has(s)) this.pending.set(s, { cmd: l.cmd, issuedAt: l.at, sentAt: -Infinity, resends: 0, tick: -1 });
+        if (l.tick >= next && !this.pending.has(s)) this.pending.set(s, { cmd: l.cmd, issuedAt: l.issuedAt, sentAt: -Infinity, resends: 0, tick: -1 });
       }
       this.syncing = true;
       this.snapReqAt = -Infinity;
@@ -411,6 +420,7 @@ export class NetSession implements Session {
         return;
       case 'status':
         this.status = { paused: m.paused, by: m.by, resumeIn: m.resumeIn, auto: m.auto, at: now };
+        if (m.paused && m.by >= 0 && m.resumeIn < 0) this.pauseSeen.set(m.by, { auto: m.auto, at: now });
         return;
       case 'snapreq': {
         // the host wants our world at a desync's tick (#165)
@@ -622,7 +632,7 @@ export class NetSession implements Session {
       const p = this.pending.get(e.seq);
       if (!p) return;
       this.pending.delete(e.seq);
-      this.landed.set(e.seq, { cmd: p.cmd, tick: t, at: p.issuedAt });
+      this.landed.set(e.seq, { cmd: p.cmd, tick: t, at: now, issuedAt: p.issuedAt });
       failed ??= rejectedIn(w, fx);
       const why = failed.get(i);
       if (why) this.onReject?.(e.seq, why);
@@ -693,7 +703,9 @@ export class NetSession implements Session {
       this.ackAt = now;
       this.send({ k: 'ack', tick: this.held_, seq: this.lastLanded, rtt: Math.round(this.rtt), buffer: this.target, ...(want ? { want } : {}) });
     }
-    // orders that never showed up in a turn
+    // orders that never showed up in a turn. Paused, no turn closes: an order
+    // can't show up yet, and the sequencer holds it for the resume
+    if (this.paused) return;
     const late = 2 * this.rtt + this.opts.resendMs;
     for (const [s, p] of this.pending) {
       if (p.tick >= 0 || now - p.sentAt < late) continue;

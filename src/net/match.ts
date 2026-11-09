@@ -1,13 +1,13 @@
 import { limitsOf } from '../sim/sanitize';
 import type { MatchSetup } from '../sim/setup';
-import { decodeSnap, restoreWorld, serializeWorld } from '../sim/snapshot';
+import { decodeSnap, hashBytes, restoreWorld, serializeWorld } from '../sim/snapshot';
 import { decodeMsg, encodeMsg, msgKind } from './codec';
 import { analyzeDesync, type DesyncReport } from './desync';
 import { FakeNetwork, VirtualClock, type LinkSpec } from './fakeTransport';
 import type { HostGo } from './lobby';
 import { NetSession, type NetSessionOptions } from './netSession';
 import { MAX_TURNS_PER_MSG, type Ctrl, type Msg, type MsgKind } from './protocol';
-import { rebuildState, Sequencer, type SequencerOptions, type SequencerState } from './sequencer';
+import { oddOnes, rebuildState, Sequencer, SEQUENCER_DEFAULTS, type SequencerOptions, type SequencerState } from './sequencer';
 import { canGzip, chunkSnap, packSnap, settle, SnapAssembler, unpackSnap } from './snapwire';
 import { HOST_SELF, hostSequencer, type Transport } from './transport';
 
@@ -99,6 +99,12 @@ export const BEAT_MS = 500;
 export const ALIVE_MS = 2000;
 /** no word from the host this long: suspect it */
 export const SILENCE_MS = 1500;
+/**
+ * before the host's first word: it may still be building its world (a big
+ * map, a phone), so wait longer. A host that crashed meanwhile drops off the
+ * mesh, and that is suspected at once.
+ */
+export const START_SILENCE_MS = 10_000;
 /** a claimant waits this long for the others' turns */
 export const COLLECT_MS = 400;
 /** after someone claims: wait this long for their `lead` before looking again */
@@ -145,6 +151,8 @@ export class NetMatch {
 
   // ---- choosing a host (#166)
   private readonly started: number;
+  /** how long the host may say nothing before its first word: long at a match's start, normal when rejoining one under way */
+  private readonly firstWordMs: number;
   private heardAt = new Map<string, number>();
   private beats = new Map<string, { at: number; epoch: number; ok: boolean; hidden: boolean; syncing: boolean }>();
   private gone = new Set<string>();
@@ -156,11 +164,14 @@ export class NetMatch {
   private hidden = false;
   private candidate: { epoch: number; until: number } | null = null;
   private awaiting: { epoch: number; until: number } | null = null;
+  /** we handed hosting on and are about to leave: no more say in who hosts */
+  private leaving = false;
 
   // ---- desyncs (#165)
   private readonly snaps: SnapAssembler;
   private reported = new Map<number, [number, number][]>();
-  private collect: { tick: number; hashes: Map<number, number>; odd: number[]; got: Map<number, Uint8Array>; until: number } | null = null;
+  /** `seats`: whose worlds we wait for; `derive`: no hashes came with it (a halt we inherited), so read them off the worlds */
+  private collect: { tick: number; seats: number[]; hashes: Map<number, number>; odd: number[]; derive: boolean; got: Map<number, Uint8Array>; until: number } | null = null;
   private report: DesyncReport | null = null;
   /** seats already marked spectating (#183) */
   private out = new Set<number>();
@@ -177,8 +188,10 @@ export class NetMatch {
     heartbeat?: boolean;
     seq?: Partial<SequencerOptions>;
     gzip?: boolean;
+    resume?: boolean;
   }) {
     this.remote = o.remote;
+    this.firstWordMs = o.resume ? SILENCE_MS : START_SILENCE_MS;
     this.self = o.remote?.self ?? '';
     this.mySeat = o.seat;
     this.peers = o.peers;
@@ -206,7 +219,11 @@ export class NetMatch {
     if (remote) this.wire(remote);
     this.session.onCtrl = (_t, c: Ctrl) => {
       if (c.k === 'seat') this.events.onSeat?.(c.seat, c.state);
-      else if (c.k === 'desync') this.events.onDesync?.(c.tick);
+      else if (c.k === 'desync') {
+        // a halt from the host before us reaching us now that we host: we need its report
+        if (this.leading_ && this.collect?.tick !== c.tick && this.report?.tick !== c.tick) this.recollect(c.tick);
+        this.events.onDesync?.(c.tick);
+      }
       else this.events.onPause?.(c.k === 'pause');
     };
     this.session.onDesyncNote = (t, text) => this.events.onDesyncNote?.(t, text);
@@ -229,6 +246,7 @@ export class NetMatch {
       heartbeat: cfg.heartbeat !== false,
       seq: { ...(cfg.botMs ? { botMs: cfg.botMs } : {}), ...cfg.seq },
       gzip: cfg.gzip,
+      resume: cfg.resume,
     });
     if (cfg.leader === remote.self) {
       m.leading_ = true;
@@ -370,6 +388,9 @@ export class NetMatch {
     this.stepDown();
     // our epoch stays: if the successor has to claim instead, its claim is above ours, and we answer it with our turns
     this.leaderId = succ;
+    this.heardAt.set(succ, this.clock());
+    // we're on our way out: never suspect the successor in the moments before we go
+    this.leaving = true;
     remote.send(succ, encodeMsg({ k: 'handoff', epoch, state }));
     return true;
   }
@@ -548,12 +569,22 @@ export class NetMatch {
     );
   }
 
-  private startCollect(tick: number, hashes: Map<number, number>, odd: number[]): void {
-    const c = { tick, hashes, odd, got: new Map<number, Uint8Array>(), until: this.clock() + 5000 };
+  /**
+   * Halted by a desync the host before us found (#166): its report didn't
+   * come with hosting, so look again from everyone's kept worlds at that
+   * tick; then we can resync or resume from here.
+   */
+  private recollect(tick: number): void {
+    const seats = this.peers.filter((p) => p.peer === this.self || !this.gone.has(p.peer)).map((p) => p.seat);
+    this.startCollect(tick, new Map(), [], seats);
+  }
+
+  private startCollect(tick: number, hashes: Map<number, number>, odd: number[], seats = [...hashes.keys()]): void {
+    const c = { tick, seats, hashes, odd, derive: !hashes.size, got: new Map<number, Uint8Array>(), until: this.clock() + 5000 };
     this.collect = c;
     const own = this.session.keptSnap(tick);
     if (own) c.got.set(this.mySeat, own);
-    for (const s of hashes.keys()) {
+    for (const s of seats) {
       const peer = this.seq_?.peerOfSeat(s);
       if (peer && peer !== HOST_SELF) this.seqSend(peer, { k: 'snapreq', tick });
     }
@@ -579,13 +610,18 @@ export class NetMatch {
   private checkCollect(): void {
     const c = this.collect;
     if (!c) return;
-    if (![...c.hashes.keys()].every((s) => c.got.has(s)) && this.clock() < c.until) return;
+    if (!c.seats.every((s) => c.got.has(s)) && this.clock() < c.until) return;
     this.collect = null;
+    if (c.derive) {
+      // each world's hash is the hash of its bytes; the odd ones out are those outside the largest group
+      for (const [s, b] of c.got) c.hashes.set(s, hashBytes(b));
+      c.odd.push(...oddOnes(c.hashes));
+    }
     const report = analyzeDesync(c.tick, c.hashes, c.odd, c.got, this.mySeat);
     this.report = report;
     this.events.onDesyncReport?.(report);
     const text = report.first ?? (report.ref < 0 ? 'no world to compare with came in' : 'no field differs (only the hash)');
-    for (const s of c.hashes.keys()) {
+    for (const s of c.seats) {
       const peer = this.seq_?.peerOfSeat(s);
       if (peer && peer !== HOST_SELF) this.seqSend(peer, { k: 'desync', tick: c.tick, text });
     }
@@ -615,12 +651,15 @@ export class NetMatch {
   }
 
   private elect(now: number): void {
-    if (!this.peers.length) return;
+    if (!this.peers.length || this.leaving) return;
     this.epoch = Math.max(this.epoch, this.session.currentEpoch);
     if (now - this.beatAt >= BEAT_MS) this.beatNow(now);
     if (this.leading_) return;
     if (this.candidate) {
-      if (now >= this.candidate.until) this.promote(this.candidate.epoch);
+      if (now < this.candidate.until) return;
+      // a snapshot we were waiting for since claiming means our world can't be hosted from: give way
+      if (this.session.syncing) this.candidate = null;
+      else this.promote(this.candidate.epoch);
       return;
     }
     if (this.awaiting) {
@@ -628,10 +667,11 @@ export class NetMatch {
       this.awaiting = null; // whoever claimed never led: look again
     }
     const leader = this.leaderId;
-    const quiet = now - (this.heardAt.get(leader) ?? this.started);
+    const heard = this.heardAt.get(leader);
+    const quiet = now - (heard ?? this.started);
     const left = this.gone.has(leader) && now - (this.goneAt.get(leader) ?? now) >= BYE_WAIT_MS;
     // a player waiting for a snapshot still says whether it hears the host: it votes, but can't lead
-    const suspect = !this.hidden && (left || this.linkLost.has(leader) || quiet > SILENCE_MS);
+    const suspect = !this.hidden && (left || this.linkLost.has(leader) || quiet > (heard === undefined ? this.firstWordMs : SILENCE_MS));
     if (suspect !== this.suspect) {
       this.suspect = suspect;
       this.beatNow(now);
@@ -676,7 +716,12 @@ export class NetMatch {
         for (let i = 0; i < turns.length; i += MAX_TURNS_PER_MSG) {
           this.remote?.send(peer, encodeMsg({ k: 'turns', epoch: this.epoch, first: from + i, list: turns.slice(i, i + MAX_TURNS_PER_MSG) }));
         }
-        if (this.leading_) this.stepDown();
+        if (this.leading_) {
+          this.stepDown();
+          // the claimant is the one to hear from now: if it never leads, it's the one suspected, not us
+          this.leaderId = peer;
+          this.heardAt.set(peer, now);
+        }
         this.candidate = null;
         this.awaiting = { epoch: m.epoch, until: now + LEAD_WAIT_MS };
         return;
@@ -695,8 +740,11 @@ export class NetMatch {
         } catch {
           return;
         }
+        // no world to host from (rejoining, or resyncing after a fork): let it lapse; once the old host
+        // is gone the others elect someone who has one
+        if (this.session.syncing) return;
         // every turn it closed came first, on the same channel; if not, collect them the long way
-        if (this.session.syncing || this.session.heldTick !== state.next - 1) {
+        if (this.session.heldTick !== state.next - 1) {
           this.candidate = { epoch: m.epoch, until: now + COLLECT_MS };
           this.broadcast({ k: 'claim', epoch: m.epoch, held: this.session.heldTick });
           return;
@@ -736,7 +784,7 @@ export class NetMatch {
           // the old host's own seat was HOST_SELF there; ours is HOST_SELF here
           seats: handed.seats.map((r) => ({ ...r, peer: r.peer === HOST_SELF ? old : r.seat === this.mySeat ? HOST_SELF : r.peer })),
         }
-      : rebuildState({ epoch, next, seats, history: hist, opts: this.seqOpts, lat: this.session.lat });
+      : rebuildState({ epoch, next, seats, history: hist, opts: this.seqOpts, lat: this.session.lat, pauseMsLeft: this.pauseMsLeft() });
     const seq = new Sequencer({
       limits: limitsOf(this.session.world),
       seats: [],
@@ -761,7 +809,24 @@ export class NetMatch {
     if (this.heartbeat) this.startHeartbeat();
     this.suspect = false;
     this.setStalled(false);
+    if (this.session.halted >= 0) this.recollect(this.session.halted);
     this.events.onLeader?.(this.mySeat, this.self);
+  }
+
+  /**
+   * What's left of each seat's pause allowance, as the old host last said
+   * while it counted down (#166). The pause still running (if any) has spent
+   * more since.
+   */
+  private pauseMsLeft(): Map<number, number> {
+    const resumeMs = { ...SEQUENCER_DEFAULTS, ...this.seqOpts }.resumeMs;
+    const now = this.clock();
+    const left = new Map<number, number>();
+    for (const [seat, s] of this.session.pauseSeen) {
+      const spent = seat === this.session.pausedSeat ? now - s.at : 0;
+      left.set(seat, Math.max(0, s.auto - resumeMs - spent));
+    }
+    return left;
   }
 
   private setStalled(on: boolean): void {
@@ -779,3 +844,4 @@ export class NetMatch {
     this.beat = null;
   }
 }
+

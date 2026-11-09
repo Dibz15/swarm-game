@@ -413,9 +413,12 @@ export class HostLobby {
     this.t.send(peer, encodeMsg(m));
   }
 
+  /** Stop listening, and give the view back to the router: nothing of this lobby's fires after. */
   close(): void {
     this.t.onMessage = null;
     this.t.onPeer = null;
+    this.t.onLink = null;
+    this.t.close();
   }
 }
 
@@ -530,8 +533,11 @@ export class GuestLobby {
     this.t.send(peer, encodeMsg(m));
   }
 
+  /** Stop listening, and give the view back to the router: nothing of this lobby's fires after. */
   close(): void {
     this.t.onMessage = null;
     this.t.onPeer = null;
+    this.t.onLink = null;
+    this.t.close();
   }
 }

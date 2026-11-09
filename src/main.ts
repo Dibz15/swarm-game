@@ -35,7 +35,7 @@ import { buildSetup, campaignMenu, randomSetup, skirmishMenu, endScreen, howToPl
 import { creatureGrid } from './ui/creatures';
 import { BUILD } from './game/recording';
 import type { DesyncReport } from './net/desync';
-import type { GuestLobby, HostGo, HostLobby, StartInfo } from './net/lobby';
+import type { GuestLobby, HostGo, HostLobby, LobbyState, StartInfo } from './net/lobby';
 import type { NetMatch } from './net/match';
 import type { Router, Transport } from './net/transport';
 import { formatTime } from './ui/hud';
@@ -803,10 +803,17 @@ class App {
     old.close();
     r.host = false;
     r.view = this.roomView(mp, r);
-    const lobby = this.wireGuestLobby(new mp.GuestLobby(r.router.view(mp.LOBBY_KINDS), { build: BUILD, char: 0, mobile: isMobile(), token: seatToken(r.id), clock: () => performance.now() }));
+    const lobby = this.wireGuestLobby(new mp.GuestLobby(r.router.view(mp.LOBBY_KINDS), { build: BUILD, char: this.ownChar(old.state), mobile: isMobile(), token: seatToken(r.id), clock: () => performance.now() }));
     lobby.follow(leader);
     lobby.state = { ...old.state, host: leader };
     r.lobby = lobby;
+  }
+
+  /** The character we play in this room: our row's, else the one we came in with. */
+  private ownChar(s: LobbyState | null): number {
+    const self = this.room?.router?.transport.self;
+    const row = s?.rows.find((r) => r.k === 'human' && r.peer === self);
+    return row?.k === 'human' ? row.char : (this.room?.choices[0].seed ?? 0);
   }
 
   /** The room's rows changed mid-match (a rejoin under a new peer id): the match's list of who could host follows (#166). */
@@ -829,7 +836,7 @@ class App {
     r.view = this.roomView(mp, r);
     const lobby = new mp.HostLobby(r.router.view(mp.LOBBY_KINDS), {
       build: BUILD,
-      char: 0,
+      char: this.ownChar(old.state),
       prefs: loadPrefs(),
       seed: old.state!.seed,
       clock: () => performance.now(),
@@ -1217,6 +1224,9 @@ class App {
           if (me) this.becomeRoomHost();
           else if (this.room?.host) this.becomeRoomGuest(peer);
           else (this.room?.lobby as GuestLobby | null)?.follow(peer);
+          // halted by a desync: the card's host buttons (resync, resume) go with hosting
+          const halted = this.match?.session.halted ?? -1;
+          if (this.desyncView && halted >= 0) this.showDesync(halted);
         },
         onStall: (stalled) => (this.stalled = stalled),
         onDesync: (t) => this.showDesync(t),
