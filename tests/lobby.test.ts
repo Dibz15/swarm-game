@@ -4,7 +4,7 @@ import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
 import { buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { PROTOCOL_VERSION } from '../src/net/protocol';
-import { encodeMsg } from '../src/net/codec';
+import { decodeMsg, encodeMsg } from '../src/net/codec';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, PeerGrace, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
 import { DT } from '../src/sim/constants';
@@ -425,7 +425,10 @@ describe('the room, start to rematch (#184)', () => {
     const h = rm.host();
     rm.guest('A');
     h.lobby.setLocked(true);
-    expect(rm.guest('B').lobby.state).toBeNull();
+    // a stranger hears who runs the room (#202), then is turned away
+    const b = rm.guest('B');
+    expect(b.refused[0]).toMatch(/closed this room/);
+    expect(b.lobby.mySeat).toBe(-1);
     expect(rm.guest('C').refused[0]).toMatch(/closed this room/);
     // A reloads: a new peer id, the same seat token
     rm.leave('A');
@@ -740,5 +743,76 @@ describe('one token, one seat (#192)', () => {
     const o = { build: 'test', char: 1, prefs: prefs(), seed: st.seed, clock: () => rm.clock.now, roomKey: ROOM_KEY };
     expect(() => new HostLobby(rm.routerOf('A').view(LOBBY_KINDS), { ...o, takeOver: { state: st, connected: [] } })).toThrow(/needs its setup/);
     expect(() => new HostLobby(rm.routerOf('A').view(LOBBY_KINDS), { ...o, takeOver: { state: st, connected: [], reclaim: true, setup: buildNetSetup(st) } })).toThrow(/only before a match/);
+  });
+});
+
+describe('the seat token reaches the host only (#202)', () => {
+  /** every peer that ever got `token`, other than `host` */
+  const leakedTo = (hellos: { to: string; token: string }[], token: string, host: string) => [...new Set(hellos.filter((h) => h.token === token && h.to !== host).map((h) => h.to))];
+
+  it('joining: the others hear a hello with no token; the host alone gets ours, and seats us by it', () => {
+    const rm = room();
+    rm.meetLatestFirst(true);
+    const h = rm.host();
+    rm.guest('A');
+    const b = rm.guest('B');
+    const fromB = rm.hellos().filter((x) => x.from === 'B');
+    expect(fromB.filter((x) => x.to === 'A').every((x) => x.token === '')).toBe(true);
+    expect(fromB.filter((x) => x.token === rm.tokenOf('B')).map((x) => x.to)).toEqual(['H']);
+    expect(leakedTo(rm.hellos(), rm.tokenOf('A'), 'H')).toEqual([]);
+    expect(b.lobby.mySeat).toBeGreaterThanOrEqual(0);
+    expect(h.lobby.state.rows[b.lobby.mySeat]).toMatchObject({ peer: 'B' });
+  });
+
+  it('a reload mid-match: the token goes to the host alone, and the seat comes back', () => {
+    const p = play({ botSecs: 30 });
+    p.meetLatestFirst(true);
+    p.run(3000);
+    const seatB = p.matches.get('B')!.session.localSeat;
+    const g = p.reload('B', 'B2');
+    expect(g.refused).toEqual([]);
+    expect(p.h.lobby.state.rows[seatB]).toMatchObject({ peer: 'B2' });
+    expect(leakedTo(p.hellos(), p.tokenOf('B'), 'H')).toEqual([]);
+  });
+
+  it('a reload after hosting moved: the token goes to the new host alone', () => {
+    const p = play({ botSecs: 30, guests: ['A', 'B', 'C'] });
+    p.run(8000);
+    expect(p.matches.get('H')!.handOff()).toBe(true);
+    p.run(150);
+    p.quit('H');
+    p.run(3000);
+    p.takeRoom('A');
+    p.meetLatestFirst(true);
+    const before = p.hellos().length;
+    p.quit('B');
+    p.run(1000);
+    const g = p.rejoin('B', 'B2');
+    expect(g.refused).toEqual([]);
+    expect(g.lobby.state!.host).toBe('A');
+    expect(leakedTo(p.hellos().slice(before), p.tokenOf('B'), 'A')).toEqual([]);
+  });
+
+  it('a closed room still lets a player back by the second hello; a stranger is still refused', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A');
+    const seat = a.lobby.mySeat;
+    h.lobby.setLocked(true);
+    const a2 = rm.guest('A2');
+    expect(a2.refused).toEqual([]);
+    expect(a2.lobby.mySeat).toBe(seat);
+    expect(rm.guest('Z').refused[0]).toMatch(/closed/);
+  });
+
+  it('a hello with no token only asks who hosts: it gets the room, and no seat', () => {
+    const rm = room();
+    const h = rm.host();
+    const got: string[] = [];
+    const t = rm.link('X');
+    t.transport.onMessage = (_p, bytes) => got.push(decodeMsg(bytes)?.k ?? '?');
+    t.transport.send('H', encodeMsg({ k: 'hello', proto: PROTOCOL_VERSION, build: 'test', mobile: false, char: 3, token: '' }));
+    expect(got).toEqual(['lobby']);
+    expect(occupant(h.lobby.state).includes('X')).toBe(false);
   });
 });

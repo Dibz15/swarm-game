@@ -561,7 +561,8 @@ export class HostLobby {
   private hello(peer: string, m: Extract<Msg, { k: 'hello' }>): void {
     this.connected.add(peer);
     if (m.proto !== PROTOCOL_VERSION || m.build !== this.o.build) return this.send(peer, { k: 'refuse', reason: 'This room runs a different version of the game. Refresh the page to update, then open the link again.' });
-    if (seatOf(this.state, peer) >= 0) return this.send(peer, { k: 'lobby', state: this.json() });
+    // no token: "who runs this room?" (#202). The room says so; the hello with the token, to us alone, decides the rest
+    if (!m.token || seatOf(this.state, peer) >= 0) return this.send(peer, { k: 'lobby', state: this.json() });
     // one token, one seat (#192): a seat whose seal this token opens is this player's, on a new connection (a reload, a duplicated tab)
     const s = seal(m.token, this.o.roomKey);
     const mine = s ? this.state.rows.findIndex((r) => r.k === 'human' && r.seal === s) : -1;
@@ -707,15 +708,18 @@ export class GuestLobby {
   private readonly o: GuestLobbyOptions;
   private readonly since: number;
   private gaveUp = false;
+  /** who has our seat token (#202): the host we introduced ourselves to; nobody else ever gets it */
+  private introducedTo: string | null = null;
 
   constructor(t: Transport, o: GuestLobbyOptions) {
     this.t = t;
     this.o = o;
     this.since = o.clock();
     t.onPeer = (peer, up) => {
-      // a new peer may be the host; the host reconnecting in the lobby gets told again who we are (it may have freed our seat)
-      const hello = up && (!this.host || (peer === this.host && this.state?.phase === 'lobby'));
-      if (hello) this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0, token: o.token, ...(o.cell ? { cell: true } : {}) });
+      // a new peer may be the host: ask, without our token (#202); whoever hosts answers with the room, and gets it then.
+      // The host reconnecting in the lobby gets told again who we are (it may have freed our seat)
+      if (up && !this.host) this.sayHello(peer, false);
+      else if (up && peer === this.host && this.state?.phase === 'lobby') this.sayHello(peer, true);
       if (!up && peer === this.host) this.onNoHost?.(this.dropped ? 'lost' : 'left');
     };
     t.onLink = (peer, state) => {
@@ -737,10 +741,22 @@ export class GuestLobby {
     if (this.host) this.send(this.host, { k: 'pick', seat, team, char: char >>> 0 });
   }
 
-  /** Another player runs the room now (#166): their lobby states, from here on. */
+  /** Another player runs the room now (#166): their lobby states, from here on. They have us in it already. */
   follow(host: string): void {
     this.host = host;
     this.dropped = false;
+    this.introducedTo = host;
+  }
+
+  /**
+   * Who we are (#162). With our seat token only to the peer that runs the
+   * room (#202): a page that doesn't know who that is yet asks everyone
+   * without it, and introduces itself to whoever answers with the room.
+   */
+  private sayHello(peer: string, withToken: boolean): void {
+    const o = this.o;
+    if (withToken) this.introducedTo = peer;
+    this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0, token: withToken ? o.token : '', ...(o.cell ? { cell: true } : {}) });
   }
 
   /** Ready for the next match, or not (#184): the host sees it in the roster. */
@@ -768,6 +784,8 @@ export class GuestLobby {
         if (!s || s.host !== peer) return;
         this.host = peer;
         this.state = s;
+        // the room's host answered our question: now it gets our token, and nobody else (#202)
+        if (this.introducedTo !== peer) this.sayHello(peer, true);
         this.onChange?.(s);
         return;
       }
@@ -787,7 +805,7 @@ export class GuestLobby {
         if (m.to === this.t.self) return this.onPass?.(m.to, true, tokens);
         // follow the new host, and say hello: it answers with the room as it runs it
         this.follow(m.to);
-        this.send(m.to, { k: 'hello', proto: PROTOCOL_VERSION, build: this.o.build, mobile: this.o.mobile, char: this.o.char >>> 0, token: this.o.token, ...(this.o.cell ? { cell: true } : {}) });
+        this.sayHello(m.to, true);
         this.onPass?.(m.to, false, []);
         return;
       }

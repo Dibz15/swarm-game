@@ -5,6 +5,7 @@ import { NetMatch } from '../src/net/match';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
 import { removeUnit, type World } from '../src/sim/world';
+import { decodeMsg, msgKind } from '../src/net/codec';
 
 /**
  * A whole room in one process, for lobby and match tests (#162, #164): a
@@ -38,9 +39,15 @@ export function room() {
   /** round trips set with `lag` (#190): messages on those links wait half of it each way */
   const lags = new Map<string, number>();
   const queue: { at: number; go: () => void }[] = [];
+  /** every hello sent, and its token (#202): who ever got whose */
+  const helloLog: { from: string; to: string; token: string }[] = [];
   const link = (id: string) => {
     const inner = hub.link(id);
     const send = (peer: string, bytes: Uint8Array) => {
+      if (msgKind(bytes) === 'hello') {
+        const m = decodeMsg(bytes);
+        if (m?.k === 'hello') helloLog.push({ from: id, to: peer, token: m.token });
+      }
       if (cuts.has(pair(id, peer))) return;
       const rtt = lags.get(pair(id, peer));
       if (!rtt) return inner.send(peer, bytes);
@@ -76,8 +83,12 @@ export function room() {
   };
   const giveUp = (a: string, b: string) => linkEvent(a, b, 'gone');
   /** after the newcomer's handlers are set: tell it who's already here */
+  /** newcomers meet the others latest first (#202): the host last, as real links can come up in any order */
+  let lastFirst = false;
+  const meetLatestFirst = (on: boolean) => (lastFirst = on);
   const arrived = (id: string) => {
-    for (const other of routers.keys()) if (other !== id) routers.get(id)!.transport.onPeer?.(other, true);
+    const others = [...routers.keys()].filter((o) => o !== id);
+    for (const other of lastFirst ? others.reverse() : others) routers.get(id)!.transport.onPeer?.(other, true);
   };
   const host = (o: Partial<{ prefs: SetupPrefs; char: number; build: string; mobile: boolean; id: string }> = {}) => {
     const id = o.id ?? 'H';
@@ -131,7 +142,7 @@ export function room() {
       else queue.splice(i, 1)[0].go();
     }
   };
-  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow, tokenOf, lag, flush, link, arrived };
+  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow, tokenOf, lag, flush, link, arrived, hellos: () => helloLog, meetLatestFirst };
 }
 
 export type Guest = ReturnType<ReturnType<typeof room>['guest']>;
