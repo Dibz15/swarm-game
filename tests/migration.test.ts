@@ -6,7 +6,7 @@ import { encodeMsg, msgKind } from '../src/net/codec';
 import { nudgeWorld, type DesyncReport } from '../src/net/desync';
 import { LOBBY_KINDS } from '../src/net/transport';
 import { DT } from '../src/sim/constants';
-import { play, prefs } from './rig';
+import { play, prefs, ROOM_KEY } from './rig';
 
 /** Every hash each peer reports from now on, by tick, and the longest wait each saw between new turns. */
 function watch(matches: Map<string, NetMatch>, clock: { now: number }) {
@@ -221,7 +221,8 @@ describe('hosting moves (#166)', () => {
       prefs: prefs(),
       seed: a.lobby.state!.seed,
       clock: () => rm.clock.now,
-      takeOver: { state: a.lobby.state!, connected: matches.get('A')!.livePeers() },
+      roomKey: ROOM_KEY,
+      takeOver: { state: a.lobby.state!, connected: matches.get('A')!.livePeers(), setup: matches.get('A')!.session.setup },
     });
     b.lobby.follow('A');
     room.announce();

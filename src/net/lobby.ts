@@ -6,6 +6,7 @@ import type { MatchSetup } from '../sim/setup';
 import { decodeMsg, encodeMsg } from './codec';
 import type { MatchPeer } from './match';
 import { MAX_LOBBY, MAX_SEATS, PROTOCOL_VERSION, type Msg } from './protocol';
+import { isSeal, seal } from './seal';
 import type { Transport } from './transport';
 
 /**
@@ -23,7 +24,11 @@ export type SeatRow =
   | { k: 'open'; team: number }
   | { k: 'closed'; team: number }
   | { k: 'bot'; team: number; difficulty: number; personality: Personality | 'random' }
-  | { k: 'human'; team: number; peer: string; char: number; mobile: boolean; ready?: boolean; cell?: boolean };
+  /**
+   * `seal`: the player's seat token, sealed (#192): whoever hosts the room
+   * checks a rejoining player against it, without ever learning the token
+   */
+  | { k: 'human'; team: number; peer: string; char: number; mobile: boolean; ready?: boolean; cell?: boolean; seal?: string };
 
 export interface LobbyMap {
   size: MapSize;
@@ -113,12 +118,19 @@ export function parseLobby(json: string): LobbyState | null {
       o.rows.length === MAX_SEATS &&
       o.rows.every(validRow) &&
       BOT_SECS.includes(o.botSecs) &&
-      (o.runner === undefined || (typeof o.runner === 'string' && o.runner.length <= 64));
+      (o.runner === undefined || (typeof o.runner === 'string' && o.runner.length <= 64)) &&
+      uniqueSeals(o.rows);
     if (!ok) return null;
     return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs, ...(o.runner ? { runner: o.runner } : {}) };
   } catch {
     return null;
   }
+}
+
+/** one token, one seat (#192): no two rows share a seal */
+function uniqueSeals(rows: SeatRow[]): boolean {
+  const seals = rows.flatMap((r) => (r.k === 'human' && r.seal ? [r.seal] : []));
+  return new Set(seals).size === seals.length;
 }
 
 function validRow(r: SeatRow): boolean {
@@ -130,7 +142,7 @@ function validRow(r: SeatRow): boolean {
     case 'bot':
       return [0, 1, 2].includes(r.difficulty) && (r.personality === 'random' || PERSONALITIES.includes(r.personality));
     case 'human':
-      return typeof r.peer === 'string' && r.peer.length <= 64 && Number.isInteger(r.char) && r.char >= 0 && r.char <= 0xffffffff && typeof r.mobile === 'boolean' && (r.ready === undefined || typeof r.ready === 'boolean') && (r.cell === undefined || typeof r.cell === 'boolean');
+      return typeof r.peer === 'string' && r.peer.length <= 64 && Number.isInteger(r.char) && r.char >= 0 && r.char <= 0xffffffff && typeof r.mobile === 'boolean' && (r.ready === undefined || typeof r.ready === 'boolean') && (r.cell === undefined || typeof r.cell === 'boolean') && (r.seal === undefined || isSeal(r.seal));
     default:
       return false;
   }
@@ -198,6 +210,11 @@ export interface HostLobbyOptions {
   /** our own seat token for this room: passed on with hosting, so a reload gets back in (#184) */
   ownToken?: string;
   /**
+   * The room's id and secret, from its link (#192): every host seals seat
+   * tokens with it, so all of them seal the same token the same way.
+   */
+  roomKey: string;
+  /**
    * Taking over a room whose host left mid-match (#166): its last state (the
    * rows, map and settings), and the players still connected.
    */
@@ -206,9 +223,13 @@ export interface HostLobbyOptions {
     connected: string[];
     /** the seat tokens the room has seen (#184: passed on with hosting in the lobby) */
     tokens?: string[];
+    /** the match under way (#192), to hand a player who comes back to it: required when `state` is mid-match */
+    setup?: MatchSetup;
     /**
      * We ran this room before a reload, and nobody took it over (#184): the
-     * old host's seat is ours again, on our new connection.
+     * old host's seat is ours again, on our new connection. Only ever before
+     * a match: a host that reloads mid-match comes back as a player, and
+     * gets its seat back by its seal like anyone else (#192).
      */
     reclaim?: boolean;
   };
@@ -249,13 +270,6 @@ export class HostLobby {
   private readonly t: Transport;
   private readonly o: HostLobbyOptions;
   private readonly connected = new Set<string>();
-  /**
-   * Each guest's seat token (#164), never sent to anyone: a page reloaded
-   * mid-match has a new peer id, and proves its seat with the token alone.
-   */
-  private readonly tokens = new Map<string, string>();
-  /** the tokens of the match under way, by seat, frozen at Start */
-  private seatTokens = new Map<number, string>();
   /** the match under way, for a rejoining player */
   private setupJson = '';
   private waiting: { go: HostGo; until: number; ready: Set<string> } | null = null;
@@ -271,7 +285,7 @@ export class HostLobby {
     const rows: SeatRow[] = Array.from({ length: MAX_SEATS }, (_, i) => ({ k: 'open', team: i }) as SeatRow);
     const me = Math.min(MAX_SEATS - 1, Math.max(0, p.color));
     // the room opens empty (#184): every seat but the host's is free for friends; bots come later, by "Fill with bots"
-    rows[me] = { k: 'human', team: 0, peer: t.self, char: o.char >>> 0, mobile: !!o.mobile, ...(o.cell ? { cell: true } : {}) };
+    rows[me] = { k: 'human', team: 0, peer: t.self, char: o.char >>> 0, mobile: !!o.mobile, ...(o.cell ? { cell: true } : {}), ...this.sealOf(o.ownToken) };
     this.state = {
       host: t.self,
       phase: 'lobby',
@@ -284,15 +298,18 @@ export class HostLobby {
       botSecs: 60,
     };
     if (o.takeOver) {
-      // the room as it was, run from here now; seat tokens stayed with the old host
+      // the room as it was, run from here now; its rows carry everyone's seals, so a reload still gets back in (#192)
       const old = o.takeOver.state.host;
+      // a room in a match always knows the match, to hand it to a player who comes back (#192)
+      if (o.takeOver.state.phase === 'playing' && (o.takeOver.reclaim || !o.takeOver.setup)) throw new Error(o.takeOver.reclaim ? 'lobby: a reload reclaims a room only before a match' : 'lobby: taking over a match needs its setup');
       this.state = { ...structuredClone(o.takeOver.state), host: t.self };
       if (this.state.phase === 'starting') this.state.phase = 'lobby';
       for (const peer of o.takeOver.connected) this.connected.add(peer);
       for (const tok of o.takeOver.tokens ?? []) this.seenTokens.add(tok);
+      if (this.state.phase === 'playing') this.setupJson = JSON.stringify(o.takeOver.setup);
       if (o.takeOver.reclaim) {
         // back from a reload: our seat again, and nobody else is here yet
-        this.state.rows = this.state.rows.map((r) => (r.k !== 'human' ? r : r.peer === old ? { ...r, peer: t.self, ready: undefined } : { k: 'open', team: r.team }));
+        this.state.rows = this.state.rows.map((r) => (r.k !== 'human' ? r : r.peer === old ? { ...r, peer: t.self, ready: undefined, ...this.sealOf(o.ownToken) } : { k: 'open', team: r.team }));
       }
     }
     t.onPeer = (peer, up) => {
@@ -417,7 +434,6 @@ export class HostLobby {
     this.edit(() => (this.state.phase = 'playing'));
     const json = JSON.stringify(setup);
     this.setupJson = json;
-    this.seatTokens = new Map();
     const seats: HostGo['seats'] = [];
     const ready = new Set<string>();
     this.state.rows.forEach((r, i) => {
@@ -428,8 +444,6 @@ export class HostLobby {
         seats.push({ seat: i, team, peer: null, mobile: r.mobile, ...cell });
         return;
       }
-      const token = this.tokens.get(r.peer);
-      if (token) this.seatTokens.set(i, token);
       seats.push({ seat: i, team, peer: r.peer, mobile: r.mobile, ...cell });
       this.send(r.peer, { k: 'start', setup: json, seat: i, tick: 0 });
     });
@@ -486,7 +500,7 @@ export class HostLobby {
       this.state.phase = 'lobby';
       if (me >= 0) this.state.rows[me] = { k: 'open', team: this.state.rows[me].team };
     });
-    const tokens = JSON.stringify([...this.seenTokens, ...this.tokens.values(), ...(this.o.ownToken ? [this.o.ownToken] : [])].filter((v, i, a) => a.indexOf(v) === i));
+    const tokens = JSON.stringify([...new Set([...this.seenTokens, ...(this.o.ownToken ? [this.o.ownToken] : [])])]);
     for (const r of this.state.rows) if (r.k === 'human') this.send(r.peer, { k: 'pass', to, tokens: r.peer === to && tokens.length <= MAX_LOBBY ? tokens : '' });
     return to;
   }
@@ -516,15 +530,13 @@ export class HostLobby {
   private hello(peer: string, m: Extract<Msg, { k: 'hello' }>): void {
     this.connected.add(peer);
     if (m.proto !== PROTOCOL_VERSION || m.build !== this.o.build) return this.send(peer, { k: 'refuse', reason: 'This room runs a different version of the game. Refresh the page to update, then open the link again.' });
-    if (m.token) this.tokens.set(peer, m.token);
     if (seatOf(this.state, peer) >= 0) return this.send(peer, { k: 'lobby', state: this.json() });
+    // one token, one seat (#192): a seat whose seal this token opens is this player's, on a new connection (a reload, a duplicated tab)
+    const s = seal(m.token, this.o.roomKey);
+    const mine = s ? this.state.rows.findIndex((r) => r.k === 'human' && r.seal === s) : -1;
+    if (mine >= 0) return this.rebind(peer, mine);
     if (this.state.phase === 'starting') return this.send(peer, { k: 'refuse', reason: 'The match is starting. Ask the host to let you in for the next one.' });
-    if (this.state.phase !== 'lobby') {
-      // a player back from a reload proves their seat with its token (#164)
-      const seat = m.token ? [...this.seatTokens].find(([, t]) => t === m.token)?.[0] : undefined;
-      if (seat === undefined || this.state.rows[seat]?.k !== 'human') return this.send(peer, { k: 'refuse', reason: 'This match has already started.' });
-      return this.rejoin(peer, seat);
-    }
+    if (this.state.phase === 'playing') return this.send(peer, { k: 'refuse', reason: 'This match has already started.' });
     // a closed room still lets back in anyone who sat here before (a reload, #184)
     if (this.state.locked && !(m.token && this.seenTokens.has(m.token))) return this.send(peer, { k: 'refuse', reason: 'The host has closed this room to new players. Ask them to reopen it.' });
     // an open seat, or else a bot's: bots step aside for people (#184)
@@ -532,22 +544,39 @@ export class HostLobby {
     if (seat < 0) seat = this.state.rows.findIndex((r) => r.k === 'bot');
     if (seat < 0) return this.send(peer, { k: 'refuse', reason: 'This room is full.' });
     if (m.token) this.seenTokens.add(m.token);
-    this.edit(() => (this.state.rows[seat] = { k: 'human', team: this.state.rows[seat].team, peer, char: this.freeChar(m.char >>> 0, -1), mobile: m.mobile, ...(m.cell ? { cell: true } : {}) }));
+    this.edit(() => (this.state.rows[seat] = { k: 'human', team: this.state.rows[seat].team, peer, char: this.freeChar(m.char >>> 0, -1), mobile: m.mobile, ...(m.cell ? { cell: true } : {}), ...(s ? { seal: s } : {}) }));
   }
 
-  /** Seat `seat`'s player is back on a new connection: hand them the match, and the seat. */
-  private rejoin(peer: string, seat: number): void {
+  /** `{ seal }` for a token, or nothing for none (#192) */
+  private sealOf(token: string | undefined): { seal?: string } {
+    const s = seal(token ?? '', this.o.roomKey);
+    return s ? { seal: s } : {};
+  }
+
+  /**
+   * Seat `seat`'s player is here on a new connection (#164, #192): a reload,
+   * or the same page open twice, where the newer one has the seat. Mid-match
+   * they get the match too.
+   */
+  private rebind(peer: string, seat: number): void {
     const row = this.state.rows[seat] as Extract<SeatRow, { k: 'human' }>;
     const old = row.peer;
+    const playing = this.state.phase === 'playing';
+    // our own seat: this room is already open here, in this tab
+    if (old === this.t.self) return this.send(peer, { k: 'refuse', reason: 'You’re already hosting this room in another tab or window.' });
     this.edit(() => {
-      this.state.rows[seat] = { ...row, peer };
+      this.state.rows[seat] = playing ? { ...row, peer } : { ...row, peer, ready: undefined };
       if (this.state.runner === old) this.state.runner = peer;
     });
-    this.onRejoin?.(seat, peer, old);
-    const runner = this.runnerOf?.() ?? null;
-    this.send(peer, { k: 'start', setup: this.setupJson, seat, tick: 1, ...(runner && runner !== this.t.self ? { runner } : {}) });
-    // the same seat open twice (a duplicated tab): the newer one has it
-    if (old !== peer && this.connected.has(old)) this.send(old, { k: 'refuse', reason: 'You joined this match again from another tab or window, so this one has left it.' });
+    if (playing) {
+      this.onRejoin?.(seat, peer, old);
+      const runner = this.runnerOf?.() ?? null;
+      this.send(peer, { k: 'start', setup: this.setupJson, seat, tick: 1, ...(runner && runner !== this.t.self ? { runner } : {}) });
+    }
+    if (this.connected.has(old)) {
+      const what = playing ? 'joined this match' : 'opened this room';
+      this.send(old, { k: 'refuse', reason: `You ${what} again from another tab or window, so this one has left it.` });
+    }
   }
 
   private pick(peer: string, seat: number, team: number, char: number): void {

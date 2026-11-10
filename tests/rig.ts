@@ -18,6 +18,9 @@ export const FRAME = 1000 / 60;
 
 export const prefs = (over: Partial<SetupPrefs> = {}): SetupPrefs => ({ ...loadPrefs(), size: 'small', color: 0, teams: false, bots: [], ...over });
 
+/** the room's id and secret, as every host of it has them from the link (#192) */
+export const ROOM_KEY = 'testroom.s3cret';
+
 /** a guest's seat token: the same for every reload of that player */
 const tokenOf = (id: string) => `token-${id.replace(/\d+$/, '')}`;
 
@@ -79,7 +82,7 @@ export function room() {
   const host = (o: Partial<{ prefs: SetupPrefs; char: number; build: string; mobile: boolean; id: string }> = {}) => {
     const id = o.id ?? 'H';
     const r = link(id);
-    const lobby = new HostLobby(r.view(LOBBY_KINDS), { build: o.build ?? 'test', char: o.char ?? 1, prefs: o.prefs ?? prefs(), seed: 'ember-tide-7', clock: () => clock.now, readyMs: 5000, mobile: o.mobile, ownToken: tokenOf(id) });
+    const lobby = new HostLobby(r.view(LOBBY_KINDS), { build: o.build ?? 'test', char: o.char ?? 1, prefs: o.prefs ?? prefs(), seed: 'ember-tide-7', clock: () => clock.now, readyMs: 5000, mobile: o.mobile, ownToken: tokenOf(id), roomKey: ROOM_KEY });
     arrived(id);
     return { r, lobby };
   };
@@ -166,10 +169,33 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
   }
   expect(go).not.toBeNull();
   add('H', NetMatch.host(h.r.view(MATCH_KINDS), go!, { clock: () => rm.clock.now, heartbeat: false, gzip: false, net: { gzipSnaps: false } }));
-  // a guest back from a reload: its seat answers to its new connection (main.ts does the same)
-  h.lobby.onRejoin = (seat, peer) => matches.get('H')?.rebind(seat, peer);
-  // who runs the match now, for a player rejoining it (#190; main.ts does the same)
-  h.lobby.runnerOf = () => matches.get('H')?.runnerPeer ?? null;
+  /** the room's lobby now, and whose page runs it: H's, until hosting moves (`takeRoom`, #192) */
+  let owner = { id: 'H', lobby: h.lobby };
+  const wire = (id: string, lobby: HostLobby) => {
+    // a guest back from a reload: its seat answers to its new connection (main.ts does the same)
+    lobby.onRejoin = (seat, peer) => matches.get(id)?.rebind(seat, peer);
+    // who runs the match now, for a player rejoining it (#190; main.ts does the same)
+    lobby.runnerOf = () => matches.get(id)?.runnerPeer ?? null;
+    owner = { id, lobby };
+  };
+  wire('H', h.lobby);
+  /**
+   * Hosting moved to `id` mid-match (#166): what main.ts does on `onOwner`.
+   * Its guest lobby gives way to a host lobby run from the state it last saw
+   * (seals and all, #192), and everyone else's lobby follows it.
+   */
+  const takeRoom = (id: string): HostLobby => {
+    const g = [...gs, ...extra].find((x) => x.id === id)!;
+    const st = g.lobby.state!;
+    g.lobby.close();
+    const lobby = new HostLobby(g.r.view(LOBBY_KINDS), { build: 'test', char: 0, prefs: prefs(), seed: st.seed, clock: () => rm.clock.now, ownToken: tokenOf(id), roomKey: ROOM_KEY, takeOver: { state: st, connected: matches.get(id)!.livePeers(), setup: matches.get(id)!.session.setup } });
+    wire(id, lobby);
+    for (const x of [...gs, ...extra]) if (x.id !== id && matches.has(x.id)) x.lobby.follow(id);
+    lobby.announce();
+    return lobby;
+  };
+  /** players who came back on a new page (`rejoin`) */
+  const extra: Guest[] = [];
   /** peers that died: no frames, nothing in or out, and no word from their transport */
   const dead = new Set<string>();
   const kill = (id: string) => {
@@ -210,7 +236,8 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
     if (s) {
       add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.runner ?? s.host, { clock: () => rm.clock.now, resume: s.tick > 0, owner: seatOf(g.lobby.state!, g.lobby.state!.host), net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), runnerSeat: pinOf(g.lobby.state!), heartbeat: false, gzip: false }));
       // as main.ts does on the lobby's change: everyone's list of who could host has the new peer id
-      for (const m of matches.values()) m.updatePeers(matchPeers(h.lobby.state, s.setup));
+      for (const m of matches.values()) m.updatePeers(matchPeers(owner.lobby.state, s.setup));
+      extra.push(g);
     }
     return g;
   };
@@ -219,7 +246,7 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
     quit(id);
     return rejoin(id, newId);
   };
-  return { ...rm, h, gs, matches, run, quit, rejoin, reload, add, kill, dead, orders };
+  return { ...rm, h, gs, matches, run, quit, rejoin, reload, add, kill, dead, orders, takeRoom, owner: () => owner };
 }
 
 /** The host's "Runs the match" choice, as a seat (#190; main.ts does the same) */
