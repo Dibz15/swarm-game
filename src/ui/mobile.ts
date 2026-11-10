@@ -87,3 +87,12 @@ export function shouldShowMobileNotice(): boolean {
 export function markMobileNoticeSeen(): void {
   save(NOTICE_KEY, '1');
 }
+
+/**
+ * On mobile data, where the browser says (#190: such a player runs the match
+ * only when nobody better placed can). Most browsers don't say: false.
+ */
+export function onCellData(): boolean {
+  const c = (navigator as Navigator & { connection?: { type?: string } }).connection;
+  return c?.type === 'cellular';
+}

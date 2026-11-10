@@ -231,16 +231,17 @@ describe('lobby to match (#162)', () => {
     run(3000);
     // B still hears the host: A alone is no majority
     expect([...leaders.keys()]).toEqual([]);
-    expect(matches.get('H')!.host).toBe(true);
-    // the host really leaves: A and B both miss it, and A (first in seat order) takes over
+    expect(matches.get('H')!.runner).toBe(true);
+    // the host really leaves: A and B both miss it, and B takes over: the host's ranking (#190) put A last, its link to the host was down
     matches.get('H')!.close();
     matches.delete('H');
     leave('H');
     run(4000);
-    const seatA = matches.get('A')!.session.localSeat;
-    expect(matches.get('A')!.host).toBe(true);
-    expect(leaders.get('A')).toEqual([seatA]);
-    expect(leaders.get('B')).toEqual([seatA]);
+    const seatB = matches.get('B')!.session.localSeat;
+    expect(matches.get('B')!.runner).toBe(true);
+    expect(matches.get('B')!.host).toBe(true);
+    expect(leaders.get('A')).toEqual([seatB]);
+    expect(leaders.get('B')).toEqual([seatB]);
     run(5000);
     const ticks = [matches.get('A')!, matches.get('B')!].map((m) => m.session.world.tick);
     expect(Math.abs(ticks[0] - ticks[1])).toBeLessThan(10);

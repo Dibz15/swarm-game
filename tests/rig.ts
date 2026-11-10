@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { COUNTDOWN_MS, GuestLobby, HostLobby, matchPeers, type HostGo, type StartInfo } from '../src/net/lobby';
+import { COUNTDOWN_MS, GuestLobby, HostLobby, matchPeers, seatOf, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
@@ -32,9 +32,19 @@ export function room() {
   /** links that are down: nothing gets through either way, as when WebRTC drops */
   const cuts = new Set<string>();
   const pair = (a: string, b: string) => [a, b].sort().join('|');
+  /** round trips set with `lag` (#190): messages on those links wait half of it each way */
+  const lags = new Map<string, number>();
+  const queue: { at: number; go: () => void }[] = [];
   const link = (id: string) => {
     const inner = hub.link(id);
-    const t: Transport = { ...inner, send: (peer, bytes) => void (cuts.has(pair(id, peer)) || inner.send(peer, bytes)), close: () => inner.close() };
+    const send = (peer: string, bytes: Uint8Array) => {
+      if (cuts.has(pair(id, peer))) return;
+      const rtt = lags.get(pair(id, peer));
+      if (!rtt) return inner.send(peer, bytes);
+      // in order per link: never before what was sent earlier
+      queue.push({ at: clock.now + rtt / 2, go: () => cuts.has(pair(id, peer)) || inner.send(peer, bytes) });
+    };
+    const t: Transport = { ...inner, send, close: () => inner.close() };
     Object.defineProperty(t, 'onMessage', { get: () => inner.onMessage, set: (f) => (inner.onMessage = f) });
     Object.defineProperty(t, 'onPeer', { get: () => inner.onPeer, set: (f) => (inner.onPeer = f) });
     const r = new Router(t);
@@ -109,7 +119,16 @@ export function room() {
     }
     return setup;
   };
-  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow, tokenOf };
+  /** The link between `a` and `b` takes `rttMs` there and back (#190). */
+  const lag = (a: string, b: string, rttMs: number) => lags.set(pair(a, b), rttMs);
+  /** Deliver what's due on lagged links. */
+  const flush = () => {
+    for (let i = 0; i < queue.length; ) {
+      if (queue[i].at > clock.now) i++;
+      else queue.splice(i, 1)[0].go();
+    }
+  };
+  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow, tokenOf, lag, flush };
 }
 
 export type Guest = ReturnType<ReturnType<typeof room>['guest']>;
@@ -118,7 +137,7 @@ export type Guest = ReturnType<ReturnType<typeof room>['guest']>;
  * host + guests (two by default, and a bot) through the lobby into running
  * NetMatches, all on one fake clock. `mobile`: which of them play on phones.
  */
-export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: string[]; bot?: boolean } = {}) {
+export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: string[]; bot?: boolean; runner?: string } = {}) {
   const rm = room();
   const mobile = new Set(o.mobile ?? []);
   const bots = o.bot === false ? [] : [{ faction: 5, difficulty: 1, personality: 'expander' as const, team: 1 }];
@@ -127,6 +146,7 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
   for (const b of bots) h.lobby.setRow(b.faction, { k: 'bot', team: b.team, difficulty: b.difficulty, personality: b.personality });
   if (o.botSecs) h.lobby.setBotSecs(o.botSecs);
   const gs = (o.guests ?? ['A', 'B']).map((id) => rm.guest(id, { mobile: mobile.has(id) }));
+  if (o.runner) h.lobby.setRunner(o.runner);
   let go: HostGo | null = null;
   h.lobby.onGo = (g) => (go = g);
   const setup = rm.startNow(h)!;
@@ -141,13 +161,15 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
     const s = g.start()!;
     expect(s.setup).toEqual(setup);
     expect(s.seat).toBe(g.lobby.mySeat);
-    add(g.id, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), botMs: g.lobby.state!.botSecs * 1000, heartbeat: false, gzip: false }));
+    add(g.id, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), botMs: g.lobby.state!.botSecs * 1000, runnerSeat: pinOf(g.lobby.state!), heartbeat: false, gzip: false }));
     g.lobby.ready();
   }
   expect(go).not.toBeNull();
   add('H', NetMatch.host(h.r.view(MATCH_KINDS), go!, { clock: () => rm.clock.now, heartbeat: false, gzip: false, net: { gzipSnaps: false } }));
   // a guest back from a reload: its seat answers to its new connection (main.ts does the same)
-  h.lobby.onRejoin = (seat, peer) => matches.get('H')!.rebind(seat, peer);
+  h.lobby.onRejoin = (seat, peer) => matches.get('H')?.rebind(seat, peer);
+  // who runs the match now, for a player rejoining it (#190; main.ts does the same)
+  h.lobby.runnerOf = () => matches.get('H')?.runnerPeer ?? null;
   /** peers that died: no frames, nothing in or out, and no word from their transport */
   const dead = new Set<string>();
   const kill = (id: string) => {
@@ -160,6 +182,7 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
   const run = (ms: number, frozen: string[] = []) => {
     for (const end = rm.clock.now + ms; rm.clock.now < end; ) {
       rm.clock.now += FRAME;
+      rm.flush();
       for (const [id, m] of matches) {
         if (frozen.includes(id) || dead.has(id)) continue;
         const w = m.session.world;
@@ -185,7 +208,7 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
     const g = rm.guest(newId, { token });
     const s = g.start();
     if (s) {
-      add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.host, { clock: () => rm.clock.now, resume: s.tick > 0, net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), heartbeat: false, gzip: false }));
+      add(newId, NetMatch.guest(g.r.view(MATCH_KINDS), s.setup, s.seat, s.runner ?? s.host, { clock: () => rm.clock.now, resume: s.tick > 0, owner: seatOf(g.lobby.state!, g.lobby.state!.host), net: { gzipSnaps: false }, peers: matchPeers(g.lobby.state!, s.setup), runnerSeat: pinOf(g.lobby.state!), heartbeat: false, gzip: false }));
       // as main.ts does on the lobby's change: everyone's list of who could host has the new peer id
       for (const m of matches.values()) m.updatePeers(matchPeers(h.lobby.state, s.setup));
     }
@@ -197,6 +220,12 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
     return rejoin(id, newId);
   };
   return { ...rm, h, gs, matches, run, quit, rejoin, reload, add, kill, dead, orders };
+}
+
+/** The host's "Runs the match" choice, as a seat (#190; main.ts does the same) */
+function pinOf(st: LobbyState): number | undefined {
+  const s = st.runner ? seatOf(st, st.runner) : -1;
+  return s >= 0 ? s : undefined;
 }
 
 /** Knock a faction out: its dots gone, its nests unclaimed (the sim then marks it eliminated). */

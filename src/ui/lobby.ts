@@ -138,6 +138,8 @@ export interface LobbyHandlers {
     fillBots: () => void;
     /** Quick match: a new random map at each Start (#184) */
     randomMap: (on: boolean) => void;
+    /** "Runs the match" (#190): a player by peer id, or null for Auto */
+    runner: (peer: string | null) => void;
   };
 }
 
@@ -212,6 +214,10 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
                 ? `<div class="field">
               <label>If a player drops <small>their colour idles, then an Easy bot plays it until they're back</small></label>
               <select data-a="botsecs">${BOT_SECS.map((s) => `<option value="${s}">Easy bot after ${s < 60 ? `${s} s` : `${s / 60} min`}</option>`).join('')}</select>
+            </div>
+            <div class="field">
+              <label>Runs the match <small>whose browser keeps the match’s clock. You keep pause, restart and the room either way</small></label>
+              <select data-a="runner"></select>
             </div>`
                 : ''
             }
@@ -257,6 +263,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
   const teamsBox = $<HTMLInputElement>('[data-a=teams]');
   const randomBox = $<HTMLInputElement>('[data-a=random]');
   const botBox = m.querySelector('[data-a=botsecs]') as HTMLSelectElement | null;
+  const runnerBox = m.querySelector('[data-a=runner]') as HTMLSelectElement | null;
   const toasts = $<HTMLDivElement>('.toasts');
   const countdown = $<HTMLDivElement>('.countdown');
   const fail = $<HTMLDivElement>('.lobby-fail');
@@ -348,6 +355,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
   teamsBox.addEventListener('change', () => h.host?.teams(teamsBox.checked));
   randomBox.addEventListener('change', () => h.host?.randomMap(randomBox.checked));
   botBox?.addEventListener('change', () => h.host?.botSecs(Number(botBox.value) as BotSecs));
+  runnerBox?.addEventListener('change', () => h.host?.runner(runnerBox.value || null));
   seedInput.addEventListener('change', () => h.host?.seed(seedInput.value));
   m.querySelector('[data-a=dice]')?.addEventListener('click', () => {
     seedInput.value = randomSeed();
@@ -539,6 +547,13 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
     seedInput.readOnly = !isHost || s.randomMap;
     teamsBox.checked = s.teams;
     if (botBox && document.activeElement !== botBox) botBox.value = String(s.botSecs);
+    if (runnerBox && document.activeElement !== runnerBox) {
+      // Auto, then each player in the room
+      const opts = [`<option value="">Auto: the best-connected player</option>`];
+      for (const r of s.rows) if (r.k === 'human') opts.push(`<option value="${esc(r.peer)}">${esc(playerCharacter(r.char).name)}${r.peer === me ? ' (you)' : ''}</option>`);
+      runnerBox.innerHTML = opts.join('');
+      runnerBox.value = s.runner && s.rows.some((r) => r.k === 'human' && r.peer === s.runner) ? s.runner : '';
+    }
     if (document.activeElement !== seedInput) seedInput.value = s.seed;
     if (s.phase === 'starting') startCount();
     else stopCount();
