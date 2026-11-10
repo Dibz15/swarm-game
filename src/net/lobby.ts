@@ -561,8 +561,8 @@ export class HostLobby {
   private hello(peer: string, m: Extract<Msg, { k: 'hello' }>): void {
     this.connected.add(peer);
     if (m.proto !== PROTOCOL_VERSION || m.build !== this.o.build) return this.send(peer, { k: 'refuse', reason: 'This room runs a different version of the game. Refresh the page to update, then open the link again.' });
-    // "who runs this room?" (#202): we do. The hello with the token, to us alone, decides the rest
-    if (m.query) return this.send(peer, { k: 'host' });
+    // "who runs this room?" (#202): we do, and every other player says so too (#208). The hello with the token, to us alone, decides the rest
+    if (m.query) return this.send(peer, { k: 'host', peer: this.t.self });
     if (seatOf(this.state, peer) >= 0) return this.send(peer, { k: 'lobby', state: this.json() });
     // one token, one seat (#192): a seat whose seal this token opens is this player's, on a new connection (a reload, a duplicated tab)
     const s = seal(m.token, this.o.roomKey);
@@ -691,7 +691,23 @@ export interface GuestLobbyOptions {
    * no question first
    */
   told?: readonly string[];
+  /** how long to hear answers to "who hosts?" after the last link came up (#208); `ASK_MS` */
+  askMs?: number;
 }
+
+/**
+ * How long a page that doesn't know who hosts listens to the answers before
+ * it decides (#208), from the last new peer that came up. Links come up one
+ * by one, so "everyone has answered" could be just the first peer, and that
+ * may be the one lying. A claim someone else backs is decided after this; a
+ * claim only the claimer makes (just the host and us, or a liar whose link
+ * came up first) waits `LONE_ASKS` times as long, for honest players behind
+ * slower links; after `CAP_ASKS` from the first question, new peers no
+ * longer hold the decision back.
+ */
+export const ASK_MS = 500;
+export const LONE_ASKS = 4;
+const CAP_ASKS = 12;
 
 export class GuestLobby {
   state: LobbyState | null = null;
@@ -721,23 +737,59 @@ export class GuestLobby {
   private readonly told: Set<string>;
   /** we told a peer our token (#202): the app keeps the list across a reload */
   onTold: ((peer: string) => void) | null = null;
+  /** "who hosts?" (#208): each answerer, and whom it named, while we don't know */
+  private readonly votes = new Map<string, string>();
+  /** everyone who has answered since we started asking, gone or not: a majority is of them all */
+  private readonly heard = new Set<string>();
+  /** the peers we asked, to ask again when the answers don't agree */
+  private readonly asked = new Set<string>();
+  /** peers that turned us away before we knew who hosts: if most name one of them, that's the answer */
+  private readonly refusals = new Map<string, string>();
+  /** every peer that has come up: a link coming back isn't a new voice to wait for */
+  private readonly seen = new Set<string>();
+  /** the last new peer, or the last time we asked again: the answers are counted from here */
+  private quietSince: number;
+  /** our first question, -1 before it: new peers stop holding the decision back `CAP_ASKS` after */
+  private firstAsk = -1;
+  /** the host left (its link went away): we don't vouch for it to newcomers */
+  private hostGone = false;
 
   constructor(t: Transport, o: GuestLobbyOptions) {
     this.t = t;
     this.o = o;
     this.since = o.clock();
     this.told = new Set(o.told ?? []);
+    this.quietSince = this.since;
     t.onPeer = (peer, up) => {
-      // a new peer may be the host: ask who is, without our token (#202); whoever hosts says so, and gets it then.
-      // One we told before knows it already: straight to it. The host reconnecting in the lobby gets told again
-      // who we are (it may have freed our seat)
-      if (up && !this.host) this.sayHello(peer, this.told.has(peer));
-      else if (up && peer === this.host && this.state?.phase === 'lobby') this.sayHello(peer, true);
-      if (!up && peer === this.host) this.onNoHost?.(this.dropped ? 'lost' : 'left');
+      // a new peer may be the host: ask who is, without our token (#202); the players' answers decide who gets it
+      // (#208). One we told before knows it already: straight to it. The host reconnecting in the lobby gets told
+      // again who we are (it may have freed our seat)
+      if (up && !this.host) {
+        const now = o.clock();
+        if (this.firstAsk < 0) this.firstAsk = now;
+        // only a new voice restarts the wait: a link that flaps doesn't, nor does anyone once we've waited long enough
+        if (!this.seen.has(peer) && now - this.firstAsk < this.askMs * CAP_ASKS) this.quietSince = now;
+        if (this.told.has(peer)) this.sayHello(peer, true);
+        else {
+          this.asked.add(peer);
+          this.sayHello(peer, false);
+        }
+      } else if (up && peer === this.host) {
+        this.hostGone = false;
+        if (this.state?.phase === 'lobby') this.sayHello(peer, true);
+      }
+      if (up) this.seen.add(peer);
+      // a voter whose link drops keeps its vote: honest players dropping mustn't leave the rest a majority
+      if (!up) this.asked.delete(peer);
+      if (!up && peer === this.host) {
+        this.hostGone = true;
+        this.onNoHost?.(this.dropped ? 'lost' : 'left');
+      }
     };
     t.onLink = (peer, state) => {
       if (peer !== this.host) return;
       this.dropped = state !== 'back';
+      if (state === 'back') this.hostGone = false;
       if (state !== 'gone') this.onHostLink?.(state);
     };
     t.onMessage = (peer, bytes) => {
@@ -758,12 +810,13 @@ export class GuestLobby {
   follow(host: string): void {
     this.host = host;
     this.dropped = false;
+    this.hostGone = false;
   }
 
   /**
    * Who we are (#162). With our seat token only to the peer that runs the
    * room (#202): a page that doesn't know who that is yet asks everyone
-   * without it, and introduces itself to whoever answers with the room.
+   * without it, and introduces itself to the peer most of them name (#208).
    */
   private sayHello(peer: string, withToken: boolean): void {
     const o = this.o;
@@ -789,34 +842,96 @@ export class GuestLobby {
   }
 
   update(): void {
+    if (this.decide() === 'split') {
+      // the answers don't agree (a tie, or a host nobody else names), and we've heard them out: ask again (#208)
+      this.votes.clear();
+      this.quietSince = this.o.clock();
+      for (const p of this.asked) this.sayHello(p, false);
+    }
     if (!this.host && !this.gaveUp && this.o.clock() - this.since > (this.o.hostMs ?? 15000)) {
       this.gaveUp = true;
+      this.forgetVotes();
       this.onNoHost?.('none');
     }
   }
 
+  private get askMs(): number {
+    return this.o.askMs ?? ASK_MS;
+  }
+
+  /**
+   * Whom most players name as host (#208), once we've heard them out: the
+   * peer that a strict majority of everyone who answered names, and that
+   * names itself. It gets our token, and nobody else; or, if it turned us
+   * away, we're turned away. `split`: heard out, and no such peer.
+   */
+  private decide(): 'host' | 'wait' | 'split' {
+    if (this.host) return 'host';
+    if (this.votes.size === 0) return 'wait';
+    const quiet = this.o.clock() - this.quietSince;
+    const count = new Map<string, number>();
+    for (const x of this.votes.values()) count.set(x, (count.get(x) ?? 0) + 1);
+    const won = [...count].find(([x, n]) => n * 2 > this.heard.size && this.votes.get(x) === x);
+    if (!won) return quiet >= this.askMs * LONE_ASKS ? 'split' : 'wait';
+    // backed by someone else, or only by itself: a lone claim waits longer for the others to speak up
+    const [host, n] = won;
+    if (quiet < this.askMs * (n >= 2 ? 1 : LONE_ASKS)) return 'wait';
+    const refused = this.refusals.get(host);
+    this.host = host;
+    this.forgetVotes();
+    if (refused !== undefined) this.onRefused?.(refused);
+    else this.sayHello(host, true);
+    return 'host';
+  }
+
+  private forgetVotes(): void {
+    this.votes.clear();
+    this.heard.clear();
+    this.asked.clear();
+    this.refusals.clear();
+  }
+
+  /** `from` says `named` hosts this room (#208) */
+  private vote(from: string, named: string): void {
+    if (this.host || this.gaveUp) return;
+    this.votes.set(from, named);
+    this.heard.add(from);
+    this.decide();
+  }
+
   private receive(peer: string, m: Msg): void {
+    // someone asks who hosts (#208): a seated player says whom it follows. Guests seat nobody
+    if (m.k === 'hello') {
+      // only for a host we're in touch with: not one whose link is down, or that's gone
+      if (m.query && this.host && !this.dropped && !this.hostGone && this.mySeat >= 0) this.send(peer, { k: 'host', peer: this.host });
+      return;
+    }
     if (this.host && peer !== this.host) return;
     switch (m.k) {
       case 'lobby': {
         const s = parseLobby(m.state);
         if (!s || s.host !== peer) return;
-        this.host = peer;
+        // before we know who hosts, only a peer we gave our token can be it; anyone else's room, even one that
+        // seats us, is its claim to host, and the others' answers decide (#208)
+        if (!this.host && this.introducedTo !== peer) return this.vote(peer, peer);
         const inIt = seatOf(s, this.t.self) >= 0;
-        // a host that doesn't have us yet (one that pushed its room, one we followed): it gets our token, and
-        // we get the room once it seats us; until then we're not in it (#202)
+        // a host we follow that doesn't have us yet: it gets our token, and we're not in its room until it seats us (#202)
         if (!inIt && this.introducedTo !== peer) return this.sayHello(peer, true);
+        this.host = peer;
         if (inIt) this.introducedTo = peer;
         this.state = s;
         this.onChange?.(s);
         return;
       }
       case 'host':
-        // the answer to our question (#202): it runs the room, and gets our token, and nobody else
-        if (this.host) return;
-        this.host = peer;
-        return this.sayHello(peer, true);
+        // an answer to our question (#202): who that player says hosts (#208)
+        return this.vote(peer, m.peer);
       case 'refuse':
+        // turned away before we know who hosts: that peer's claim to host, and its reason, if most agree (#208)
+        if (!this.host && this.introducedTo !== peer) {
+          this.refusals.set(peer, m.reason);
+          return this.vote(peer, peer);
+        }
         this.host ??= peer;
         this.onRefused?.(m.reason);
         return;
