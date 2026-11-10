@@ -4,7 +4,7 @@ import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
 import { buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { PROTOCOL_VERSION } from '../src/net/protocol';
-import { encodeMsg } from '../src/net/codec';
+import { decodeMsg, encodeMsg } from '../src/net/codec';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, PeerGrace, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
 import { DT } from '../src/sim/constants';
@@ -425,7 +425,10 @@ describe('the room, start to rematch (#184)', () => {
     const h = rm.host();
     rm.guest('A');
     h.lobby.setLocked(true);
-    expect(rm.guest('B').lobby.state).toBeNull();
+    // a stranger learns who runs the room (#202), is turned away, and never sees the room
+    const b = rm.guest('B');
+    expect(b.refused[0]).toMatch(/closed this room/);
+    expect(b.lobby.state).toBeNull();
     expect(rm.guest('C').refused[0]).toMatch(/closed this room/);
     // A reloads: a new peer id, the same seat token
     rm.leave('A');
@@ -740,5 +743,147 @@ describe('one token, one seat (#192)', () => {
     const o = { build: 'test', char: 1, prefs: prefs(), seed: st.seed, clock: () => rm.clock.now, roomKey: ROOM_KEY };
     expect(() => new HostLobby(rm.routerOf('A').view(LOBBY_KINDS), { ...o, takeOver: { state: st, connected: [] } })).toThrow(/needs its setup/);
     expect(() => new HostLobby(rm.routerOf('A').view(LOBBY_KINDS), { ...o, takeOver: { state: st, connected: [], reclaim: true, setup: buildNetSetup(st) } })).toThrow(/only before a match/);
+  });
+});
+
+describe('the seat token reaches the host only (#202)', () => {
+  /** every peer that ever got `token`, other than `host` */
+  const leakedTo = (hellos: { to: string; token: string }[], token: string, host: string) => [...new Set(hellos.filter((h) => h.token === token && h.to !== host).map((h) => h.to))];
+
+  it('joining: the others hear a hello with no token; the host alone gets ours, and seats us by it', () => {
+    const rm = room();
+    rm.meetLatestFirst(true);
+    const h = rm.host();
+    rm.guest('A');
+    const b = rm.guest('B');
+    const fromB = rm.hellos().filter((x) => x.from === 'B');
+    expect(fromB.filter((x) => x.to === 'A').every((x) => x.token === '')).toBe(true);
+    expect(fromB.filter((x) => x.token === rm.tokenOf('B')).map((x) => x.to)).toEqual(['H']);
+    expect(leakedTo(rm.hellos(), rm.tokenOf('A'), 'H')).toEqual([]);
+    expect(b.lobby.mySeat).toBeGreaterThanOrEqual(0);
+    expect(h.lobby.state.rows[b.lobby.mySeat]).toMatchObject({ peer: 'B' });
+  });
+
+  it('a reload mid-match: the token goes to the host alone, and the seat comes back', () => {
+    const p = play({ botSecs: 30 });
+    p.meetLatestFirst(true);
+    p.run(3000);
+    const seatB = p.matches.get('B')!.session.localSeat;
+    const g = p.reload('B', 'B2');
+    expect(g.refused).toEqual([]);
+    expect(p.h.lobby.state.rows[seatB]).toMatchObject({ peer: 'B2' });
+    expect(leakedTo(p.hellos(), p.tokenOf('B'), 'H')).toEqual([]);
+  });
+
+  it('a reload after hosting moved: the token goes to the new host alone', () => {
+    const p = play({ botSecs: 30, guests: ['A', 'B', 'C'] });
+    p.run(8000);
+    expect(p.matches.get('H')!.handOff()).toBe(true);
+    p.run(150);
+    p.quit('H');
+    p.run(3000);
+    p.takeRoom('A');
+    p.meetLatestFirst(true);
+    const before = p.hellos().length;
+    p.quit('B');
+    p.run(1000);
+    const g = p.rejoin('B', 'B2');
+    expect(g.refused).toEqual([]);
+    expect(g.lobby.state!.host).toBe('A');
+    expect(leakedTo(p.hellos().slice(before), p.tokenOf('B'), 'A')).toEqual([]);
+  });
+
+  it('a closed room still lets a player back by the second hello; a stranger is still refused', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A');
+    const seat = a.lobby.mySeat;
+    h.lobby.setLocked(true);
+    const a2 = rm.guest('A2');
+    expect(a2.refused).toEqual([]);
+    expect(a2.lobby.mySeat).toBe(seat);
+    expect(rm.guest('Z').refused[0]).toMatch(/closed/);
+  });
+
+  it('a question only asks who hosts: the answer is `host`, and no seat, room or refusal', () => {
+    const rm = room();
+    const h = rm.host();
+    h.lobby.setLocked(true);
+    const got: string[] = [];
+    const t = rm.link('X');
+    t.transport.onMessage = (_p, bytes) => got.push(decodeMsg(bytes)?.k ?? '?');
+    t.transport.send('H', encodeMsg({ k: 'hello', proto: PROTOCOL_VERSION, build: 'test', mobile: false, char: 3, token: '', query: true }));
+    expect(got).toEqual(['host']);
+    expect(occupant(h.lobby.state).includes('X')).toBe(false);
+  });
+
+  it('the others only ever get a question from a newcomer, never a token', () => {
+    const rm = room();
+    rm.meetLatestFirst(true);
+    rm.host();
+    rm.guest('A');
+    rm.guest('B');
+    const toA = rm.hellos().filter((x) => x.from === 'B' && x.to === 'A');
+    expect(toA.length).toBeGreaterThan(0);
+    expect(toA.every((x) => x.query && x.token === '')).toBe(true);
+  });
+
+  it('a stranger turned away never sees the room: not when it’s closed, not mid-match', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    h.lobby.setLocked(true);
+    const z = rm.guest('Z');
+    let changed = 0;
+    z.lobby.onChange = () => changed++;
+    expect(z.refused[0]).toMatch(/closed/);
+    expect(z.lobby.state).toBeNull();
+    const p = play();
+    p.run(2000);
+    const late = p.guest('Late');
+    expect(late.refused[0]).toMatch(/already started/);
+    expect(late.lobby.state).toBeNull();
+    expect(changed).toBe(0);
+  });
+
+  it('a page with no seat token still joins, with no seal, as before', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A', { token: '' });
+    expect(a.refused).toEqual([]);
+    expect(a.lobby.mySeat).toBeGreaterThanOrEqual(0);
+    expect((h.lobby.state.rows[a.lobby.mySeat] as { seal?: string }).seal).toBeUndefined();
+  });
+
+  it('a reload in the same tab goes straight to a host it told before: the token, with no question first', () => {
+    const p = play({ botSecs: 30 });
+    p.meetLatestFirst(true);
+    p.run(3000);
+    const seatB = p.matches.get('B')!.session.localSeat;
+    p.quit('B');
+    const before = p.hellos().length;
+    const g = p.guest('B2', { token: p.tokenOf('B'), told: ['H'] });
+    const mine = p.hellos().slice(before).filter((x) => x.from === 'B2');
+    expect(mine.filter((x) => x.to === 'H').map((x) => x.query)).toEqual([false]);
+    expect(mine.filter((x) => x.to !== 'H').every((x) => x.query)).toBe(true);
+    expect(g.start()?.tick).toBeGreaterThan(0);
+    expect(p.h.lobby.state.rows[seatB]).toMatchObject({ peer: 'B2' });
+  });
+
+  it('known limit (#208): a peer that answers first, pretending to host, gets the token. Flip this when #208 lands', () => {
+    const rm = room();
+    rm.meetLatestFirst(true);
+    rm.host();
+    rm.guest('A');
+    // A, modified, answers every question as if it hosted, before the host can
+    const a = rm.routerOf('A').transport;
+    const inner = a.onMessage;
+    a.onMessage = (peer, bytes) => {
+      const m = decodeMsg(bytes);
+      if (m?.k === 'hello' && m.query) a.send(peer, encodeMsg({ k: 'host' }));
+      inner?.(peer, bytes);
+    };
+    rm.guest('B');
+    expect(rm.hellos().some((x) => x.from === 'B' && x.to === 'A' && x.token === rm.tokenOf('B'))).toBe(true);
   });
 });

@@ -561,6 +561,8 @@ export class HostLobby {
   private hello(peer: string, m: Extract<Msg, { k: 'hello' }>): void {
     this.connected.add(peer);
     if (m.proto !== PROTOCOL_VERSION || m.build !== this.o.build) return this.send(peer, { k: 'refuse', reason: 'This room runs a different version of the game. Refresh the page to update, then open the link again.' });
+    // "who runs this room?" (#202): we do. The hello with the token, to us alone, decides the rest
+    if (m.query) return this.send(peer, { k: 'host' });
     if (seatOf(this.state, peer) >= 0) return this.send(peer, { k: 'lobby', state: this.json() });
     // one token, one seat (#192): a seat whose seal this token opens is this player's, on a new connection (a reload, a duplicated tab)
     const s = seal(m.token, this.o.roomKey);
@@ -683,6 +685,12 @@ export interface GuestLobbyOptions {
   clock: () => number;
   /** how long to wait for a host before giving up */
   hostMs?: number;
+  /**
+   * peers we told our token in this room before (#202), across a reload: they
+   * know it already, so one of them that comes up gets it straight away, with
+   * no question first
+   */
+  told?: readonly string[];
 }
 
 export class GuestLobby {
@@ -707,15 +715,24 @@ export class GuestLobby {
   private readonly o: GuestLobbyOptions;
   private readonly since: number;
   private gaveUp = false;
+  /** who has our seat token (#202): the host we introduced ourselves to; nobody else ever gets it */
+  private introducedTo: string | null = null;
+  /** every peer that has our token (#202): `told`, and whoever we tell */
+  private readonly told: Set<string>;
+  /** we told a peer our token (#202): the app keeps the list across a reload */
+  onTold: ((peer: string) => void) | null = null;
 
   constructor(t: Transport, o: GuestLobbyOptions) {
     this.t = t;
     this.o = o;
     this.since = o.clock();
+    this.told = new Set(o.told ?? []);
     t.onPeer = (peer, up) => {
-      // a new peer may be the host; the host reconnecting in the lobby gets told again who we are (it may have freed our seat)
-      const hello = up && (!this.host || (peer === this.host && this.state?.phase === 'lobby'));
-      if (hello) this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0, token: o.token, ...(o.cell ? { cell: true } : {}) });
+      // a new peer may be the host: ask who is, without our token (#202); whoever hosts says so, and gets it then.
+      // One we told before knows it already: straight to it. The host reconnecting in the lobby gets told again
+      // who we are (it may have freed our seat)
+      if (up && !this.host) this.sayHello(peer, this.told.has(peer));
+      else if (up && peer === this.host && this.state?.phase === 'lobby') this.sayHello(peer, true);
       if (!up && peer === this.host) this.onNoHost?.(this.dropped ? 'lost' : 'left');
     };
     t.onLink = (peer, state) => {
@@ -737,10 +754,28 @@ export class GuestLobby {
     if (this.host) this.send(this.host, { k: 'pick', seat, team, char: char >>> 0 });
   }
 
-  /** Another player runs the room now (#166): their lobby states, from here on. */
+  /** Another player runs the room now (#166): their lobby states, from here on. They have us in it already. */
   follow(host: string): void {
     this.host = host;
     this.dropped = false;
+  }
+
+  /**
+   * Who we are (#162). With our seat token only to the peer that runs the
+   * room (#202): a page that doesn't know who that is yet asks everyone
+   * without it, and introduces itself to whoever answers with the room.
+   */
+  private sayHello(peer: string, withToken: boolean): void {
+    const o = this.o;
+    if (withToken) {
+      this.introducedTo = peer;
+      if (!this.told.has(peer)) {
+        this.told.add(peer);
+        this.onTold?.(peer);
+      }
+    }
+    const who = withToken ? { token: o.token } : { token: '', query: true as const };
+    this.send(peer, { k: 'hello', proto: PROTOCOL_VERSION, build: o.build, mobile: o.mobile, char: o.char >>> 0, ...who, ...(o.cell ? { cell: true } : {}) });
   }
 
   /** Ready for the next match, or not (#184): the host sees it in the roster. */
@@ -767,10 +802,20 @@ export class GuestLobby {
         const s = parseLobby(m.state);
         if (!s || s.host !== peer) return;
         this.host = peer;
+        const inIt = seatOf(s, this.t.self) >= 0;
+        // a host that doesn't have us yet (one that pushed its room, one we followed): it gets our token, and
+        // we get the room once it seats us; until then we're not in it (#202)
+        if (!inIt && this.introducedTo !== peer) return this.sayHello(peer, true);
+        if (inIt) this.introducedTo = peer;
         this.state = s;
         this.onChange?.(s);
         return;
       }
+      case 'host':
+        // the answer to our question (#202): it runs the room, and gets our token, and nobody else
+        if (this.host) return;
+        this.host = peer;
+        return this.sayHello(peer, true);
       case 'refuse':
         this.host ??= peer;
         this.onRefused?.(m.reason);
@@ -787,7 +832,7 @@ export class GuestLobby {
         if (m.to === this.t.self) return this.onPass?.(m.to, true, tokens);
         // follow the new host, and say hello: it answers with the room as it runs it
         this.follow(m.to);
-        this.send(m.to, { k: 'hello', proto: PROTOCOL_VERSION, build: this.o.build, mobile: this.o.mobile, char: this.o.char >>> 0, token: this.o.token, ...(this.o.cell ? { cell: true } : {}) });
+        this.sayHello(m.to, true);
         this.onPass?.(m.to, false, []);
         return;
       }

@@ -113,6 +113,28 @@ function seatToken(room: string): string {
  * The room this tab hosts, as it last was before a match (#184): a reload
  * finds it here and runs the room again, unless hosting was passed on.
  */
+/**
+ * The peers this tab told its seat token in a room (#202): after a reload,
+ * one of them that comes up gets it straight away, with no question first.
+ * They know it already, so nothing new leaks.
+ */
+const toldKey = (room: string) => `swarm-told:${room}`;
+function loadTold(room: string): string[] {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(toldKey(room)) ?? '[]') as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(-16) : [];
+  } catch {
+    return [];
+  }
+}
+function addTold(room: string, peer: string): void {
+  try {
+    sessionStorage.setItem(toldKey(room), JSON.stringify([...loadTold(room).filter((p) => p !== peer), peer].slice(-16)));
+  } catch {
+    /* no storage: a reload asks first */
+  }
+}
+
 const hostedKey = (room: string) => `swarm-hosted:${room}`;
 function saveHosted(room: string, state: LobbyState | null): void {
   try {
@@ -759,7 +781,7 @@ class App {
     if (hosted?.phase === 'lobby' || hosted?.phase === 'starting') host = true;
     const save = host ? null : found;
     if (save) setSeatToken(id, save.token);
-    const token = save?.token ?? seatToken(id);
+    const token = save?.token || seatToken(id);
     const hash = `#room=${id}.${secret}`;
     history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
     const link = `${location.origin}${location.pathname}${location.search}${hash}`;
@@ -802,7 +824,7 @@ class App {
       room.seen = structuredClone(room.lobby.state);
       view.status('Send the link to your friends. They appear here as they join.');
     } else {
-      room.lobby = this.wireGuestLobby(new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), cell: onCellData(), token, clock }));
+      room.lobby = this.wireGuestLobby(new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), cell: onCellData(), token, told: loadTold(id), clock }));
       view.status('Looking for the host…');
     }
     room.linkPoll = setInterval(() => this.pollLinks(room), 3000);
@@ -933,6 +955,10 @@ class App {
       else status(lobby.state?.phase === 'playing' ? 'The match is starting…' : '');
     };
     lobby.onStart = (st) => this.guestGo(st);
+    // who has our token (#202), for a reload to go straight to them
+    lobby.onTold = (peer) => {
+      if (this.room) addTold(this.room.id, peer);
+    };
     // the host left the room before a match, and passed it on (#184)
     lobby.onPass = (to, mine, tokens) => {
       if (mine) return this.becomeLobbyHost(tokens);
@@ -972,7 +998,7 @@ class App {
     old.close();
     r.host = false;
     r.view = this.roomView(mp, r);
-    const lobby = this.wireGuestLobby(new mp.GuestLobby(r.router.view(mp.LOBBY_KINDS), { build: BUILD, char: this.ownChar(old.state), mobile: isMobile(), cell: onCellData(), token: r.token, clock: () => performance.now() }));
+    const lobby = this.wireGuestLobby(new mp.GuestLobby(r.router.view(mp.LOBBY_KINDS), { build: BUILD, char: this.ownChar(old.state), mobile: isMobile(), cell: onCellData(), token: r.token, told: loadTold(r.id), clock: () => performance.now() }));
     lobby.follow(leader);
     lobby.state = { ...old.state, host: leader };
     r.lobby = lobby;
