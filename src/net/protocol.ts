@@ -14,7 +14,7 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;
@@ -123,13 +123,13 @@ export type Msg =
    * character it plays as (#162); `token`, its seat secret for this room,
    * kept across reloads (#164; '' for none). Only the room's host ever gets
    * a token (#202): a client that doesn't know who hosts sends a `query`
-   * (no token) to every peer, the host answers `host`, and the client says
-   * hello again, with its token, to that peer alone. A peer that answers
-   * pretending to host would get it; group consensus on who hosts is #208.
+   * (no token) to every peer, every seated player answers `host`, and the
+   * client says hello again, with its token, to the peer that most of them
+   * name (#208), and that claims to host itself.
    */
   | { k: 'hello'; proto: number; build: string; mobile: boolean; char: number; token: string; cell?: boolean; query?: true }
-  /** host → a client that asked who runs the room (#202): I do */
-  | { k: 'host' }
+  /** any seated player → a client that asked who runs the room (#202, #208): `peer` does, as far as we know */
+  | { k: 'host'; peer: string }
   /** host → client: not accepted (version or build mismatch, room full) */
   | { k: 'refuse'; reason: string }
   /** host → clients: the seat table, and which row is yours (-1: none) */

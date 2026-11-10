@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { playerCharacter } from '../src/game/character';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
+import { ASK_MS, LONE_ASKS, buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
-import { PROTOCOL_VERSION } from '../src/net/protocol';
+import { PROTOCOL_VERSION, type Msg } from '../src/net/protocol';
 import { decodeMsg, encodeMsg } from '../src/net/codec';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, PeerGrace, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
@@ -791,6 +791,8 @@ describe('the seat token reaches the host only (#202)', () => {
     expect(g.refused).toEqual([]);
     expect(g.lobby.state!.host).toBe('A');
     expect(leakedTo(p.hellos().slice(before), p.tokenOf('B'), 'A')).toEqual([]);
+    // the others say who hosts now (#208)
+    expect(p.answers().filter((x) => x.to === 'B2').map((x) => `${x.from}:${x.peer}`).sort()).toEqual(['A:A', 'C:A']);
   });
 
   it('a closed room still lets a player back by the second hello; a stranger is still refused', () => {
@@ -870,20 +872,192 @@ describe('the seat token reaches the host only (#202)', () => {
     expect(p.h.lobby.state.rows[seatB]).toMatchObject({ peer: 'B2' });
   });
 
-  it('known limit (#208): a peer that answers first, pretending to host, gets the token. Flip this when #208 lands', () => {
+  /** `id`, modified: it answers every "who hosts?" itself, and passes everything else on (#208) */
+  const liar = (rm: ReturnType<typeof room>, id: string, answer: (asker: string) => Msg) => {
+    const t = rm.routerOf(id).transport;
+    const inner = t.onMessage;
+    t.onMessage = (peer, bytes) => {
+      const m = decodeMsg(bytes);
+      if (m?.k === 'hello' && m.query) t.send(peer, encodeMsg(answer(peer)));
+      else inner?.(peer, bytes);
+    };
+  };
+  /** whoever ever got `token` */
+  const gotToken = (rm: ReturnType<typeof room>, token: string) => [...new Set(rm.hellos().filter((x) => x.token === token).map((x) => x.to))];
+
+  it('a peer that answers first, pretending to host, never gets the token: most players name the real host (#208)', () => {
     const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    rm.guest('L');
+    liar(rm, 'L', () => ({ k: 'host', peer: 'L' }));
     rm.meetLatestFirst(true);
+    const b = rm.guest('B', { askMs: ASK_MS });
+    // L answered first; nobody gets the token before the answers are heard out
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual([]);
+    rm.clock.now += ASK_MS;
+    b.lobby.update();
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual(['H']);
+    expect(h.lobby.state.rows[b.lobby.mySeat]).toMatchObject({ peer: 'B' });
+    expect(rm.answers().filter((x) => x.to === 'B' && x.from !== 'L').every((x) => x.peer === 'H')).toBe(true);
+  });
+
+  it('a forged room pushed at a newcomer counts as one answer, not as the host', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    rm.guest('L');
+    liar(rm, 'L', () => ({ k: 'lobby', state: JSON.stringify({ ...h.lobby.state, host: 'L' }) }));
+    rm.meetLatestFirst(true);
+    const b = rm.guest('B', { askMs: ASK_MS });
+    rm.clock.now += ASK_MS;
+    b.lobby.update();
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual(['H']);
+    expect(b.lobby.host).toBe('H');
+  });
+
+  it('one against one: nobody gets the token; the newcomer asks again, then gives up', () => {
+    const rm = room();
+    rm.host();
+    rm.guest('L');
+    liar(rm, 'L', () => ({ k: 'host', peer: 'L' }));
+    const b = rm.guest('B', { askMs: ASK_MS });
+    let none = 0;
+    b.lobby.onNoHost = (why) => why === 'none' && none++;
+    const asks = () => rm.hellos().filter((x) => x.from === 'B' && x.query).length;
+    const first = asks();
+    for (let t = 0; t < 16000; t += ASK_MS) {
+      rm.clock.now += ASK_MS;
+      b.lobby.update();
+    }
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual([]);
+    expect(asks()).toBeGreaterThan(first);
+    expect(none).toBe(1);
+    // given up: no more questions
+    const after = asks();
+    for (let t = 0; t < 5000; t += ASK_MS) {
+      rm.clock.now += ASK_MS;
+      b.lobby.update();
+    }
+    expect(asks()).toBe(after);
+  });
+
+  /** step the clock in `ms` steps for `total`, delivering what's due and letting `b` decide */
+  const step = (rm: ReturnType<typeof room>, b: { lobby: GuestLobby }, total: number, ms = 100) => {
+    for (let t = 0; t < total; t += ms) {
+      rm.clock.now += ms;
+      rm.flush();
+      b.lobby.update();
+    }
+  };
+
+  it('a forged refusal counts as a claim to host: it doesn’t turn the newcomer away', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    rm.guest('L');
+    liar(rm, 'L', () => ({ k: 'refuse', reason: 'Go away.' }));
+    rm.meetLatestFirst(true);
+    const b = rm.guest('B', { askMs: ASK_MS });
+    step(rm, b, ASK_MS);
+    expect(b.refused).toEqual([]);
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual(['H']);
+    expect(h.lobby.state.rows[b.lobby.mySeat]).toMatchObject({ peer: 'B' });
+  });
+
+  it('a forged room that already seats the newcomer is only a claim: the newcomer takes the real host’s room', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    rm.guest('L');
+    const forged = (asker: string): Msg => {
+      const rows = structuredClone(h.lobby.state.rows);
+      rows[rows.findIndex((r) => r.k === 'open')] = { k: 'human', team: 5, peer: asker, char: 1, mobile: false };
+      return { k: 'lobby', state: JSON.stringify({ ...h.lobby.state, host: 'L', rows }) };
+    };
+    liar(rm, 'L', forged);
+    rm.meetLatestFirst(true);
+    const b = rm.guest('B', { askMs: ASK_MS });
+    expect(b.lobby.host).toBeNull();
+    step(rm, b, ASK_MS);
+    expect(b.lobby.host).toBe('H');
+    expect(b.lobby.state?.host).toBe('H');
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual(['H']);
+  });
+
+  it('a link that keeps flapping doesn’t hold the decision back', () => {
+    const rm = room();
     rm.host();
     rm.guest('A');
-    // A, modified, answers every question as if it hosted, before the host can
-    const a = rm.routerOf('A').transport;
-    const inner = a.onMessage;
-    a.onMessage = (peer, bytes) => {
-      const m = decodeMsg(bytes);
-      if (m?.k === 'hello' && m.query) a.send(peer, encodeMsg({ k: 'host' }));
-      inner?.(peer, bytes);
-    };
-    rm.guest('B');
-    expect(rm.hellos().some((x) => x.from === 'B' && x.to === 'A' && x.token === rm.tokenOf('B'))).toBe(true);
+    rm.guest('L');
+    liar(rm, 'L', () => ({ k: 'host', peer: 'L' }));
+    const b = rm.guest('B', { askMs: ASK_MS });
+    for (let t = 0; t < 1000 && !b.lobby.host; t += 100) {
+      if (t % 400 === 0) {
+        rm.drop('B', 'L');
+        rm.reconnect('B', 'L');
+      }
+      step(rm, b, 100);
+    }
+    expect(b.lobby.host).toBe('H');
+    expect(rm.clock.now).toBeLessThanOrEqual(ASK_MS + 100);
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual(['H']);
+  });
+
+  it('a liar alone on the fastest link waits: the honest answers behind slower links still decide', () => {
+    const rm = room();
+    rm.host();
+    rm.guest('A');
+    rm.guest('L');
+    liar(rm, 'L', () => ({ k: 'host', peer: 'L' }));
+    // B's links to H and A take 1.5 s there and back; L answers at once
+    rm.lag('B', 'H', 1500);
+    rm.lag('B', 'A', 1500);
+    const b = rm.guest('B', { askMs: ASK_MS });
+    step(rm, b, 1400);
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual([]);
+    step(rm, b, 1000);
+    expect(b.lobby.host).toBe('H');
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual(['H']);
+  });
+
+  it('honest players dropping away don’t leave the liars a majority', () => {
+    const rm = room();
+    rm.host();
+    rm.guest('A');
+    rm.guest('L');
+    rm.guest('M');
+    liar(rm, 'L', () => ({ k: 'host', peer: 'L' }));
+    liar(rm, 'M', () => ({ k: 'host', peer: 'L' }));
+    const b = rm.guest('B', { askMs: ASK_MS });
+    rm.drop('B', 'H');
+    rm.drop('B', 'A');
+    step(rm, b, 16000, ASK_MS);
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual([]);
+  });
+
+  it('a player out of touch with the host doesn’t vouch for it', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    rm.drop('A', 'H');
+    const b = rm.guest('B', { askMs: ASK_MS });
+    step(rm, b, ASK_MS * LONE_ASKS);
+    expect(rm.answers().filter((x) => x.from === 'A' && x.to === 'B')).toEqual([]);
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual(['H']);
+    expect(h.lobby.state.rows[b.lobby.mySeat]).toMatchObject({ peer: 'B' });
+  });
+
+  it('just the host and us: its word is enough, once heard out for a lone claim', () => {
+    const rm = room();
+    const h = rm.host();
+    const b = rm.guest('B', { askMs: ASK_MS });
+    rm.clock.now += ASK_MS * LONE_ASKS - 1;
+    b.lobby.update();
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual([]);
+    rm.clock.now += 1;
+    b.lobby.update();
+    expect(gotToken(rm, rm.tokenOf('B'))).toEqual(['H']);
+    expect(h.lobby.state.rows[b.lobby.mySeat]).toMatchObject({ peer: 'B' });
   });
 });

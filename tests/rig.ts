@@ -41,6 +41,8 @@ export function room() {
   const queue: { at: number; go: () => void }[] = [];
   /** every hello sent, and its token (#202): who ever got whose */
   const helloLog: { from: string; to: string; token: string; query: boolean }[] = [];
+  /** every "who hosts?" answer delivered (#208): who said whom */
+  const answerLog: { from: string; to: string; peer: string }[] = [];
   const link = (id: string) => {
     const inner = hub.link(id);
     /** what actually reaches `peer`: a hello is logged then, not when a cut link drops it */
@@ -48,6 +50,9 @@ export function room() {
       if (msgKind(bytes) === 'hello') {
         const m = decodeMsg(bytes);
         if (m?.k === 'hello') helloLog.push({ from: id, to: peer, token: m.token, query: !!m.query });
+      } else if (msgKind(bytes) === 'host') {
+        const m = decodeMsg(bytes);
+        if (m?.k === 'host') answerLog.push({ from: id, to: peer, peer: m.peer });
       }
       inner.send(peer, bytes);
     };
@@ -101,7 +106,8 @@ export function room() {
     arrived(id);
     return { r, lobby };
   };
-  const guest = (id: string, o: Partial<{ char: number; build: string; token: string; mobile: boolean; told: string[] }> = {}) => {
+  /** `askMs`: how long the page hears "who hosts?" answers out (#208); 0 here, so it decides as they come */
+  const guest = (id: string, o: Partial<{ char: number; build: string; token: string; mobile: boolean; told: string[]; askMs: number }> = {}) => {
     const r = link(id);
     const lobby = new GuestLobby(r.view(LOBBY_KINDS), {
       build: o.build ?? 'test',
@@ -109,6 +115,7 @@ export function room() {
       mobile: o.mobile ?? false,
       token: o.token ?? tokenOf(id),
       told: o.told,
+      askMs: o.askMs ?? 0,
       clock: () => clock.now,
     });
     const refused: string[] = [];
@@ -147,7 +154,7 @@ export function room() {
       else queue.splice(i, 1)[0].go();
     }
   };
-  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow, tokenOf, lag, flush, link, arrived, hellos: () => helloLog, meetLatestFirst };
+  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow, tokenOf, lag, flush, link, arrived, hellos: () => helloLog, answers: () => answerLog, meetLatestFirst };
 }
 
 export type Guest = ReturnType<ReturnType<typeof room>['guest']>;

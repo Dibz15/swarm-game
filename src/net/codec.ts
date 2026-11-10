@@ -477,8 +477,10 @@ export function encodeMsg(m: Msg): Uint8Array {
       w.sv(Math.round(m.resumeIn));
       w.uv(Math.max(0, Math.round(m.auto)));
       break;
-    case 'reclaim':
     case 'host':
+      w.str(m.peer, MAX_NAME);
+      break;
+    case 'reclaim':
     case 'ready':
     case 'away':
       break;
@@ -636,8 +638,12 @@ function readMsg(r: Reader): Msg {
       const paused = r.bool(), by = r.sv(), resumeIn = r.sv();
       return { k, paused, by, resumeIn, auto: r.uv() };
     }
+    case 'host': {
+      const peer = r.str(MAX_NAME);
+      if (!peer) throw new Bad();
+      return { k, peer };
+    }
     case 'reclaim':
-    case 'host':
     case 'ready':
     case 'away':
       return { k };

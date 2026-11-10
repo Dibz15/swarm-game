@@ -45,7 +45,7 @@ describe('wire codec (#157)', () => {
       { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: true, char: 0xdeadbeef, token: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' },
       { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: false, char: 1, token: '', cell: true },
       { k: 'hello', proto: PROTOCOL_VERSION, build: 'abc1234', mobile: true, char: 2, token: '', query: true },
-      { k: 'host' },
+      { k: 'host', peer: 'peer-xyz' },
       { k: 'lobby', state: JSON.stringify({ seed: 'ember-tide-4', name: 'Zoë 🐝', rows: [] }) },
       { k: 'pick', seat: 5, team: 3, char: 0 },
       { k: 'ready' },
@@ -187,5 +187,10 @@ describe('wire codec (#157)', () => {
     }
     expect(decoded).toBeGreaterThan(0); // some bit flips land on valid messages
     for (const b of real) expect(decodeMsg(b.slice(0, -1))).toBeNull();
+  });
+
+  it('a `host` answer names somebody (#208): an empty name is no answer', () => {
+    expect(decodeMsg(encodeMsg({ k: 'host', peer: '' }))).toBeNull();
+    expect(decodeMsg(encodeMsg({ k: 'host', peer: 'H' }))).toEqual({ k: 'host', peer: 'H' });
   });
 });
