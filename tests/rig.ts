@@ -40,19 +40,23 @@ export function room() {
   const lags = new Map<string, number>();
   const queue: { at: number; go: () => void }[] = [];
   /** every hello sent, and its token (#202): who ever got whose */
-  const helloLog: { from: string; to: string; token: string }[] = [];
+  const helloLog: { from: string; to: string; token: string; query: boolean }[] = [];
   const link = (id: string) => {
     const inner = hub.link(id);
-    const send = (peer: string, bytes: Uint8Array) => {
+    /** what actually reaches `peer`: a hello is logged then, not when a cut link drops it */
+    const deliver = (peer: string, bytes: Uint8Array) => {
       if (msgKind(bytes) === 'hello') {
         const m = decodeMsg(bytes);
-        if (m?.k === 'hello') helloLog.push({ from: id, to: peer, token: m.token });
+        if (m?.k === 'hello') helloLog.push({ from: id, to: peer, token: m.token, query: !!m.query });
       }
+      inner.send(peer, bytes);
+    };
+    const send = (peer: string, bytes: Uint8Array) => {
       if (cuts.has(pair(id, peer))) return;
       const rtt = lags.get(pair(id, peer));
-      if (!rtt) return inner.send(peer, bytes);
+      if (!rtt) return deliver(peer, bytes);
       // in order per link: never before what was sent earlier
-      queue.push({ at: clock.now + rtt / 2, go: () => cuts.has(pair(id, peer)) || inner.send(peer, bytes) });
+      queue.push({ at: clock.now + rtt / 2, go: () => cuts.has(pair(id, peer)) || deliver(peer, bytes) });
     };
     const t: Transport = { ...inner, send, close: () => inner.close() };
     Object.defineProperty(t, 'onMessage', { get: () => inner.onMessage, set: (f) => (inner.onMessage = f) });
@@ -82,10 +86,10 @@ export function room() {
     linkEvent(a, b, 'back');
   };
   const giveUp = (a: string, b: string) => linkEvent(a, b, 'gone');
-  /** after the newcomer's handlers are set: tell it who's already here */
   /** newcomers meet the others latest first (#202): the host last, as real links can come up in any order */
   let lastFirst = false;
   const meetLatestFirst = (on: boolean) => (lastFirst = on);
+  /** after the newcomer's handlers are set: tell it who's already here */
   const arrived = (id: string) => {
     const others = [...routers.keys()].filter((o) => o !== id);
     for (const other of lastFirst ? others.reverse() : others) routers.get(id)!.transport.onPeer?.(other, true);
@@ -97,13 +101,14 @@ export function room() {
     arrived(id);
     return { r, lobby };
   };
-  const guest = (id: string, o: Partial<{ char: number; build: string; token: string; mobile: boolean }> = {}) => {
+  const guest = (id: string, o: Partial<{ char: number; build: string; token: string; mobile: boolean; told: string[] }> = {}) => {
     const r = link(id);
     const lobby = new GuestLobby(r.view(LOBBY_KINDS), {
       build: o.build ?? 'test',
       char: o.char ?? id.charCodeAt(0) * 1000,
       mobile: o.mobile ?? false,
       token: o.token ?? tokenOf(id),
+      told: o.told,
       clock: () => clock.now,
     });
     const refused: string[] = [];

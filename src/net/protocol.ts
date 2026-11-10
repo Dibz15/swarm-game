@@ -121,14 +121,15 @@ export type Msg =
   /**
    * client → host, first thing on a connection; `char` is the seed of the
    * character it plays as (#162); `token`, its seat secret for this room,
-   * kept across reloads (#164). Only the room's host ever gets a token
-   * (#202): a client that doesn't know who hosts sends `token: ''` to every
-   * peer ("who runs this room?"), the host answers with the room (`lobby`),
-   * and the client says hello again, with its token, to that peer alone.
-   * A peer that answers pretending to host would get it; group consensus
-   * on who hosts is the follow-up.
+   * kept across reloads (#164; '' for none). Only the room's host ever gets
+   * a token (#202): a client that doesn't know who hosts sends a `query`
+   * (no token) to every peer, the host answers `host`, and the client says
+   * hello again, with its token, to that peer alone. A peer that answers
+   * pretending to host would get it; group consensus on who hosts is #208.
    */
-  | { k: 'hello'; proto: number; build: string; mobile: boolean; char: number; token: string; cell?: boolean }
+  | { k: 'hello'; proto: number; build: string; mobile: boolean; char: number; token: string; cell?: boolean; query?: true }
+  /** host → a client that asked who runs the room (#202): I do */
+  | { k: 'host' }
   /** host → client: not accepted (version or build mismatch, room full) */
   | { k: 'refuse'; reason: string }
   /** host → clients: the seat table, and which row is yours (-1: none) */

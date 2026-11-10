@@ -389,7 +389,7 @@ function readTurn(r: Reader): Turn {
 
 // ---- messages ---------------------------------------------------------------
 
-const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff', 'mark', 'pass', 'links', 'ask', 'rebind'] as const;
+const KINDS = ['hello', 'refuse', 'seats', 'start', 'cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lobby', 'pick', 'ready', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff', 'mark', 'pass', 'links', 'ask', 'rebind', 'host'] as const;
 const ASKS = ['resync'] as const;
 const KIND_INDEX = new Map<string, number>(KINDS.map((k, i) => [k, i]));
 
@@ -405,7 +405,7 @@ export function encodeMsg(m: Msg): Uint8Array {
     case 'hello':
       w.uv(m.proto);
       w.str(m.build, MAX_BUILD);
-      w.u8((m.mobile ? 1 : 0) | (m.cell ? 2 : 0));
+      w.u8((m.mobile ? 1 : 0) | (m.cell ? 2 : 0) | (m.query ? 4 : 0));
       u32(w, m.char);
       w.str(m.token, MAX_TOKEN);
       break;
@@ -478,6 +478,7 @@ export function encodeMsg(m: Msg): Uint8Array {
       w.uv(Math.max(0, Math.round(m.auto)));
       break;
     case 'reclaim':
+    case 'host':
     case 'ready':
     case 'away':
       break;
@@ -575,9 +576,9 @@ function readMsg(r: Reader): Msg {
   switch (k) {
     case 'hello': {
       const proto = r.uv(), build = r.str(MAX_BUILD), f = r.u8(), char = r.upTo(0xffffffff);
-      if (f > 3) throw new Bad();
+      if (f > 7) throw new Bad();
       const token = r.str(MAX_TOKEN);
-      return f & 2 ? { k, proto, build, mobile: !!(f & 1), char, token, cell: true } : { k, proto, build, mobile: !!(f & 1), char, token };
+      return { k, proto, build, mobile: !!(f & 1), char, token, ...(f & 2 ? { cell: true as const } : {}), ...(f & 4 ? { query: true as const } : {}) };
     }
     case 'refuse':
       return { k, reason: r.str(MAX_REASON) };
@@ -636,6 +637,7 @@ function readMsg(r: Reader): Msg {
       return { k, paused, by, resumeIn, auto: r.uv() };
     }
     case 'reclaim':
+    case 'host':
     case 'ready':
     case 'away':
       return { k };

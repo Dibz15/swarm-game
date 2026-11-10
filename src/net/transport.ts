@@ -192,7 +192,7 @@ export class Router {
 
 /** The kinds a match's sequencer and sessions use; the rest belong to the lobby. */
 export const MATCH_KINDS: readonly MsgKind[] = ['cmd', 'turns', 'ack', 'ping', 'pong', 'hash', 'snap', 'pause', 'status', 'reclaim', 'lat', 'away', 'snapreq', 'desync', 'beat', 'claim', 'lead', 'handoff', 'links', 'ask', 'rebind'];
-export const LOBBY_KINDS: readonly MsgKind[] = ['hello', 'refuse', 'seats', 'start', 'lobby', 'pick', 'ready', 'mark', 'pass'];
+export const LOBBY_KINDS: readonly MsgKind[] = ['hello', 'refuse', 'seats', 'start', 'lobby', 'pick', 'ready', 'mark', 'pass', 'host'];
 
 /** The id the host's own client has on its own sequencer (NetMatch routes it in-process). */
 export const HOST_SELF = '~host';
