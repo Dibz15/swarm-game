@@ -8,7 +8,7 @@ import { encodeMsg } from '../src/net/codec';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, PeerGrace, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
 import { DT } from '../src/sim/constants';
-import { FRAME, play, prefs, room, wipe, type Guest } from './rig';
+import { FRAME, play, prefs, room, ROOM_KEY, wipe, type Guest } from './rig';
 import { fullHash } from '../src/sim/snapshot';
 import { createWorld } from '../src/sim/setup';
 import { ordinal, placingOf } from '../src/game/standing';
@@ -579,7 +579,7 @@ describe('the room, start to rematch (#184)', () => {
     const st = g.lobby.state!;
     g.lobby.close();
     const connected = st.rows.flatMap((r) => (r.k === 'human' && r.peer !== g.id && r.peer !== st.host ? [r.peer] : []));
-    const lobby = new HostLobby(g.r.view(LOBBY_KINDS), { build: 'test', char: 9, prefs: prefs(), seed: st.seed, clock: () => rm.clock.now, takeOver: { state: st, connected, tokens } });
+    const lobby = new HostLobby(g.r.view(LOBBY_KINDS), { build: 'test', char: 9, prefs: prefs(), seed: st.seed, clock: () => rm.clock.now, roomKey: ROOM_KEY, takeOver: { state: st, connected, tokens } });
     lobby.announce();
     return lobby;
   };
@@ -636,7 +636,7 @@ describe('the room, start to rematch (#184)', () => {
     // the reloaded page: a new peer id
     const h2 = rm.host({ id: 'H2' });
     h2.lobby.close();
-    const back = new HostLobby(rm.routerOf('H2').view(LOBBY_KINDS), { build: 'test', char: 1, prefs: prefs(), seed: saved.seed, clock: () => rm.clock.now, takeOver: { state: saved, connected: [], reclaim: true } });
+    const back = new HostLobby(rm.routerOf('H2').view(LOBBY_KINDS), { build: 'test', char: 1, prefs: prefs(), seed: saved.seed, clock: () => rm.clock.now, roomKey: ROOM_KEY, takeOver: { state: saved, connected: [], reclaim: true } });
     expect(back.mySeat).toBe(0);
     expect(back.state.host).toBe('H2');
     expect(back.state.locked).toBe(true);
@@ -678,5 +678,67 @@ describe('the room, start to rematch (#184)', () => {
     h.lobby.setRandomMap(false);
     h.lobby.setMap({ size: 'small' });
     expect(h.lobby.start()!.size).toBe('small');
+  });
+});
+
+describe('one token, one seat (#192)', () => {
+  const sealOfRow = (s: LobbyState, i: number) => (s.rows[i] as { seal?: string }).seal;
+
+  it('a duplicated tab (the same token) takes its seat over; the older tab is told it left', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A');
+    const seat = a.lobby.mySeat;
+    const dup = rm.guest('A2'); // the same token as A, A still connected
+    expect(dup.refused).toEqual([]);
+    expect(occupant(h.lobby.state).filter((o) => o === 'A' || o === 'A2')).toEqual(['A2']);
+    expect(dup.lobby.mySeat).toBe(seat);
+    expect(a.refused.at(-1)).toMatch(/another tab/);
+    const seals = h.lobby.state.rows.flatMap((r) => (r.k === 'human' && r.seal ? [r.seal] : []));
+    expect(new Set(seals).size).toBe(seals.length);
+  });
+
+  it('a reload into a closed, full room gets its own row back, before the host notices the old page went', () => {
+    const rm = room();
+    const h = rm.host();
+    const a = rm.guest('A');
+    const seat = a.lobby.mySeat;
+    h.lobby.fillBots();
+    h.lobby.setLocked(true);
+    expect(occupant(h.lobby.state).filter((o) => o === 'open')).toEqual([]);
+    const a2 = rm.guest('A2');
+    expect(a2.refused).toEqual([]);
+    expect(a2.lobby.mySeat).toBe(seat);
+    expect(occupant(h.lobby.state).filter((o) => o === 'A' || o === 'A2')).toEqual(['A2']);
+    expect(sealOfRow(h.lobby.state, seat)).toBeTruthy();
+  });
+
+  it('a guest page with the host’s own token is turned away, not given the host’s seat', () => {
+    const rm = room();
+    const h = rm.host();
+    const g = rm.guest('X', { token: rm.tokenOf('H') });
+    expect(g.refused[0]).toMatch(/already hosting/);
+    expect(h.lobby.state.rows[h.lobby.mySeat]).toMatchObject({ peer: 'H' });
+  });
+
+  it('a state with two rows on one seal doesn’t parse', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    rm.guest('B');
+    const st = structuredClone(h.lobby.state);
+    const [i, j] = st.rows.flatMap((r, k) => (r.k === 'human' && r.peer !== 'H' ? [k] : []));
+    (st.rows[j] as { seal?: string }).seal = sealOfRow(st, i);
+    expect(parseLobby(JSON.stringify(st))).toBeNull();
+  });
+
+  it('taking over a match needs its setup, and a reload reclaims a room only before a match', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    const st = { ...structuredClone(h.lobby.state), phase: 'playing' as const };
+    const o = { build: 'test', char: 1, prefs: prefs(), seed: st.seed, clock: () => rm.clock.now, roomKey: ROOM_KEY };
+    expect(() => new HostLobby(rm.routerOf('A').view(LOBBY_KINDS), { ...o, takeOver: { state: st, connected: [] } })).toThrow(/needs its setup/);
+    expect(() => new HostLobby(rm.routerOf('A').view(LOBBY_KINDS), { ...o, takeOver: { state: st, connected: [], reclaim: true, setup: buildNetSetup(st) } })).toThrow(/only before a match/);
   });
 });

@@ -758,6 +758,7 @@ class App {
           mobile: isMobile(),
           cell: onCellData(),
           ownToken: seatToken(id),
+          roomKey: `${id}.${secret}`,
           takeOver: hosted ? { state: hosted, connected: [], reclaim: true } : undefined,
         }),
       );
@@ -918,6 +919,7 @@ class App {
       mobile: isMobile(),
       cell: onCellData(),
       ownToken: seatToken(r.id),
+      roomKey: `${r.id}.${r.secret}`,
       takeOver: { state: st, connected, tokens },
     });
     r.lobby = this.wireHostLobby(lobby);
@@ -962,8 +964,8 @@ class App {
 
   /**
    * Hosting passed to us mid-match (#166): the room comes too. Its state as
-   * we last saw it, run from here; the old host's seat tokens didn't come, so
-   * a player who reloads can't get back into this match.
+   * we last saw it, run from here; its rows carry every seat's seal, so a
+   * player who reloads gets their seat back from us (#192).
    */
   private becomeRoomHost(): void {
     const r = this.room, mp = this.mp, m = this.match;
@@ -980,7 +982,9 @@ class App {
       clock: () => performance.now(),
       mobile: isMobile(),
       cell: onCellData(),
-      takeOver: { state: old.state!, connected: m.livePeers() },
+      ownToken: seatToken(r.id),
+      roomKey: `${r.id}.${r.secret}`,
+      takeOver: { state: old.state!, connected: m.livePeers(), setup: m.session.setup },
     });
     r.lobby = this.wireHostLobby(lobby);
     lobby.announce();

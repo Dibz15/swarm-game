@@ -6,7 +6,8 @@ import { SNAP_CHUNK } from '../src/net/protocol';
 import { chunkSnap, packSnap, SnapAssembler, unpackSnap, type SnapMeta } from '../src/net/snapwire';
 import { DT } from '../src/sim/constants';
 import { fullHash } from '../src/sim/snapshot';
-import { play } from './rig';
+import { play, ROOM_KEY } from './rig';
+import { seal } from '../src/net/seal';
 
 /** Every hash each peer reported, by tick. */
 function hashes(matches: Map<string, NetMatch>) {
@@ -169,5 +170,95 @@ describe('away, drop and rejoin (#164)', () => {
     expect(fullHash(w)).toBe(fullHash(a.world));
     // without the control entries it doesn't: the bot's play is part of the match
     expect(fullHash(replayLog(a.setup, a.log, [], a.world.tick))).not.toBe(fullHash(a.world));
+  });
+});
+
+describe('rejoin after hosting moved (#192)', () => {
+  /** H hands the match to A (graceful, as leaveMatch does), and A takes the room as main.ts does */
+  const moved = (o: Parameters<typeof play>[0] = {}) => {
+    const p = play({ botSecs: 30, ...o });
+    p.run(8000);
+    const host = p.matches.get('H')!;
+    expect(host.handOff()).toBe(true);
+    p.run(150);
+    p.quit('H');
+    p.run(3000);
+    expect(p.matches.get('A')!.runner).toBe(true);
+    const room = p.takeRoom('A');
+    return { ...p, room };
+  };
+
+  it('every human row carries its seat token’s seal, and no token itself', () => {
+    const { h, gs } = play();
+    const json = JSON.stringify(h.lobby.state);
+    for (const id of ['H', 'A', 'B']) expect(json).not.toContain(`token-${id}`);
+    for (const g of gs) expect((g.lobby.state!.rows[g.lobby.mySeat] as { seal?: string }).seal).toBe(seal(`token-${g.id}`, ROOM_KEY));
+    expect((h.lobby.state.rows[h.lobby.mySeat] as { seal?: string }).seal).toBe(seal('token-H', ROOM_KEY));
+    // checked on the way in
+    expect(parseLobby(json)).toEqual(h.lobby.state);
+    expect(parseLobby(json.replace(/"seal":"[0-9a-f]{64}"/, '"seal":"not-a-seal"'))).toBeNull();
+  });
+
+  it('a guest that reloads after hosting moved gets its seat back from the new host, and plays on in step', () => {
+    const { matches, run, rejoin, quit, room } = moved();
+    const { watch, agree } = hashes(matches);
+    const seatB = matches.get('B')!.session.localSeat;
+    quit('B');
+    run(2000);
+    const g = rejoin('B', 'B2');
+    expect(g.refused).toEqual([]);
+    expect(g.start()!.tick).toBeGreaterThan(0);
+    expect(g.lobby.state!.host).toBe('A');
+    expect(room.state.rows[seatB]).toMatchObject({ k: 'human', peer: 'B2' });
+    watch('B2', matches.get('B2')!);
+    run(20_000);
+    expect(matches.get('B2')!.session.syncing).toBe(false);
+    expect(matches.get('A')!.seq!.seatState(seatB)).toBe('human');
+    const { common, bad } = agree(['A', 'B2']);
+    expect(common).toBeGreaterThan(10);
+    expect(bad).toEqual([]);
+  });
+
+  it('the old host, back on a new page, gets its own seat back from its bot', () => {
+    const { matches, run, rejoin, room, h } = moved();
+    const seatH = h.lobby.mySeat;
+    run(40_000); // long enough for H's seat to get its bot
+    expect(matches.get('A')!.seq!.seatState(seatH)).toBe('bot');
+    const g = rejoin('H', 'H2');
+    expect(g.refused).toEqual([]);
+    expect(room.state.rows[seatH]).toMatchObject({ k: 'human', peer: 'H2' });
+    const { watch, agree } = hashes(matches);
+    watch('H2', matches.get('H2')!);
+    run(20_000);
+    expect(matches.get('H2')!.session.syncing).toBe(false);
+    expect(matches.get('A')!.seq!.seatState(seatH)).toBe('human');
+    expect(agree(['A', 'B', 'H2']).bad).toEqual([]);
+  });
+
+  it('the new host turns away a token no seat was sealed with', () => {
+    const { run, rejoin } = moved();
+    const stranger = rejoin('X', 'X1', 'not-a-seat-token');
+    expect(stranger.refused[0]).toMatch(/already started/);
+    expect(stranger.start()).toBeNull();
+    run(1000);
+  });
+
+  it('ungraceful: the host vanishes, a new one is elected, and a reload still gets back in', () => {
+    const p = play({ botSecs: 30 });
+    const { matches, run, kill, rejoin, quit } = p;
+    run(8000);
+    kill('H');
+    run(15_000);
+    const runner = ['A', 'B'].find((id) => matches.get(id)!.runner)!;
+    const other = runner === 'A' ? 'B' : 'A';
+    p.leave('H');
+    p.takeRoom(runner);
+    quit(other);
+    run(1000);
+    const g = rejoin(other, `${other}2`);
+    expect(g.refused).toEqual([]);
+    expect(g.start()!.tick).toBeGreaterThan(0);
+    run(20_000);
+    expect(matches.get(`${other}2`)!.session.syncing).toBe(false);
   });
 });
