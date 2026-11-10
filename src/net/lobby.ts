@@ -226,6 +226,12 @@ export interface HostLobbyOptions {
     /** the match under way (#192), to hand a player who comes back to it: required when `state` is mid-match */
     setup?: MatchSetup;
     /**
+     * A match picked up from a save, after everyone lost touch (#191): our
+     * own seat (found by our seal) is ours on this connection; every other
+     * keeps its seal, for its player to rejoin by.
+     */
+    resume?: boolean;
+    /**
      * We ran this room before a reload, and nobody took it over (#184): the
      * old host's seat is ours again, on our new connection. Only ever before
      * a match: a host that reloads mid-match comes back as a player, and
@@ -267,6 +273,14 @@ export class HostLobby {
   onRejoin: ((seat: number, peer: string, oldPeer: string) => void) | null = null;
   /** who runs the match under way, when it isn't us (#190): a rejoining player talks to them */
   runnerOf: (() => string | null) | null = null;
+  /**
+   * Another player runs this room's match too (#191): two picked it up from
+   * their saves at once. `yieldToIt`: whether they keep it (the lower peer
+   * id, so both sides agree) and we should rejoin theirs.
+   */
+  onRival: ((peer: string, yieldToIt: boolean) => void) | null = null;
+  /** we picked this match up from a save (#191): we tell every newcomer, so a second resumer finds us */
+  private readonly resumed: boolean;
   private readonly t: Transport;
   private readonly o: HostLobbyOptions;
   private readonly connected = new Set<string>();
@@ -281,6 +295,7 @@ export class HostLobby {
   constructor(t: Transport, o: HostLobbyOptions) {
     this.t = t;
     this.o = o;
+    this.resumed = !!o.takeOver?.resume;
     const p = o.prefs;
     const rows: SeatRow[] = Array.from({ length: MAX_SEATS }, (_, i) => ({ k: 'open', team: i }) as SeatRow);
     const me = Math.min(MAX_SEATS - 1, Math.max(0, p.color));
@@ -307,14 +322,24 @@ export class HostLobby {
       for (const peer of o.takeOver.connected) this.connected.add(peer);
       for (const tok of o.takeOver.tokens ?? []) this.seenTokens.add(tok);
       if (this.state.phase === 'playing') this.setupJson = JSON.stringify(o.takeOver.setup);
+      if (o.takeOver.resume) {
+        const mine = seal(o.ownToken ?? '', o.roomKey);
+        const seat = mine ? this.state.rows.findIndex((r) => r.k === 'human' && r.seal === mine) : -1;
+        if (this.state.phase !== 'playing' || seat < 0) throw new Error('lobby: a saved match resumes mid-match, from our own seat');
+        this.state.rows[seat] = { ...(this.state.rows[seat] as Extract<SeatRow, { k: 'human' }>), peer: t.self, ready: undefined };
+        if (this.state.runner) delete this.state.runner;
+      }
       if (o.takeOver.reclaim) {
         // back from a reload: our seat again, and nobody else is here yet
         this.state.rows = this.state.rows.map((r) => (r.k !== 'human' ? r : r.peer === old ? { ...r, peer: t.self, ready: undefined, ...this.sealOf(o.ownToken) } : { k: 'open', team: r.team }));
       }
     }
     t.onPeer = (peer, up) => {
-      if (up) this.connected.add(peer);
-      else this.lost(peer);
+      if (up) {
+        this.connected.add(peer);
+        // picked up from a save (#191): another resumer would never say hello; this way, we meet
+        if (this.resumed && seatOf(this.state, peer) < 0) this.send(peer, { k: 'lobby', state: this.json() });
+      } else this.lost(peer);
     };
     t.onMessage = (peer, bytes) => {
       const m = decodeMsg(bytes);
@@ -516,6 +541,12 @@ export class HostLobby {
       case 'ready':
         this.waiting?.ready.add(peer);
         return this.update();
+      case 'lobby': {
+        // another player hosting this room, mid-match: two picked it up from their saves (#191)
+        const s = parseLobby(m.state);
+        if (s && s.host === peer && s.phase === 'playing' && this.state.phase === 'playing' && peer !== this.t.self) this.onRival?.(peer, peer < this.t.self);
+        return;
+      }
       case 'mark': {
         const seat = seatOf(this.state, peer);
         const r = this.state.rows[seat];

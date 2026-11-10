@@ -8,6 +8,7 @@ export { broadcastTransport } from './broadcast';
 export { fetchTurn } from './ice';
 export { GuestLobby, HostLobby, matchPeers, parseLobby, rosterChanges, seatOf } from './lobby';
 export { NetMatch } from './match';
+export { canResume } from './matchSave';
 export { LOBBY_KINDS, MATCH_KINDS, Router } from './transport';
 export { webrtcTransport } from './webrtc';
 export { desyncCard, lobbyScreen, messageCard, multiplayerMenu } from '../ui/lobby';

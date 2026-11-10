@@ -167,6 +167,8 @@ export class Sequencer {
   private pauseAfter = -1;
   private statusAt = -Infinity;
   private latAt = -Infinity;
+  /** held since this clock reading (#191): we lost touch with everyone; -1: not held */
+  private heldAt = -1;
   private hashes = new Map<number, Map<number, number>>();
   private readonly clock: () => number;
   private readonly send: (peer: string, msg: Msg) => void;
@@ -458,8 +460,45 @@ export class Sequencer {
 
   // ---- clock -----------------------------------------------------------------
 
+  /**
+   * Stop everything, or carry on (#191): while the runner has lost touch
+   * with every other player, no turns close and no timers run (nobody
+   * would hear of them, and nobody is gone through their own doing). On
+   * release the clock carries on from where it stopped: no burst of turns,
+   * and every seat's timers as they were.
+   */
+  hold(on: boolean): void {
+    const now = this.clock();
+    if (on) {
+      if (this.heldAt < 0) this.heldAt = now;
+      return;
+    }
+    if (this.heldAt < 0) return;
+    const from = this.heldAt;
+    const dt = now - from;
+    this.heldAt = -1;
+    // what was set before the hold carries on as if no time passed; what was set during it (an order, a player lost) keeps its time
+    const shift = (t: number) => (t < from ? t + dt : t);
+    this.t0 += dt;
+    if (this.pause) {
+      this.pause.at = shift(this.pause.at);
+      if (this.pause.resumeAt !== Infinity) this.pause.resumeAt = shift(this.pause.resumeAt);
+    }
+    for (const r of this.seats.values()) {
+      r.heardAt = shift(r.heardAt);
+      r.awayAt = shift(r.awayAt);
+      r.tokensAt = shift(r.tokensAt);
+      r.dAt = shift(r.dAt);
+    }
+  }
+
+  get holding(): boolean {
+    return this.heldAt >= 0;
+  }
+
   /** Close every turn whose time has come, and run the seat timers. */
   update(): void {
+    if (this.heldAt >= 0) return;
     const now = this.clock();
     this.seatTimers(now);
     if (now - this.latAt >= this.opts.latMs) this.broadcastLat(now);
