@@ -84,7 +84,14 @@ export function desyncCard(o: {
 }
 
 /** The Multiplayer entry: host a room, or paste a link to join one. */
-export function multiplayerMenu(h: { host: () => void; join: (link: string) => void; back: () => void }): HTMLDivElement {
+/** A match saved when everyone lost touch (#191), as the Multiplayer menu lists it. */
+export interface SavedMatchItem {
+  label: string;
+  open: () => void;
+  del: () => void;
+}
+
+export function multiplayerMenu(h: { host: () => void; join: (link: string) => void; back: () => void; saved?: SavedMatchItem[] }): HTMLDivElement {
   const m = el(`
     <div class="screen modal">
       <div class="card">
@@ -97,11 +104,26 @@ export function multiplayerMenu(h: { host: () => void; join: (link: string) => v
           <label>Join a game <small>paste the link your host sent</small></label>
           <div class="row"><input class="join" spellcheck="false" placeholder="https://…#room=…"><button class="small" data-a="join">Join</button></div>
         </div>
+        <div class="field saved-matches" hidden>
+          <label>Saved matches <small>picked up where everyone lost touch</small></label>
+          <div class="saved-list"></div>
+        </div>
         <div class="relay-field"></div>
         <div class="row end"><button data-a="back">Back</button></div>
       </div>
     </div>`);
   m.querySelector('.relay-field')!.replaceWith(relayField());
+  // matches saved when everyone lost touch (#191): open the room again, or forget it
+  const saved = h.saved ?? [];
+  const list = m.querySelector('.saved-list')!;
+  (m.querySelector('.saved-matches') as HTMLElement).hidden = saved.length === 0;
+  for (const s of saved) {
+    const row = el(`<div class="row saved-match"><span class="grow"></span><button class="small primary" data-a="open">Open</button><button class="small" data-a="del">Delete</button></div>`);
+    row.querySelector('span')!.textContent = s.label;
+    row.querySelector('[data-a=open]')!.addEventListener('click', s.open);
+    row.querySelector('[data-a=del]')!.addEventListener('click', s.del);
+    list.appendChild(row);
+  }
   const input = m.querySelector('.join') as HTMLInputElement;
   m.querySelector('[data-a=host]')!.addEventListener('click', h.host);
   m.querySelector('[data-a=join]')!.addEventListener('click', () => h.join(input.value));

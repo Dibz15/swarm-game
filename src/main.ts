@@ -4,7 +4,8 @@ import { AudioEngine } from './audio/engine';
 import { FACTION_HEX, FACTION_RGB } from './content/factions';
 import { GameView, type Services } from './game/gameView';
 import type { EndReason, Recording } from './game/recording';
-import { downloadJson, recordingEnabled, saveRecording } from './game/recordStore';
+import { allMatches, deleteMatch, downloadJson, loadMatch, recordingEnabled, saveMatch, saveRecording } from './game/recordStore';
+import type { MatchSave } from './net/matchSave';
 import type { Character } from './game/character';
 import { LocalSession } from './game/session';
 import { ordinal } from './game/standing';
@@ -35,7 +36,7 @@ import { buildSetup, campaignMenu, randomSetup, skirmishMenu, endScreen, howToPl
 import { creatureGrid } from './ui/creatures';
 import { BUILD } from './game/recording';
 import type { DesyncReport } from './net/desync';
-import type { GuestLobby, HostGo, HostLobby, LobbyState, StartInfo } from './net/lobby';
+import type { GuestLobby, HostGo, HostLobby, HostLobbyOptions, LobbyState, StartInfo } from './net/lobby';
 import type { NetMatch } from './net/match';
 import type { Router, Transport } from './net/transport';
 import { DELAY_BAD_MS, DELAY_WARN_MS, formatTime } from './ui/hud';
@@ -57,6 +58,14 @@ interface Room {
   link: string;
   /** the characters on offer to us, for the room's screen */
   choices: Character[];
+  /** this room's match as we saved it when everyone lost touch (#191): ours to pick up if nobody hosts it */
+  save: MatchSave | null;
+  /**
+   * our seat token here (#164), read once: every hello, take-over and save
+   * uses this one, so a save matches our seat's seal even with no
+   * sessionStorage (#191)
+   */
+  token: string;
   view: LobbyView;
   router: Router | null;
   lobby: HostLobby | GuestLobby | null;
@@ -74,6 +83,15 @@ const roomCode = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array
  * reload (same tab) gets its seat back mid-match; a new tab is a new player.
  * The host keeps it private; it never reaches other players.
  */
+/** Our seat token for a room from a saved match (#191): the seat to get back, from a new tab too. */
+function setSeatToken(room: string, token: string): void {
+  try {
+    sessionStorage.setItem(`swarm-seat:${room}`, token);
+  } catch {
+    /* no storage: seatToken makes a new one, and we join as a new player */
+  }
+}
+
 function seatToken(room: string): string {
   const key = `swarm-seat:${room}`;
   try {
@@ -162,6 +180,11 @@ class App {
   private resumeShown = -1;
   /** no word from the host; the match waits while a new one is found (#166) */
   private stalled = false;
+  /** we lost touch with every other player (#191): the match stands still, saved (`saveFailed`: or not, storage refused) */
+  private lostTouch = false;
+  private saveFailed = false;
+  /** we picked the room's match up from our save, and nobody is back yet (#191): saved again now and then, until someone is */
+  private resumeKeep: ReturnType<typeof setInterval> | null = null;
   /** the desync card (#165), while the match is halted for one */
   private desyncView: { el: HTMLDivElement; detail: (text: string) => void; canResync: (on: boolean) => void } | null = null;
   /** the host's word on the last desync, which may come before the halt does */
@@ -674,6 +697,11 @@ class App {
     const mp = (this.mp = await loadMp());
     this.setModal(
       mp.multiplayerMenu({
+        saved: (await allMatches()).map((m) => ({
+          label: `Room ${m.room.slice(0, 4)} · ${formatTime(m.tick)} in · saved ${new Date(m.savedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`,
+          open: () => void this.openRoom(m.room, m.secret, false),
+          del: () => void deleteMatch(m.room).then(() => this.showMultiplayer()),
+        })),
         host: () => void this.openRoom(roomCode(10), roomCode(16), true),
         join: (link) => {
           const r = parseRoom(link);
@@ -720,17 +748,25 @@ class App {
   /** Host a room, or join one: the lobby screen, then the transport, then the lobby on it. */
   private async openRoom(id: string, secret: string, host: boolean): Promise<void> {
     this.closeRoom();
-    const mp = (this.mp = await loadMp());
+    const raw = host ? null : loadHosted(id);
+    // a match from this room we saved when everyone lost touch (#191): our seat by its token, from any tab.
+    // Not when we'll host it (a reload of a room we ran), and alongside loading the multiplayer code
+    const hosting = host || /"phase":"(lobby|starting)"/.test(raw ?? '');
+    const [mp, found] = await Promise.all([loadMp(), hosting ? null : loadMatch(id)]);
+    this.mp = mp;
     // this tab ran this room before a reload, and nobody took it over: run it again (#184)
-    const hosted = host ? null : mp.parseLobby(loadHosted(id) ?? '');
+    const hosted = raw ? mp.parseLobby(raw) : null;
     if (hosted?.phase === 'lobby' || hosted?.phase === 'starting') host = true;
+    const save = host ? null : found;
+    if (save) setSeatToken(id, save.token);
+    const token = save?.token ?? seatToken(id);
     const hash = `#room=${id}.${secret}`;
     history.replaceState(null, '', `${location.pathname}${location.search}${hash}`);
     const link = `${location.origin}${location.pathname}${location.search}${hash}`;
     const last = mp.loadCharacter();
     const choices = mp.characterChoices(last ? 3 : 4, last ? [last.name] : []);
     if (last) choices.unshift(last);
-    const room: Room = { id, secret, host, link, choices, view: null as unknown as LobbyView, router: null, lobby: null, seen: null, linkPoll: null };
+    const room: Room = { id, secret, host, link, choices, save, token, view: null as unknown as LobbyView, router: null, lobby: null, seen: null, linkPoll: null };
     const view = (room.view = this.roomView(mp, room));
     this.room = room;
     this.setModal(view.el);
@@ -757,7 +793,7 @@ class App {
           clock,
           mobile: isMobile(),
           cell: onCellData(),
-          ownToken: seatToken(id),
+          ownToken: token,
           roomKey: `${id}.${secret}`,
           takeOver: hosted ? { state: hosted, connected: [], reclaim: true } : undefined,
         }),
@@ -766,7 +802,7 @@ class App {
       room.seen = structuredClone(room.lobby.state);
       view.status('Send the link to your friends. They appear here as they join.');
     } else {
-      room.lobby = this.wireGuestLobby(new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), cell: onCellData(), token: seatToken(id), clock }));
+      room.lobby = this.wireGuestLobby(new mp.GuestLobby(router.view(mp.LOBBY_KINDS), { build: BUILD, char: choices[0].seed, mobile: isMobile(), cell: onCellData(), token, clock }));
       view.status('Looking for the host…');
     }
     room.linkPoll = setInterval(() => this.pollLinks(room), 3000);
@@ -851,6 +887,10 @@ class App {
     lobby.onRejoin = (seat, peer) => this.match?.rebind(seat, peer);
     // a rejoining player talks to whoever runs the match (#190)
     lobby.runnerOf = () => this.match?.runnerPeer ?? null;
+    // two of us picked the match up from our saves at once (#191): one keeps it
+    lobby.onRival = (_peer, yieldToIt) => {
+      if (yieldToIt) this.yieldRoom();
+    };
     return lobby;
   }
 
@@ -882,7 +922,10 @@ class App {
     };
     // in a match, the match itself watches the host (and finds a new one, #166)
     lobby.onNoHost = (why) => {
-      if (!this.match) this.roomLost(why);
+      if (this.match) return;
+      // nobody runs the match we saved (#191): ours to pick up
+      if (this.room?.save) return this.offerResume();
+      this.roomLost(why);
     };
     lobby.onHostLink = (state) => {
       if (this.match) return;
@@ -908,21 +951,7 @@ class App {
     old.close();
     const self = r.router.transport.self;
     const connected = st.rows.flatMap((row) => (row.k === 'human' && row.peer !== self && row.peer !== st.host ? [row.peer] : []));
-    r.host = true;
-    r.view = this.roomView(mp, r);
-    const lobby = new mp.HostLobby(r.router.view(mp.LOBBY_KINDS), {
-      build: BUILD,
-      char: this.ownChar(st),
-      prefs: loadPrefs(),
-      seed: st.seed,
-      clock: () => performance.now(),
-      mobile: isMobile(),
-      cell: onCellData(),
-      ownToken: seatToken(r.id),
-      roomKey: `${r.id}.${r.secret}`,
-      takeOver: { state: st, connected, tokens },
-    });
-    r.lobby = this.wireHostLobby(lobby);
+    const lobby = this.takeOverRoom(r, mp, { char: this.ownChar(st), seed: st.seed, takeOver: { state: st, connected, tokens } });
     r.seen = structuredClone(lobby.state);
     if (!this.game) this.setModal(r.view.el);
     lobby.announce();
@@ -943,7 +972,7 @@ class App {
     old.close();
     r.host = false;
     r.view = this.roomView(mp, r);
-    const lobby = this.wireGuestLobby(new mp.GuestLobby(r.router.view(mp.LOBBY_KINDS), { build: BUILD, char: this.ownChar(old.state), mobile: isMobile(), cell: onCellData(), token: seatToken(r.id), clock: () => performance.now() }));
+    const lobby = this.wireGuestLobby(new mp.GuestLobby(r.router.view(mp.LOBBY_KINDS), { build: BUILD, char: this.ownChar(old.state), mobile: isMobile(), cell: onCellData(), token: r.token, clock: () => performance.now() }));
     lobby.follow(leader);
     lobby.state = { ...old.state, host: leader };
     r.lobby = lobby;
@@ -954,6 +983,106 @@ class App {
     const self = this.room?.router?.transport.self;
     const row = s?.rows.find((r) => r.k === 'human' && r.peer === self);
     return row?.k === 'human' ? row.char : (this.room?.choices[0].seed ?? 0);
+  }
+
+  /** Nobody hosts the match we saved (#191): pick it up from our save, or go. */
+  private offerResume(): void {
+    const save = this.room?.save, mp = this.mp;
+    if (!save || !mp) return;
+    const ago = Math.max(1, Math.round((Date.now() - save.savedAt) / 60_000));
+    const when = ago < 60 ? `${ago} min ago` : new Date(save.savedAt).toLocaleString();
+    this.setModal(
+      mp.messageCard(
+        'Nobody’s hosting this match',
+        `You saved it ${when}, ${formatTime(save.tick)} in. Pick it up from your save and you host it: the others get their seats back by opening the same link.`,
+        [
+          { label: 'Back to menu', on: () => this.leaveRoom() },
+          { label: 'Resume the match', primary: true, on: () => this.resumeSaved() },
+        ],
+      ),
+    );
+  }
+
+  /**
+   * Run the room's match again from our save (#191): the room as we last saw
+   * it, the match from where it stood. Checked first, so a save that can't
+   * be picked up never leaves the room half torn down. The save stays until
+   * someone is back: if this page goes too, it can be picked up again.
+   */
+  private resumeSaved(): void {
+    const r = this.room, mp = this.mp, save = r?.save;
+    if (!r?.router || !mp || !save || !(r.lobby instanceof mp.GuestLobby)) return;
+    // a host turned up meanwhile (another player picked it up): theirs it is, we rejoin it
+    if (r.lobby.host) return;
+    if (!mp.canResume(save, `${r.id}.${r.secret}`)) return this.cantResume(r.id);
+    r.lobby.close();
+    r.save = null;
+    try {
+      const own = save.lobby.rows[save.seat];
+      const lobby = this.takeOverRoom(r, mp, { char: own?.k === 'human' ? own.char : r.choices[0].seed, seed: save.lobby.seed, takeOver: { state: save.lobby, connected: [], setup: save.setup, resume: true } });
+      lobby.announce();
+      r.seen = structuredClone(lobby.state);
+      const match = mp.NetMatch.resume(r.router.view(mp.MATCH_KINDS), save);
+      this.startGame(save.setup, { seat: save.seat, match, record: false });
+    } catch (e) {
+      console.warn('couldn’t resume the match', e);
+      return this.cantResume(r.id);
+    }
+    // saved again now and then while we wait, so a crash loses little; the first player back ends it
+    this.resumeKeep = setInterval(() => this.saveRoomMatch(), 30_000);
+  }
+
+  /** The save can't be picked up (#191): say so, and offer to forget it. */
+  private cantResume(room: string): void {
+    const mp = this.mp;
+    this.closeRoom();
+    if (!mp) return this.showMenu();
+    this.setModal(
+      mp.messageCard('This save can’t be picked up', 'It doesn’t match your seat in that room, so the others couldn’t rejoin you. This happens when the browser wouldn’t keep your seat for the room.', [
+        { label: 'Back to menu', on: () => this.showMenu() },
+        { label: 'Delete it', primary: true, on: () => void deleteMatch(room).then(() => this.showMenu()) },
+      ]),
+    );
+  }
+
+  /** A player is back in the match we picked up (#191): no need for the save any more. */
+  private resumeDone(): void {
+    if (this.resumeKeep) clearInterval(this.resumeKeep);
+    this.resumeKeep = null;
+    if (this.room) void deleteMatch(this.room.id);
+  }
+
+  /** Two of us picked this match up at once (#191): the other keeps it; we rejoin theirs, from our save, by our token. */
+  private yieldRoom(): void {
+    const r = this.room;
+    if (!r) return;
+    if (this.resumeKeep) clearInterval(this.resumeKeep);
+    this.resumeKeep = null;
+    const { id, secret } = r;
+    // save where we stand first, so the rejoin finds a save and our token
+    void this.saveRoomMatch().then(() => {
+      this.endGame();
+      this.closeRoom();
+      void this.openRoom(id, secret, false);
+    });
+  }
+
+  /** The room's match, saved as it stands (#191). False when storage refused it. */
+  private async saveRoomMatch(): Promise<boolean> {
+    const r = this.room, m = this.match;
+    const lobby = r?.lobby?.state;
+    if (!r || !m || !lobby) return false;
+    return saveMatch({ ...m.exportSave(), room: r.id, secret: r.secret, savedAt: Date.now(), token: r.token, lobby: structuredClone(lobby) });
+  }
+
+  /** We lost touch with everyone (#191): save the match where it stands; someone's back: the save goes. */
+  private lostAll(on: boolean): void {
+    this.lostTouch = on;
+    this.saveFailed = false;
+    const r = this.room;
+    if (!r || !this.match) return;
+    if (!on) return void deleteMatch(r.id);
+    void this.saveRoomMatch().then((ok) => (this.saveFailed = !ok));
   }
 
   /** The room's rows changed mid-match (a rejoin under a new peer id): the match's list of who could host follows (#166). */
@@ -972,22 +1101,32 @@ class App {
     if (!r?.router || !mp || !m || r.host || !(r.lobby instanceof mp.GuestLobby) || !r.lobby.state) return;
     const old = r.lobby;
     old.close();
+    const lobby = this.takeOverRoom(r, mp, { char: this.ownChar(old.state), seed: old.state!.seed, takeOver: { state: old.state!, connected: m.livePeers(), setup: m.session.setup } });
+    lobby.announce();
+  }
+
+  /**
+   * We run the room from here on (#184, #166, #191): a host lobby taken over
+   * from `takeOver`, with our token and the room's key, and a host's screen.
+   * The caller has closed the lobby before it, and announces this one.
+   */
+  private takeOverRoom(r: Room, mp: Mp, o: { char: number; seed: string; takeOver: NonNullable<HostLobbyOptions['takeOver']> }): HostLobby {
     r.host = true;
     r.view = this.roomView(mp, r);
-    const lobby = new mp.HostLobby(r.router.view(mp.LOBBY_KINDS), {
+    const lobby = new mp.HostLobby(r.router!.view(mp.LOBBY_KINDS), {
       build: BUILD,
-      char: this.ownChar(old.state),
+      char: o.char,
       prefs: loadPrefs(),
-      seed: old.state!.seed,
+      seed: o.seed,
       clock: () => performance.now(),
       mobile: isMobile(),
       cell: onCellData(),
-      ownToken: seatToken(r.id),
+      ownToken: r.token,
       roomKey: `${r.id}.${r.secret}`,
-      takeOver: { state: old.state!, connected: m.livePeers(), setup: m.session.setup },
+      takeOver: o.takeOver,
     });
     r.lobby = this.wireHostLobby(lobby);
-    lobby.announce();
+    return lobby;
   }
 
   private renderRoom(): void {
@@ -1027,6 +1166,14 @@ class App {
         ownerPeer: owner === undefined ? s.host : undefined,
         runnerSeat: pinned >= 0 ? pinned : undefined,
       });
+      // back in a match we'd saved (#191): once its world is ours, the save is done with
+      if (resume && r.save) {
+        const id = r.id;
+        match.session.onAdopt = () => {
+          r.save = null;
+          void deleteMatch(id);
+        };
+      }
       this.startGame(s.setup, { seat: s.seat, match, record: false });
     } catch {
       r.view.status('The host sent a match this version can’t play.', true);
@@ -1213,7 +1360,11 @@ class App {
   private updateBanner(g: GameView): void {
     const h = this.hud;
     if (!h) return;
-    // first: no host to be had, rejoining or not; there's a way out
+    // first: nobody at all, the match saved (#191); then no host to be had, rejoining or not; there's a way out
+    if (this.lostTouch && !g.result) {
+      const text = this.saveFailed ? 'Lost touch with everyone. Reconnecting… (couldn’t save this match)' : 'Lost touch with everyone. Reconnecting… Your match is saved: open the room link again to pick it up.';
+      return h.banner(text, [{ label: 'Leave', on: () => this.leaveRoom() }]);
+    }
     if (this.stalled && !g.result) return h.banner('Lost touch with the host. Finding a new one…', [{ label: 'Leave', on: () => this.leaveRoom() }]);
     // paused with the menu closed: say so, and count down a resume, so it never looks like a hang (#198)
     const pause = this.pauseLine(g);
@@ -1430,6 +1581,8 @@ class App {
             this.ownBot = state === 'bot';
             return;
           }
+          // a player back in a match we picked up from our save (#191)
+          if (state === 'human' && this.resumeKeep) this.resumeDone();
           const who = this.seatName(seat);
           if (state === 'away') this.hud?.toast(`${who} lost connection`, '#8aa0b8');
           else if (state === 'bot') this.hud?.toast(`${who} dropped: an Easy bot took over`, '#ffb627');
@@ -1452,6 +1605,7 @@ class App {
           if (this.desyncView && halted >= 0) this.showDesync(halted);
         },
         onStall: (stalled) => (this.stalled = stalled),
+        onLost: (on) => this.lostAll(on),
         onDesync: (t) => this.showDesync(t),
         onDesyncReport: (r) => this.desyncDetail(r),
         // the host's word can come before our halt turn does: keep it for the card
@@ -1502,6 +1656,9 @@ class App {
     this.match = null;
     this.ownBot = false;
     this.stalled = false;
+    this.lostTouch = false;
+    if (this.resumeKeep) clearInterval(this.resumeKeep);
+    this.resumeKeep = null;
     this.desyncView = null;
     this.desyncNote = null;
     this.netMenu = null;
@@ -1571,6 +1728,8 @@ class App {
   private showEnd(): void {
     const g = this.game!;
     this.endShown = true;
+    // the match is over: nothing left to pick up (#191)
+    if (this.room && this.match) void deleteMatch(this.room.id);
     this.input.enabled = false;
     this.input.reset();
     const won = g.result === 'victory';

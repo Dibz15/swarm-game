@@ -170,19 +170,33 @@ describe('hosting moves (#166)', () => {
     expect(b.session.world.tick).toBeGreaterThan(t + 2 / DT);
   });
 
-  it('two players: the one left hosts itself and plays on against the other’s Easy bot', () => {
-    const { matches, run, kill } = play({ guests: ['A'], botSecs: 30 });
+  it('two players: when the host leaves, the one left hosts itself and plays on against the other’s Easy bot', () => {
+    const { matches, run, quit } = play({ guests: ['A'], botSecs: 30 });
     run(10_000);
     const seatH = matches.get('H')!.session.localSeat;
     const seen: [number, string][] = [];
     matches.get('A')!.events.onSeat = (seat, state) => seen.push([seat, state]);
-    kill('H');
+    expect(matches.get('H')!.handOff()).toBe(true);
+    run(150);
+    quit('H');
     run(40_000);
     expect(matches.get('A')!.runner).toBe(true);
     expect(seen).toEqual([
       [seatH, 'away'],
       [seatH, 'bot'],
     ]);
+  });
+
+  it('two players: when the host vanishes instead, the one left can’t tell it from its own connection dying, and waits (#191)', () => {
+    const { matches, run, kill } = play({ guests: ['A'], botSecs: 30 });
+    run(10_000);
+    const seen: [number, string][] = [];
+    matches.get('A')!.events.onSeat = (seat, state) => seen.push([seat, state]);
+    kill('H');
+    run(40_000);
+    expect(matches.get('A')!.runner).toBe(false);
+    expect(matches.get('A')!.lonely).toBe(true);
+    expect(seen).toEqual([]);
   });
 
   it('a phone takes over last: with A on a phone, B hosts next', () => {

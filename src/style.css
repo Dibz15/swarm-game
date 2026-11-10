@@ -1370,3 +1370,8 @@ body.land .end .sub { grid-column: 1; margin: 2px 0 6px; }
 body.land .end .chart { grid-column: 2; grid-row: 1 / span 3; height: 140px; margin: 0; align-self: center; }
 body.land .end .stats { grid-column: 1 / -1; font-size: 13px; }
 body.land .end .row { grid-column: 1 / -1; }
+
+/* matches saved when everyone lost touch (#191), in the Multiplayer menu */
+.saved-matches[hidden] { display: none; }
+.saved-match { margin-top: 6px; flex-wrap: nowrap; }
+.saved-match .grow { flex: 1; min-width: 0; font-size: 13px; opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

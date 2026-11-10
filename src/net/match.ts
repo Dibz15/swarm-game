@@ -5,7 +5,7 @@ import { decodeMsg, encodeMsg, msgKind } from './codec';
 import { analyzeDesync, type DesyncReport } from './desync';
 import { FakeNetwork, VirtualClock, type LinkSpec } from './fakeTransport';
 import type { HostGo } from './lobby';
-import { NetSession, type NetSessionOptions } from './netSession';
+import { NetSession, type NetSessionOptions, type SessionSave } from './netSession';
 import { MAX_TURNS_PER_MSG, type Ctrl, type Msg, type MsgKind } from './protocol';
 import { oddOnes, rebuildState, Sequencer, SEQUENCER_DEFAULTS, type SequencerOptions, type SequencerState } from './sequencer';
 import { canGzip, chunkSnap, packSnap, settle, SnapAssembler, unpackSnap } from './snapwire';
@@ -69,6 +69,24 @@ export interface NetMatchEvents {
   onDesyncReport?: (report: DesyncReport) => void;
   /** guests: the host's word on it, the first field that differs */
   onDesyncNote?: (tick: number, text: string) => void;
+  /**
+   * We lost touch with every other player, and at least one of them dropped
+   * rather than left (#191): the match stands still here, to be saved; false
+   * when someone is back
+   */
+  onLost?: (lost: boolean) => void;
+}
+
+/** What a match picks up from after everyone lost touch (#191): `NetMatch.resume`. */
+export interface MatchResume extends SessionSave {
+  setup: MatchSetup;
+  seat: number;
+  /** every human seat, and the peer that played it then */
+  peers: MatchPeer[];
+  /** the epoch the match was on: a resumed one runs above it */
+  epoch: number;
+  /** a dropped seat's idle time before its Easy bot, ms */
+  botMs: number;
 }
 
 /** A human seat in the match, and the peer that plays it. */
@@ -148,6 +166,12 @@ export const COLLECT_MS = 400;
 export const LEAD_WAIT_MS = 1000;
 /** the host said goodbye: its handoff may still be on its way (another channel) */
 export const BYE_WAIT_MS = 150;
+/**
+ * Out of touch with every other player this long, at least one of them
+ * dropped (#191): the match stands still and is saved. Long enough for a
+ * handover or a blip to pass.
+ */
+export const LONELY_MS = 3000;
 
 /** players report their round trips to the runner this often (#190) */
 export const LINKS_MS = 2000;
@@ -276,6 +300,12 @@ export class NetMatch {
   private gone = new Set<string>();
   private goneAt = new Map<string, number>();
   private linkLost = new Set<string>();
+  /** peers whose link dropped (not a goodbye), and when, until we hear from them again (#191) */
+  private dropped = new Map<string, number>();
+  /** out of touch with everyone since (#191); -1: not */
+  private lonelySince = -1;
+  private lonely_ = false;
+  private botMs = 0;
   private beatAt = -Infinity;
   private suspect = false;
   private stalled = false;
@@ -409,6 +439,7 @@ export class NetMatch {
       ownerPeer: cfg.ownerPeer,
       pin: cfg.runnerSeat,
     });
+    m.botMs = cfg.botMs ?? 0;
     if (cfg.leader === remote.self) {
       // a few seconds in, once links are measured: is someone better placed to run it? (#190)
       if (!cfg.resume) {
@@ -441,6 +472,29 @@ export class NetMatch {
   ): NetMatch {
     const peers = go.seats.map((s) => ({ seat: s.seat, team: s.team, peer: s.peer ?? remote.self, mobile: s.mobile, ...(s.cell ? { cell: true } : {}) }));
     return NetMatch.create(remote, { setup: go.setup, seat: go.hostSeat, peers, leader: remote.self, botMs: go.botMs, owner: go.hostSeat, runnerSeat: go.runnerSeat, ...o });
+  }
+
+  /**
+   * A match picked up from a save (#191), run from here: our world and log
+   * as saved, a sequencer rebuilt from them under an epoch above the saved
+   * one, and every other seat away until its player rejoins (the room's bot
+   * policy meanwhile). We host it.
+   */
+  static resume(remote: Transport, save: MatchResume, o: { clock?: () => number; seq?: Partial<SequencerOptions>; net?: Partial<NetSessionOptions>; heartbeat?: boolean; gzip?: boolean } = {}): NetMatch {
+    const old = save.peers.find((p) => p.seat === save.seat)?.peer;
+    const peers = save.peers.map((p) => (p.seat === save.seat ? { ...p, peer: remote.self } : p));
+    const m = NetMatch.create(remote, { setup: save.setup, seat: save.seat, peers, leader: remote.self, botMs: save.botMs, owner: save.seat, resume: true, ...o });
+    m.makeSeq = null;
+    m.session.restore(save);
+    // the others' old connections are gone: they come back on new ones, and nobody dropped here
+    for (const p of peers) if (p.peer !== remote.self) m.gone.add(p.peer);
+    if (old) m.gone.add(old);
+    m.epoch = save.epoch;
+    m.promote(epochFor(Math.floor(save.epoch / 8) + 1, save.seat));
+    for (const p of peers) if (p.peer !== remote.self) m.seq_?.peerLost(p.peer);
+    // who hosts, in the log: a rejoiner's snapshot carries it
+    m.seq_?.addCtrl({ k: 'owner', seat: save.seat });
+    return m;
   }
 
   /** A guest's side (#162). `resume`: rejoining a match under way (#164). `peers`: every human seat, to take over hosting (#166). */
@@ -722,8 +776,11 @@ export class NetMatch {
       if (this.leading_) this.seq_?.peerLost(peer);
     };
     remote.onLink = (peer, state) => {
-      if (state === 'lost') this.linkLost.add(peer);
-      else this.linkLost.delete(peer);
+      if (state === 'lost') {
+        this.linkLost.add(peer);
+        if (!this.dropped.has(peer)) this.dropped.set(peer, this.clock());
+      } else this.linkLost.delete(peer);
+      if (state === 'back') this.dropped.delete(peer);
     };
   }
 
@@ -750,10 +807,78 @@ export class NetMatch {
       this.makeSeq = null;
       this.adoptSeq(seq);
     }
+    if (this.remote) this.checkLonely(this.clock());
     this.seq_?.update();
     this.markSpectators();
     this.checkCollect();
     if (this.remote) this.elect(this.clock());
+  }
+
+  /** We lost touch with every other player (#191): the match stands still here until someone is back. */
+  get lonely(): boolean {
+    return this.lonely_;
+  }
+
+  /**
+   * Every other player is out of reach (gone, link lost, or silent), and the
+   * last of them to go out of reach dropped, rather than said goodbye or
+   * went hidden: from here that's the same as our own connection dying.
+   * (Players who dropped earlier, while the match went on without them,
+   * don't count: their seats are handled.) For LONELY_MS, then the match
+   * stands still: nobody takes over, no turns close, no seat goes to a bot,
+   * and the app saves it. Anyone heard from again ends it.
+   */
+  private checkLonely(now: number): void {
+    // our own page hidden: we can't tell who's there (we're the one away), so nothing changes until it's shown
+    if (this.hidden) return;
+    const others = this.peers.filter((p) => p.peer !== this.self).map((p) => p.peer);
+    let out = others.length > 0;
+    let last = -Infinity;
+    let dropped = false;
+    for (const p of others) {
+      if (!out) break;
+      const b = this.beats.get(p);
+      const heard = b?.at ?? this.started;
+      const gone = this.gone.has(p);
+      if (!gone && !this.linkLost.has(p) && now - heard <= ALIVE_MS) {
+        out = false;
+        break;
+      }
+      // when it went out of reach, and how: its link dropped, it said goodbye, or it went silent
+      const lost = this.dropped.get(p);
+      const at = lost ?? (gone ? (this.goneAt.get(p) ?? heard) : heard + ALIVE_MS);
+      if (at < last) continue;
+      last = at;
+      // a page that went hidden is away, not dropped: a phone's frozen tab says nothing for a while
+      dropped = !b?.hidden && (lost !== undefined || !gone);
+    }
+    const now_ = out && dropped;
+    if (!now_) {
+      this.lonelySince = -1;
+      if (this.lonely_) this.setLonely(false);
+      return;
+    }
+    if (this.lonelySince < 0) this.lonelySince = now;
+    if (!this.lonely_ && now - this.lonelySince >= LONELY_MS) this.setLonely(true);
+  }
+
+  private setLonely(on: boolean): void {
+    this.lonely_ = on;
+    this.seq_?.hold(on);
+    if (on) {
+      this.candidate = null;
+      this.awaiting = null;
+    }
+    this.events.onLost?.(on);
+  }
+
+  /**
+   * What the match picks up from (#191), as it stands here: our world at
+   * the last tick we stepped and the log up to it, who played each seat,
+   * and the epoch.
+   */
+  exportSave(): MatchResume {
+    return { ...this.session.saveState(), setup: this.session.setup, seat: this.mySeat, peers: this.peers.map((p) => ({ ...p })), epoch: Math.max(this.epoch, this.session.currentEpoch), botMs: this.botMs };
   }
 
   private adoptSeq(seq: Sequencer): void {
@@ -1067,6 +1192,8 @@ export class NetMatch {
         else this.remote?.send(this.leaderId, encodeMsg({ k: 'rebind', seat, peer }));
       }
     }
+    // out of touch with everyone (#191), or about to be: nobody to elect with. We keep beating (above), to hear who's back
+    if (this.lonelySince >= 0) return;
     if (this.candidate) {
       if (now < this.candidate.until) return;
       // a snapshot we were waiting for since claiming means our world can't be hosted from: give way
@@ -1113,6 +1240,7 @@ export class NetMatch {
     switch (m.k) {
       case 'beat': {
         this.beats.set(peer, { at: now, epoch: m.epoch, ok: m.ok, hidden: m.hidden, syncing: m.syncing });
+        this.dropped.delete(peer);
         this.stamps.set(peer, { t: m.t, at: now });
         // our stamp, back: the round trip, less how long they held it (#190)
         if (m.echo >= 0) {

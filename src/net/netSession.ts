@@ -101,6 +101,22 @@ export interface NetSessionConfig {
   resume?: boolean;
 }
 
+/** A session as saved when its match lost everyone (#191): what `restore` picks up from. */
+export interface SessionSave {
+  /** the last tick our world stepped */
+  tick: number;
+  /** the world then (`serializeWorld`), and its fullHash */
+  snap: Uint8Array;
+  hash: number;
+  /** the closed turns up to `tick` */
+  history: { first: number; turns: Turn[] };
+  log: TimedCommand[];
+  ctrlLog: { tick: number; ctrl: Ctrl }[];
+  /** our last order's number: orders after a resume number on above it */
+  seq: number;
+  pausedBy: number;
+}
+
 interface Pending {
   cmd: Command;
   issuedAt: number;
@@ -472,6 +488,56 @@ export class NetSession implements Session {
     }
     if (w.tick !== meta.tick) return void this.badMessages++;
     this.adopt(w, meta, { restep: !!meta.resync && !this.syncing });
+  }
+
+  /**
+   * Everything a match picks up from (#191): our world at the last tick we
+   * stepped, as bytes and its hash, and the log up to it. Buffered turns
+   * past it are left out: the world never ran them.
+   */
+  saveState(): SessionSave {
+    const w = this.world_;
+    const tick = w.tick;
+    const h = this.closedTurns();
+    const snap = serializeWorld(w);
+    return {
+      tick,
+      snap,
+      hash: hashBytes(snap),
+      history: { first: h.first, turns: h.turns.slice(0, Math.max(0, tick + 1 - h.first)) },
+      log: this.log.filter((c) => c.tick <= tick),
+      ctrlLog: this.ctrlLog.filter((c) => c.tick <= tick),
+      seq: this.seq,
+      pausedBy: this.pausedBy,
+    };
+  }
+
+  /**
+   * Become a saved match (#191): its world, and its log, so a sequencer
+   * rebuilt from our history knows every seat's orders and state. Like
+   * `adopt`, but the history comes too.
+   */
+  restore(save: SessionSave): void {
+    this.world_ = restoreWorld(this.setup, decodeSnap(save.snap));
+    const tick = this.world_.tick;
+    this.turns.clear();
+    this.held_ = tick;
+    this.maxSeen = tick;
+    this.history = save.history.turns.slice();
+    this.historyFrom = save.history.first;
+    this.log.length = 0;
+    this.log.push(...save.log);
+    this.ctrlLog.length = 0;
+    this.ctrlLog.push(...save.ctrlLog);
+    this.seq = Math.max(this.seq, save.seq);
+    this.pausedBy = save.pausedBy;
+    this.own = this.localSeat >= 0 && seatHasBot(this.world_, this.localSeat) ? 'bot' : 'human';
+    this.forkFloor = -1;
+    this.syncing = false;
+    this.started = false;
+    this.acc = 0;
+    this.gapSince = -1;
+    this.offsets.length = 0;
   }
 
   /**

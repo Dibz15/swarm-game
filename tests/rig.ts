@@ -131,7 +131,7 @@ export function room() {
       else queue.splice(i, 1)[0].go();
     }
   };
-  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow, tokenOf, lag, flush };
+  return { clock, host, guest, leave, drop, reconnect, giveUp, silence, heal, ids, inject, routerOf, startNow, tokenOf, lag, flush, link, arrived };
 }
 
 export type Guest = ReturnType<ReturnType<typeof room>['guest']>;
@@ -246,7 +246,7 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
     quit(id);
     return rejoin(id, newId);
   };
-  return { ...rm, h, gs, matches, run, quit, rejoin, reload, add, kill, dead, orders, takeRoom, owner: () => owner };
+  return { ...rm, h, gs, matches, run, quit, rejoin, reload, add, kill, dead, orders, takeRoom, owner: () => owner, wire };
 }
 
 /** The host's "Runs the match" choice, as a seat (#190; main.ts does the same) */
