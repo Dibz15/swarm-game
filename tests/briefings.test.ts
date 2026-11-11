@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nodeSetup, warlordOf } from '../src/campaign/battle';
-import { BATTLE_TYPES, battleType, briefingFor, briefsSeen, markBriefSeen, resetBriefs, type BattleType } from '../src/campaign/briefings';
+import { BATTLE_TYPES, battleType, briefingFor, duration, briefsSeen, markBriefSeen, resetBriefs, type BattleType } from '../src/campaign/briefings';
 import { PLAYTESTS } from '../src/campaign/playtest';
 import { newRun, type RunState } from '../src/campaign/run';
 import { MissionRun } from '../src/game/tutorial';
@@ -33,7 +33,6 @@ describe('battle briefings (#218)', () => {
       expect(battleType(w)).toBe(type);
       const lord = warlordOf(run, node);
       const m = briefingFor(w, run.nodes[node].kind, lord ?? undefined)!;
-      expect(m.guide).toBe(true);
       expect(m.steps.length).toBeGreaterThanOrEqual(2);
       expect(m.steps.length).toBeLessThanOrEqual(4);
       const human = 0;
@@ -67,6 +66,22 @@ describe('battle briefings (#218)', () => {
       // Every briefing but Conquest's rings what it's about.
       if (type !== 'conquest') expect(rings).toBeGreaterThan(0);
     });
+
+  it('says the win share the battle is really played to', () => {
+    for (const type of ['conquest', 'stronghold'] as const) {
+      const { run, node } = battleOf(type);
+      const w = createWorld(nodeSetup(run, node));
+      const all = briefingFor(w, run.nodes[node].kind)!.steps.map((s) => s.text.desktop).join(' ');
+      expect(all).toContain(`${Math.round(w.domShare * 100)}% of the nests`);
+    }
+  });
+
+  it('words durations', () => {
+    expect(duration(60)).toBe('a minute');
+    expect(duration(120)).toBe('2 minutes');
+    expect(duration(1)).toBe('1 second');
+    expect(duration(90)).toBe('90 seconds');
+  });
 
   it('names the stronghold warlord and its trait', () => {
     const { run, node } = battleOf('stronghold');

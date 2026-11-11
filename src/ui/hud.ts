@@ -396,7 +396,7 @@ export class Hud {
 
   /** Tutorial coach: the current step's instruction and progress (#17). */
   private updateCoach(g: GameView, mobile: boolean): void {
-    const m = g.mission;
+    const m = g.coached;
     // The live status line changes on its own; everything else only when the step does.
     const ctx = { w: g.world, human: g.human, log: g.session.log };
     const status = m?.current?.status?.(m.ctx(ctx)) ?? '';
@@ -426,7 +426,7 @@ export class Hud {
     }
     this.tip.style.display = 'none';
     const step = m.current;
-    const guide = !!m.mission.guide;
+    const guide = m === g.briefing;
     // A battle briefing (#218) names the battle; its Skip just ends the briefing.
     (this.coach.querySelector('small') as HTMLElement).textContent = guide ? `Battle briefing · ${m.mission.title}` : `Mission ${m.index + 1} of ${MISSIONS.length} · ${m.mission.title}`;
     const skip = this.coach.querySelector('[data-a=skip]') as HTMLElement;

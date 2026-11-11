@@ -46,7 +46,7 @@ import {
 } from '../campaign/run';
 import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, rewardText, type Family, type Reward } from '../campaign/rewards';
 import { COST, KIND_NAME, KIND_NEST, KIND_ONE, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
-import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
+import { KEYS, Kind, NestType, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { FACTION_HEX } from '../content/factions';
 import { DIFFICULTY_NAMES, type Personality } from '../sim/ai/bot';

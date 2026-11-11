@@ -59,7 +59,12 @@ export class GameView {
   readonly rec: Recorder | null;
   /** tutorial mission being played, if any (#17) */
   mission: MissionRun | null = null;
-  /** a battle briefing (#218, a `guide` mission) ended, finished or skipped */
+  /**
+   * A campaign battle briefing (#218), if one is showing: tour steps on the
+   * coach over a real battle. Ending it (done or skipped) just lets the battle go on.
+   */
+  briefing: MissionRun | null = null;
+  /** the briefing ended, finished or skipped */
   onGuideEnd: (() => void) | null = null;
   /** the step whose camera focus was last applied */
   private focusStep = -1;
@@ -141,7 +146,7 @@ export class GameView {
       else if (w.over) this.finish(w.winnerTeam === w.teamOf[this.human] ? 'victory' : 'defeat', time);
     }
     if (!this.result) this.checkSupply();
-    if (!this.result && this.mission) this.updateMission(time);
+    if (!this.result && this.coached) this.updateMission(time);
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
     // Domination countdown ticks in the last ten seconds.
     const ds = this.result ? null : dominationStatus(w);
@@ -168,7 +173,7 @@ export class GameView {
 
   /** Advance the tutorial steps, pulse the nests the current step is about, end on success. */
   private updateMission(time: number): void {
-    const m = this.mission!;
+    const m = this.coached!;
     const base = { w: this.world, human: this.human, log: this.session.log };
     let entered = 0;
     const enter = () => {
@@ -186,7 +191,7 @@ export class GameView {
       enter();
     }
     const ctx = m.ctx(base);
-    if (m.complete && m.mission.guide) return this.endGuide();
+    if (m.complete && m === this.briefing) return this.endGuide();
     if (m.complete) {
       this.session.held = false;
       this.waitHint = null;
@@ -214,7 +219,7 @@ export class GameView {
       if (f === null) cam.fit();
       else if (f) cam.focus(f.x, f.y, f.zoom ? cam.fitZoom * f.zoom : cam.zoom);
       // Rings on the step's nests right away, not up to a second later.
-      if (f !== undefined) this.highlightAt = 0;
+      this.highlightAt = 0;
     }
     if (time - this.highlightAt < 1.1) return;
     this.highlightAt = time;
@@ -234,8 +239,8 @@ export class GameView {
    * where it was held, the camera back on your home.
    */
   endGuide(): void {
-    if (!this.mission?.mission.guide) return;
-    this.mission = null;
+    if (!this.briefing) return;
+    this.briefing = null;
     this.focusStep = -1;
     this.readUntil = 0;
     this.readLeft = 0;
@@ -247,9 +252,14 @@ export class GameView {
     done?.();
   }
 
+  /** What the coach is running: the tutorial mission, or a battle briefing. */
+  get coached(): MissionRun | null {
+    return this.mission ?? this.briefing;
+  }
+
   /** Next, on a tour step (#115). */
   nextStep(): void {
-    this.mission?.ack();
+    this.coached?.ack();
   }
 
   /** End the reading pause now (the coach's Go button). */
@@ -1045,7 +1055,7 @@ export class GameView {
   nova(): void {
     if (this.blocked('nova')) return;
     // In a lesson, don't let a Nova fizzle on empty ground: it costs dots and energy.
-    if (this.mission && !this.mission.mission.guide && this.selection.units.size >= 4 && !this.novaWouldHit()) {
+    if (this.mission && this.selection.units.size >= 4 && !this.novaWouldHit()) {
       return this.s.toast('Nova only hits around your selected dots: wait until the enemy reaches them', '#ffd166');
     }
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');

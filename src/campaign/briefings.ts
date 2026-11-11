@@ -1,8 +1,8 @@
-import { KEYS, SURGE, TICK_HZ } from '../sim/constants';
+import { DOMINATION, KEYS, SURGE, TICK_HZ } from '../sim/constants';
 import { SIEGE } from '../sim/siege';
 import type { World } from '../sim/world';
-import type { Hint, Mission, Step, StepCtx } from '../game/tutorial';
-import { FORT_TEXT, KIND_TEXT } from './kinds';
+import { same, type Hint, type Mission, type Step, type StepCtx } from '../game/tutorial';
+import { KIND_TEXT } from './kinds';
 import type { RunNode } from './run';
 
 /**
@@ -33,7 +33,6 @@ export interface BriefLord {
   text: string;
 }
 
-const same = (t: string): Hint => ({ desktop: t, mobile: t });
 const tour = (text: string | Hint, o: Omit<Step, 'text' | 'done' | 'next'> = {}): Step => ({
   text: typeof text === 'string' ? same(text) : text,
   done: () => false,
@@ -53,13 +52,25 @@ function middle(w: World, ids: number[]): { x: number; y: number } {
 }
 /** Close on one nest. */
 const onNest = (id: number, zoom = 2) => (c: StepCtx) => ({ x: c.w.nests[id].x, y: c.w.nests[id].y, zoom });
-/** Your capital (or first nest), for coming home at the end. */
+/** Your capital (or first nest), for coming home at the end; -1 if you hold none. */
 const home = (c: StepCtx) => {
   const own = c.w.nests.filter((n) => n.owner === c.human);
   return (own.find((n) => n.capital) ?? own[0])?.id ?? -1;
 };
-
-const lower = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
+/** A last step back on your home, ringed (the camera stays put if you hold no nest). */
+const homeStep = (text: string): Step =>
+  tour(text, {
+    highlight: (c) => [home(c)].filter((id) => id >= 0),
+    focus: (c) => {
+      const id = home(c);
+      return id >= 0 ? onNest(id, 1.4)(c) : undefined;
+    },
+  });
+/** A span of seconds in words: "a minute", "2 minutes", "1 second", "90 seconds". */
+export function duration(secs: number): string {
+  if (secs >= 60 && secs % 60 === 0) return secs === 60 ? 'a minute' : `${secs / 60} minutes`;
+  return `${secs} second${secs === 1 ? '' : 's'}`;
+}
 
 function hold(w: World): Step[] {
   const sg = w.siege!;
@@ -77,7 +88,7 @@ function hold(w: World): Step[] {
       { highlight: () => sg.bloomNests, focus: (c) => (sg.bloomNests.length ? { ...middle(c.w, sg.bloomNests), zoom: 1.1 } : null) },
     ),
     tour(
-      `Every ${SIEGE.boonEvery === 2 ? 'other' : `${SIEGE.boonEvery}th`} wave, you pick a boon. If your capital falls, you have ${SIEGE.retake / TICK_HZ} seconds to take it back. Hold on!`,
+      `Every ${SIEGE.boonEvery === 2 ? 'other wave' : `${SIEGE.boonEvery} waves`}, you pick a boon. If your capital falls, you have ${SIEGE.retake / TICK_HZ} seconds to take it back. Hold on!`,
       { highlight: () => [sg.capital], focus: onNest(sg.capital, 1.6) },
     ),
   ];
@@ -94,17 +105,15 @@ function domination(w: World): Step[] {
     tour(`Hold every key nest for ${KEYS.points / TICK_HZ} seconds to win, or fewer of them for longer. Wiping out every rival wins too.`, {
       highlight: () => keys,
     }),
-    tour(
-      `${seal > 0 ? `The key nests are sealed for the first ${seal >= 60 && seal % 60 === 0 ? `${seal === 60 ? 'minute' : `${seal / 60} minutes`}` : `${seal} seconds`}, and` : 'The key nests are'} better guarded than most. Build up on the nests around you first, then strike.`,
-      { highlight: (c) => [home(c)].filter((id) => id >= 0), focus: (c) => (home(c) >= 0 ? onNest(home(c), 1.4)(c) : null) },
+    homeStep(
+      `${seal > 0 ? `The key nests are sealed for ${seal === 60 ? 'the first minute' : duration(seal)}, and` : 'The key nests are'} better guarded than most. Build up on the nests around you first, then strike.`,
     ),
   ];
 }
 
-function stronghold(w: World, kind: RunNode['kind'], lord?: BriefLord): Step[] {
+function stronghold(w: World, lord?: BriefLord): Step[] {
   const cit = w.citadel;
   const who = lord ? `${lord.name}'s` : "The warlord's";
-  const rest = FORT_TEXT[kind] ?? KIND_TEXT[kind];
   const steps = [
     tour(`<b>A warlord's stronghold.</b> ${who} citadel (ringed) sits behind walls. Take it and the battle is won, even with rivals left.`, {
       highlight: () => [cit],
@@ -120,10 +129,7 @@ function stronghold(w: World, kind: RunNode['kind'], lord?: BriefLord): Step[] {
         pulse: '.warlord-chip',
       }),
     );
-  if (rest)
-    steps.push(
-      tour(`Or win the plain way: ${lower(rest)}`, { highlight: (c) => [home(c)].filter((id) => id >= 0), focus: (c) => (home(c) >= 0 ? onNest(home(c), 1.4)(c) : null) }),
-    );
+  steps.push(homeStep(`Or win the plain way: wipe out every rival, or hold ${Math.round(w.domShare * 100)}% of the nests for ${duration(DOMINATION.ticks / TICK_HZ)}.`));
   return steps;
 }
 
@@ -140,18 +146,20 @@ function finale(w: World): Step[] {
       highlight: () => nests,
       focus: () => null,
     }),
-    tour(
+    homeStep(
       rivals
         ? 'The rivals want it too, and on this difficulty they must be beaten after the heart falls. Good luck.'
         : 'The rivals are fighting over it too. Let them wear it down if you like. Good luck.',
-      { highlight: (c) => [home(c)].filter((id) => id >= 0), focus: (c) => (home(c) >= 0 ? onNest(home(c), 1.4)(c) : null) },
     ),
   ];
 }
 
-function conquest(): Step[] {
+function conquest(w: World): Step[] {
   return [
-    tour('<b>Conquest.</b> Wipe out every rival, or hold 80% of the nests for 30 seconds. This bar is your share of the nests.', { pulse: '.nestshare' }),
+    tour(
+      `<b>Conquest.</b> Wipe out every rival, or hold ${Math.round(w.domShare * 100)}% of the nests for ${duration(DOMINATION.ticks / TICK_HZ)}. This bar is your share of the nests.`,
+      { pulse: '.nestshare' },
+    ),
     tour(`Don't stall: past ${SURGE.after / 60} minutes the Bloom surges in from the edges, every wave bigger than the last.`, { pulse: '.clock' }),
   ];
 }
@@ -166,13 +174,13 @@ const TITLES: Record<BattleType, string> = {
 
 /**
  * The briefing for a battle's opening world (null if its kind has none).
- * `kind` is the node's kind (a stronghold is a Conquest or Domination underneath).
+ * `kind` is the node's kind, for the one-line summary.
  */
 export function briefingFor(w: World, kind: RunNode['kind'], lord?: BriefLord): Mission | null {
   const type = battleType(w);
   if (!type) return null;
   const steps =
-    type === 'hold' ? hold(w) : type === 'domination' ? domination(w) : type === 'stronghold' ? stronghold(w, kind, lord) : type === 'finale' ? finale(w) : conquest();
+    type === 'hold' ? hold(w) : type === 'domination' ? domination(w) : type === 'stronghold' ? stronghold(w, lord) : type === 'finale' ? finale(w) : conquest(w);
   return {
     id: `brief:${type}`,
     title: TITLES[type],
@@ -182,7 +190,6 @@ export function briefingFor(w: World, kind: RunNode['kind'], lord?: BriefLord): 
       throw new Error('a battle briefing has no match of its own');
     },
     locked: [],
-    guide: true,
     steps,
   };
 }

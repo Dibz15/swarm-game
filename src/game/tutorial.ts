@@ -59,9 +59,9 @@ export interface Step {
   spotlight?: string;
   /**
    * Where the camera goes when the step begins (#218): a world point, and how
-   * far in (a multiple of the whole-map zoom; default as it is). Null shows the whole map.
+   * far in (a multiple of the whole-map zoom; default as it is). Null shows the whole map; undefined leaves it be.
    */
-  focus?: (c: StepCtx) => { x: number; y: number; zoom?: number } | null;
+  focus?: (c: StepCtx) => { x: number; y: number; zoom?: number } | null | undefined;
 }
 
 export interface Mission {
@@ -77,11 +77,6 @@ export interface Mission {
   real?: true;
   /** hold the game for a few seconds whenever the instruction changes, so it can be read first */
   readPause?: boolean;
-  /**
-   * A briefing laid over a real battle (#218), not a match of its own: when it
-   * ends (done or skipped) the battle just goes on. `setup` is never called.
-   */
-  guide?: true;
   steps: Step[];
 }
 
@@ -174,7 +169,7 @@ const onTheWay = (what: string): Hint => {
   const t = `⏳ Your dots are on their way. The lesson goes on when they ${what}.`;
   return { desktop: t, mobile: t };
 };
-const same = (t: string): Hint => ({ desktop: t, mobile: t });
+export const same = (t: string): Hint => ({ desktop: t, mobile: t });
 /**
  * Nests to take: waiting starts once dots head for any of them, and until
  * every one has dots on the way the coach says what's left (`rest`).

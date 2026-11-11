@@ -382,6 +382,15 @@ class App {
     const node = run.nodes[id];
     this.startGame(nodeSetup(run, id, fielded), { scenario: `campaign: ${node.kind}` });
     this.run = { state: run, node: id, fielded };
+    this.armRunBattle(run, id);
+  }
+
+  /**
+   * What a campaign battle adds on top of its match, once it has started (and
+   * again on a restart): campaign locks, the warlord, the first-time briefing.
+   */
+  private armRunBattle(run: RunState, id: number): void {
+    const node = run.nodes[id];
     if (!run.unlocks.nova) this.game!.lock('nova', 'Unlock Nova at the camp');
     // A warlord's ground (#66): its sting, and its trait announced and kept on screen.
     const lord = warlordOf(run, id);
@@ -405,7 +414,7 @@ class App {
     if (!type || briefsSeen().includes(type)) return;
     const m = briefingFor(g.world, kind, lord ?? undefined);
     if (!m) return;
-    g.mission = new MissionRun(m, 0);
+    g.briefing = new MissionRun(m, 0);
     g.onGuideEnd = () => markBriefSeen(type);
   }
 
@@ -523,7 +532,7 @@ class App {
   private skipMission(): void {
     const m = this.game?.mission;
     // A battle briefing (#218): skipping it just lets the battle go on.
-    if (m?.mission.guide) return this.game!.endGuide();
+    if (this.game?.briefing) return this.game.endGuide();
     // The graduation match can't be skipped (#147).
     if (!m || m.mission.real) return;
     this.completeMission(m.index);
@@ -652,9 +661,11 @@ class App {
           resume: () => this.togglePause(),
           restart: () => {
             const run = this.run;
-            if (g.mission && !g.mission.mission.guide) this.playMission(g.mission.index, 'restart');
+            if (g.mission) this.playMission(g.mission.index, 'restart');
             else this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart');
             this.run = run;
+            // A campaign battle keeps its locks and warlord, and a briefing not yet seen shows again.
+            if (run) this.armRunBattle(run.state, run.node);
           },
           // Leaving a campaign battle is a retreat: it counts as a loss.
           quit: () => {
@@ -689,7 +700,7 @@ class App {
       this.finishRunBattle(report);
       return;
     }
-    if (g.mission && !g.mission.mission.guide) {
+    if (g.mission) {
       const i = g.mission.index;
       const real = !!g.mission.mission.real;
       if (won) this.completeMission(i);
