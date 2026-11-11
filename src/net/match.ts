@@ -150,6 +150,14 @@ const HOST_BUFFER = 1;
  */
 const CLOCK_MS = 8;
 
+/**
+ * A tick this late while our page is hidden (#193): the browser is starving
+ * the page (the heartbeat beats every CLOCK_MS). Twice within
+ * THROTTLE_WINDOW_MS while we run the match, and we hand it on.
+ */
+export const THROTTLED_MS = 250;
+const THROTTLE_WINDOW_MS = 5000;
+
 /** a player beat within this is alive */
 export const ALIVE_MS = 2000;
 /** no word from the host this long: suspect it */
@@ -310,6 +318,18 @@ export class NetMatch {
   private suspect = false;
   private stalled = false;
   private hidden = false;
+  /**
+   * A phone (#193): hand the sequencer on as soon as our page is hidden, as
+   * it freezes there. Any other page hands it on once its ticks show the
+   * browser starving it.
+   */
+  handOffWhenHidden = false;
+  /** we run the match and want to hand it on (hidden on a phone, throttled, about to be frozen; #193) */
+  private wantOut = false;
+  private wantOutTryAt = -Infinity;
+  private lastTickAt = -1;
+  /** late ticks while hidden and running the match (#193) */
+  private lateTicks: number[] = [];
   private candidate: { epoch: number; until: number } | null = null;
   private awaiting: { epoch: number; until: number } | null = null;
   /** we handed hosting on and are about to leave: no more say in who hosts */
@@ -619,6 +639,43 @@ export class NetMatch {
     this.hidden = on;
     this.session.setHidden(on);
     if (on && this.remote) this.beatNow(this.clock());
+    this.lateTicks = [];
+    // a phone freezes when hidden: the match goes on with someone else running it (#193). Shown again, we stay a player
+    this.wantOut = on && this.handOffWhenHidden && this.leading_;
+    this.wantOutTryAt = -Infinity;
+    this.tryOut(this.clock());
+  }
+
+  /**
+   * The browser is about to freeze our page (#193, Page Lifecycle `freeze`):
+   * whoever ranks next runs the match from here, and we stay a player.
+   */
+  handOffNow(): boolean {
+    if (!this.leading_) return false;
+    this.wantOut = true;
+    this.wantOutTryAt = -Infinity;
+    return this.tryOut(this.clock());
+  }
+
+  /** Hand the match on, if we want out and still run it; tried again each beat while nobody can take it. */
+  private tryOut(now: number): boolean {
+    if (!this.wantOut) return false;
+    if (!this.leading_) return !(this.wantOut = false);
+    if (now < this.wantOutTryAt) return false;
+    this.wantOutTryAt = now + BEAT_MS;
+    if (!this.handOff({ stay: true })) return false;
+    this.wantOut = false;
+    return true;
+  }
+
+  /** While we run the match with our page hidden (#193): ticks that come late mean the browser is starving it. */
+  private watchThrottle(now: number): void {
+    const last = this.lastTickAt;
+    this.lastTickAt = now;
+    if (!this.hidden || !this.leading_ || last < 0 || now - last <= THROTTLED_MS) return;
+    this.lateTicks = this.lateTicks.filter((t) => now - t <= THROTTLE_WINDOW_MS);
+    this.lateTicks.push(now);
+    if (this.lateTicks.length >= 2) this.wantOut = true;
   }
 
   /**
@@ -802,6 +859,7 @@ export class NetMatch {
 
   /** Close any turns that are due (making the first sequencer, if this is the start), and keep an eye on the host. */
   private tick(): void {
+    if (this.remote) this.watchThrottle(this.clock());
     if (!this.seq_ && this.makeSeq && (this.leading_ || !this.remote)) {
       const seq = this.makeSeq();
       this.makeSeq = null;
@@ -812,6 +870,7 @@ export class NetMatch {
     this.markSpectators();
     this.checkCollect();
     if (this.remote) this.elect(this.clock());
+    if (this.remote) this.tryOut(this.clock());
   }
 
   /** We lost touch with every other player (#191): the match stands still here until someone is back. */

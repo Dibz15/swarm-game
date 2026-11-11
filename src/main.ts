@@ -31,6 +31,7 @@ import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign
 import { recruitPick, rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
+import { ScreenAwake } from './ui/wakeLock';
 import { initUiMode, isMobile, markMobileNoticeSeen, onCellData, setUiMode, shouldShowMobileNotice } from './ui/mobile';
 import { buildSetup, campaignMenu, randomSetup, skirmishMenu, endScreen, howToPlay, loadPrefs, mainMenu, menuCard, missionBriefing, missionDebrief, mobileNotice, NEXT_STEP_TEXT, pauseMenu, quickSetup, randomSeed, settingsScreen, skirmishSetup, tutorialMenu } from './ui/screens';
 import { creatureGrid } from './ui/creatures';
@@ -213,6 +214,11 @@ class App {
   private desyncNote: { tick: number; text: string } | null = null;
   /** the current match's recording was saved at its end */
   private recSaved = false;
+  /** a phone's screen stays on through a room match (#193) */
+  private readonly awake = new ScreenAwake();
+  /** dev, or `?debug` (#193): when the world last stepped, and the gaps between steps, ms: the stall a player sees */
+  private stepAt = { tick: -1, at: 0, gaps: [] as number[] };
+  private timeSteps = import.meta.env.DEV;
   /** difficulty of the current quick match, so "New map" rolls another one */
   private quick: number | null = null;
   /** the campaign run and node the current battle belongs to */
@@ -264,8 +270,15 @@ class App {
       if (hidden) this.saveRec('unload', false);
       // Hidden, the music can't keep time: sleep, and wake (or recover from an interruption) on return.
       this.sfx.setHidden(hidden);
-      // In a room match, a hidden page's seat is away at once (#164); back, it's ours again.
+      // In a room match, a hidden page's seat is away at once (#164); back, it's ours again. A phone that runs
+      // the match hands that on as it goes (#193): hidden, it freezes
       this.match?.setHidden(hidden);
+      // the browser let go of the screen's wake lock when the page hid (#193)
+      if (!hidden) this.awake.shown();
+    });
+    // The browser is about to freeze the page (Page Lifecycle, #193): whoever ranks next runs the match from here.
+    document.addEventListener('freeze', () => {
+      if (this.match?.runner && !this.game?.world.over) this.match.handOffNow();
     });
     // Closing the page while hosting: hand hosting to the next player first (#166).
     window.addEventListener('pagehide', (e) => {
@@ -290,7 +303,10 @@ class App {
     this.camera.setView(this.renderer.width, this.renderer.height);
     const q = new URLSearchParams(location.search);
     // Dev: poke at the running app from the console.
-    if (q.has('debug')) (window as unknown as { swarm: App }).swarm = this;
+    if (q.has('debug')) {
+      (window as unknown as { swarm: App }).swarm = this;
+      this.timeSteps = true;
+    }
     const bench = Number(q.get('bench'));
     if (bench > 0) this.startBench(bench);
     else if (q.has('eventdemo')) this.startEventDemo();
@@ -1267,6 +1283,7 @@ class App {
     if (r.linkPoll) clearInterval(r.linkPoll);
     this.match?.close();
     this.match = null;
+    this.syncAwake();
     if (linger > 0) {
       setTimeout(() => {
         r.lobby?.close();
@@ -1590,10 +1607,13 @@ class App {
   private startGame(setup: MatchSetup, opts: { scenario?: string; record?: boolean; seat?: number; match?: NetMatch } = {}, prevEnd: EndReason = 'quit'): void {
     this.endGame(prevEnd);
     this.match = opts.match ?? null;
+    // a phone running the match hands it on when its page hides (#193): it freezes there
+    if (this.match) this.match.handOffWhenHidden = isMobile();
     this.demo = null;
     this.setModal(null);
     this.setScreen(null);
     this.endShown = false;
+    this.syncAwake();
     this.recSaved = false;
     this.quick = null;
     this.run = null;
@@ -1680,6 +1700,7 @@ class App {
     this.saveRec(reason, true);
     this.match?.close();
     this.match = null;
+    this.syncAwake();
     this.ownBot = false;
     this.stalled = false;
     this.lostTouch = false;
@@ -1751,9 +1772,22 @@ class App {
     this.hud?.setMuted(this.sfx.muted);
   }
 
+  /** A phone keeps its screen on while a room match is under way (#193). */
+  private syncAwake(): void {
+    this.awake.set(!!this.match && !this.endShown && isMobile());
+  }
+
+  /** Dev, or `?debug` (#193): the longest and 95th-percentile gaps between world steps since the last call, ms. */
+  turnGaps(): { max: number; p95: number; steps: number } {
+    const g = this.stepAt.gaps.slice().sort((a, b) => a - b);
+    this.stepAt.gaps = [];
+    return { max: Math.round(g[g.length - 1] ?? 0), p95: Math.round(g[Math.floor(g.length * 0.95)] ?? 0), steps: g.length };
+  }
+
   private showEnd(): void {
     const g = this.game!;
     this.endShown = true;
+    this.syncAwake();
     // the match is over: nothing left to pick up (#191)
     if (this.room && this.match) void deleteMatch(this.room.id);
     this.input.enabled = false;
@@ -1916,6 +1950,12 @@ class App {
       this.input.update(dt);
       this.match?.update();
       g.update(dt, this.time);
+      if (this.timeSteps && g.world.tick !== this.stepAt.tick) {
+        const now = performance.now();
+        if (this.stepAt.tick >= 0 && this.stepAt.gaps.length < 100_000) this.stepAt.gaps.push(now - this.stepAt.at);
+        this.stepAt.tick = g.world.tick;
+        this.stepAt.at = now;
+      }
       // the host resumed: guests' pause menus give way to the countdown over the map (#198)
       if (this.netMenu === 'pause' && (this.match?.session.status?.resumeIn ?? -1) >= 0) this.closeNetMenu();
       if (this.netMenu) this.updateNetNote();
