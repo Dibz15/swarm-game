@@ -6,6 +6,7 @@
 
 import { GLOSSARY, type TourCamp, type TourFocus, type TourMark, type TourStep } from '../campaign/tour';
 import type { RunState } from '../campaign/run';
+import { el, esc } from './dom';
 
 /** What the map lets the tour do. */
 export interface TourControl {
@@ -25,11 +26,6 @@ export interface Tour {
   stop: () => void;
 }
 
-function el(html: string): HTMLDivElement {
-  const d = document.createElement('div');
-  d.innerHTML = html.trim();
-  return d.firstElementChild as HTMLDivElement;
-}
 
 /** Put the tour's card on the map and show its first step. */
 export function mountTour(host: HTMLElement, steps: TourStep[], run: RunState, ctl: TourControl): Tour {
@@ -92,6 +88,12 @@ export function mountTour(host: HTMLElement, steps: TourStep[], run: RunState, c
     show();
   };
   const key = (e: KeyboardEvent) => {
+    // Left the map mid-tour (back to the runs, say): drop out quietly, without marking the tour seen.
+    if (!card.isConnected) return document.removeEventListener('keydown', key);
+    // A focused control keeps its own keys: Enter on Skip skips, and typing in a field is typing.
+    const t = e.target as Element | null;
+    if (t?.closest?.('input, select, textarea, [contenteditable]')) return;
+    if (e.key === 'Enter' && t?.closest?.('button, a')) return;
     if (e.key === 'ArrowRight' || e.key === 'Enter') go(1);
     else if (e.key === 'ArrowLeft') go(-1);
     else if (e.key === 'Escape') stop();
@@ -118,9 +120,9 @@ export function runHowTo(h: { back: () => void; replay?: () => void; replayLabel
       <div class="card wide">
         <h2>Procedural campaign</h2>
         <dl class="glossary">${GLOSSARY.map((g) => `<dt>${g.term}</dt><dd>${g.text}</dd>`).join('')}</dl>
-        ${h.note ? `<p class="hint">${h.note}</p>` : ''}
+        ${h.note ? `<p class="hint">${esc(h.note)}</p>` : ''}
         <div class="row end">
-          ${h.replay ? `<button data-a="replay">${h.replayLabel ?? 'Replay the map tour'}</button>` : ''}
+          ${h.replay ? `<button data-a="replay">${esc(h.replayLabel ?? 'Replay the map tour')}</button>` : ''}
           <button class="primary" data-a="back">Got it</button>
         </div>
       </div>

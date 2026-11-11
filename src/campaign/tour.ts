@@ -75,6 +75,9 @@ function nearestOf(run: RunState, kind: RunState['nodes'][number]['kind']): numb
   return best;
 }
 
+/** The battle the 'Kinds of battle' step shows: the nearest Hold the line, else Domination. */
+const battleNode = (run: RunState): number | null => nearestOf(run, 'hold') ?? nearestOf(run, 'domination');
+
 /** Where the Bloom's band is, level with your swarm (its edge, kept on the map). */
 export function bloomEdge(run: RunState): { x: number; y: number } {
   const y = run.nodes[run.at].y;
@@ -149,15 +152,15 @@ export const TOUR: TourStep[] = [
     title: 'Kinds of battle',
     text: "Conquest: beat the rivals or hold most nests. Domination: score on the gold key nests. Hold the line: dig in behind your walls and outlast the Bloom's waves. Each card spells out what wins it, and the first time you play one, it's explained in the battle.",
     focus: (run) => {
-      const id = nearestOf(run, 'hold') ?? nearestOf(run, 'domination');
+      const id = battleNode(run);
       return id === null ? WHOLE : at(run, id, 520);
     },
     marks: (run) => {
-      const id = nearestOf(run, 'hold') ?? nearestOf(run, 'domination');
+      const id = battleNode(run);
       return id === null ? [] : [ring(run, id, 1.6)];
     },
     peek: (run) => {
-      const id = nearestOf(run, 'hold') ?? nearestOf(run, 'domination');
+      const id = battleNode(run);
       return id === null ? [] : [id];
     },
   },

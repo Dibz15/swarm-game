@@ -898,6 +898,8 @@ body.mobile .coach .coach-row button { padding: 3px 10px; font-size: 12px; }
 .run-tour .coach-row { flex-wrap: wrap; }
 .run-tour [data-a=skip] { color: var(--muted); }
 .runmap.touring .map-hint { display: none; }
+/* The tour drives the camera: the map takes no input (drag, wheel, hover, picks) until it ends. */
+.runmap.touring .map-canvas { pointer-events: none; }
 /* While touring, the cards it opens are only to look at. */
 .runmap.touring .node-veil, .runmap.touring .camp { pointer-events: none; }
 /* Room for the tour's card under the camp. */

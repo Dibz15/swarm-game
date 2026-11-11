@@ -13,12 +13,8 @@ import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialPr
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
 import { AUDIO_QUALITIES, type AudioQuality } from '../audio/quality';
+import { el } from './dom';
 
-function el(html: string): HTMLDivElement {
-  const d = document.createElement('div');
-  d.innerHTML = html.trim();
-  return d.firstElementChild as HTMLDivElement;
-}
 
 const PERSONA_LABEL: Record<Personality | 'random', string> = {
   random: 'Random',

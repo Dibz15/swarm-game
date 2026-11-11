@@ -49,16 +49,10 @@ import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { tourFor, type TourCamp, type TourFocus, type TourMark } from '../campaign/tour';
 import { mountTour, runHowTo, type Tour } from './runtour';
+import { el, esc } from './dom';
 import { FACTION_HEX } from '../content/factions';
 import { DIFFICULTY_NAMES, type Personality } from '../sim/ai/bot';
 
-function el(html: string): HTMLDivElement {
-  const d = document.createElement('div');
-  d.innerHTML = html.trim();
-  return d.firstElementChild as HTMLDivElement;
-}
-
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 const SIZE_LABEL = { small: 'Small', medium: 'Medium', large: 'Large' } as const;
 const CAVE_LABEL = { off: 'Open', belt: 'Cave belt', full: 'Caves' } as const;
@@ -658,7 +652,10 @@ const CAMP_TABS: { id: CampTab; label: string; icon: string }[] = [
  * The camp: a tabbed modal of brood character cards (portraits from #72),
  * unlock cards and the run's rewards. Buying goes through run.ts and saves.
  */
-function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close: () => void; changed: () => void }, first: CampTab = 'broods'): HTMLDivElement {
+/** The camp's element, and a way to switch its tab from outside (the tour) without rebuilding it. */
+type CampEl = HTMLDivElement & { show: (t: CampTab) => void };
+
+function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close: () => void; changed: () => void }, first: CampTab = 'broods'): CampEl {
   let tab: CampTab = first;
   const m = el(`
     <div class="camp" role="dialog" aria-label="Camp">
@@ -808,7 +805,13 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
     );
   };
   draw();
-  return m;
+  return Object.assign(m, {
+    show: (t: CampTab) => {
+      if (t === tab) return;
+      tab = t;
+      draw();
+    },
+  });
 }
 
 /** A small static picture of a run, for the hub. */
@@ -961,14 +964,16 @@ export function runMap(
   const showStats = () => (stats.innerHTML = `<span class="biomass" title="Biomass: spend it at the camp"><b>${run.biomass}</b> biomass</span>`);
   showStats();
   m.querySelector('[data-a=leave]')!.addEventListener('click', h.leave);
-  let campEl: HTMLElement | null = null;
+  let campEl: CampEl | null = null;
   const closeCamp = () => {
     campEl?.remove();
     campEl = null;
   };
-  const camp = (tab: CampTab = 'broods') => {
+  const camp = (tab: CampTab = 'broods', quiet = false) => {
     close();
-    sfx.mapSelect();
+    // The tour plays its own step sound, and moves between tabs of the camp it already opened.
+    if (campEl && quiet) return campEl.show(tab);
+    if (!quiet) sfx.mapSelect();
     campEl?.remove();
     campEl = campModal(run, sfx, { save: h.save, changed: showStats, close: closeCamp }, tab);
     m.querySelector('.map-wrap')!.append(campEl);
@@ -1160,8 +1165,6 @@ export function runMap(
   let downAt = { x: 0, y: 0 };
   let pinch = 0;
   c.addEventListener('pointerdown', (e) => {
-    // The tour drives the camera: the map waits.
-    if (touring) return;
     c.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, local(e));
     if (pointers.size === 1) {
@@ -1223,7 +1226,6 @@ export function runMap(
     'wheel',
     (e) => {
       e.preventDefault();
-      if (touring) return;
       const p = local(e);
       zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0015));
     },
@@ -1231,7 +1233,6 @@ export function runMap(
   );
 
   // ---- the tour (#217) and How to play ----
-  let touring = false;
   let marks: TourMark[] = [];
   let peek: number[] = [];
   /** a camera flight: from, to, start time (ms) */
@@ -1244,10 +1245,11 @@ export function runMap(
   };
   let active: Tour | null = null;
   const startTour = () => {
-    if (active || run.status !== 'active') return;
+    if (active || moving || run.status !== 'active') return;
     close();
     closeCamp();
-    touring = true;
+    hover = null;
+    c.style.cursor = '';
     m.classList.add('touring');
     active = mountTour(wrap, tourFor(run), run, {
       focus: (f) => {
@@ -1261,7 +1263,7 @@ export function runMap(
         selected = id;
         preview();
       },
-      camp: (tab: TourCamp | null) => (tab ? camp(tab) : closeCamp()),
+      camp: (tab: TourCamp | null) => (tab ? camp(tab, true) : closeCamp()),
       pulse: (sel) => {
         m.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
         if (sel) m.querySelector(sel)?.classList.add('coach-pulse');
@@ -1269,7 +1271,6 @@ export function runMap(
       sound: () => sfx.mapHover(),
       end: () => {
         active = null;
-        touring = false;
         marks = [];
         peek = [];
         m.classList.remove('touring');
