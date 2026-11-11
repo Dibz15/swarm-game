@@ -426,9 +426,13 @@ export class Hud {
     }
     this.tip.style.display = 'none';
     const step = m.current;
-    (this.coach.querySelector('small') as HTMLElement).textContent = `Mission ${m.index + 1} of ${MISSIONS.length} · ${m.mission.title}`;
+    const guide = !!m.mission.guide;
+    // A battle briefing (#218) names the battle; its Skip just ends the briefing.
+    (this.coach.querySelector('small') as HTMLElement).textContent = guide ? `Battle briefing · ${m.mission.title}` : `Mission ${m.index + 1} of ${MISSIONS.length} · ${m.mission.title}`;
+    const skip = this.coach.querySelector('[data-a=skip]') as HTMLElement;
+    skip.textContent = guide ? 'Skip briefing' : 'Skip mission';
     // The graduation match can't be skipped (#147).
-    (this.coach.querySelector('[data-a=skip]') as HTMLElement).style.display = m.mission.real ? 'none' : '';
+    skip.style.display = m.mission.real ? 'none' : '';
     const text = wait ?? step?.text;
     (this.coach.querySelector('p') as HTMLElement).innerHTML = text ? (mobile ? text.mobile : text.desktop) : 'Mission complete!';
     this.coach.classList.toggle('waiting', waiting);

@@ -57,6 +57,11 @@ export interface Step {
   next?: true;
   /** a HUD element brought to the middle of the screen, enlarged, while the step lasts (it goes home after) */
   spotlight?: string;
+  /**
+   * Where the camera goes when the step begins (#218): a world point, and how
+   * far in (a multiple of the whole-map zoom; default as it is). Null shows the whole map.
+   */
+  focus?: (c: StepCtx) => { x: number; y: number; zoom?: number } | null;
 }
 
 export interface Mission {
@@ -72,6 +77,11 @@ export interface Mission {
   real?: true;
   /** hold the game for a few seconds whenever the instruction changes, so it can be read first */
   readPause?: boolean;
+  /**
+   * A briefing laid over a real battle (#218), not a match of its own: when it
+   * ends (done or skipped) the battle just goes on. `setup` is never called.
+   */
+  guide?: true;
   steps: Step[];
 }
 

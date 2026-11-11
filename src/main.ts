@@ -16,7 +16,8 @@ import { PERSONALITIES } from './sim/ai/bot';
 import { Kind, MAX_UNITS, NEUTRAL, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
-import { mapBloom, needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
+import { mapBloom, needsBattle, newRun, resolveTurn, type RunNode, type RunState, type TurnResult } from './campaign/run';
+import { battleType, briefingFor, briefsSeen, markBriefSeen, resetBriefs, type BriefLord } from './campaign/briefings';
 import type { BattleReport } from './campaign/broods';
 import { battleReport, nodeSetup, warlordOf } from './campaign/battle';
 import { PLAYTEST, type Playtest } from './campaign/playtest';
@@ -270,6 +271,7 @@ class App {
           deleteRun(run.id);
           this.showRunHub();
         },
+        replayBriefs: resetBriefs,
         back: () => this.showCampaign(),
       }),
     );
@@ -389,6 +391,22 @@ class App {
       this.hud?.toast(lord.citadel ? `♛ ${lord.name}'s stronghold: take the citadel to win` : `♛ ${lord.name}: ${lord.text}`, FACTION_HEX[lord.faction]);
       this.sfx.warlordSting(lord.faction);
     }
+    this.briefBattle(run, node.kind, lord);
+  }
+
+  /**
+   * The first battle of each kind (#218): hold at the start and show what's
+   * different about it. Once per kind, finished or skipped; never in playtests.
+   */
+  private briefBattle(run: RunState, kind: RunNode['kind'], lord: BriefLord | null): void {
+    const g = this.game;
+    if (!g || run.id.startsWith(PLAYTEST)) return;
+    const type = battleType(g.world);
+    if (!type || briefsSeen().includes(type)) return;
+    const m = briefingFor(g.world, kind, lord ?? undefined);
+    if (!m) return;
+    g.mission = new MissionRun(m, 0);
+    g.onGuideEnd = () => markBriefSeen(type);
   }
 
   /** How the battle ended for the run: survivors by kind, nests held, time. */
@@ -504,6 +522,8 @@ class App {
 
   private skipMission(): void {
     const m = this.game?.mission;
+    // A battle briefing (#218): skipping it just lets the battle go on.
+    if (m?.mission.guide) return this.game!.endGuide();
     // The graduation match can't be skipped (#147).
     if (!m || m.mission.real) return;
     this.completeMission(m.index);
@@ -632,7 +652,7 @@ class App {
           resume: () => this.togglePause(),
           restart: () => {
             const run = this.run;
-            if (g.mission) this.playMission(g.mission.index, 'restart');
+            if (g.mission && !g.mission.mission.guide) this.playMission(g.mission.index, 'restart');
             else this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart');
             this.run = run;
           },
@@ -669,7 +689,7 @@ class App {
       this.finishRunBattle(report);
       return;
     }
-    if (g.mission) {
+    if (g.mission && !g.mission.mission.guide) {
       const i = g.mission.index;
       const real = !!g.mission.mission.real;
       if (won) this.completeMission(i);
