@@ -1,7 +1,7 @@
 import { creature, type Creature } from '../art/creature';
 import { DIFFICULTY, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { PlayerSetup } from '../sim/setup';
-import type { SiegeSetup } from '../sim/siege';
+import { siegeAt, type SiegeSetup } from '../sim/siege';
 import { defaultMods, POWER_LOCK, type FactionMods } from '../sim/mods';
 import type { EventParams } from '../sim/mapgen';
 import { Rng, hashString } from '../sim/rng';
@@ -111,14 +111,7 @@ export function nodeSetup(run: RunState, id: number, fielded: number[] = []): Ma
  */
 export function siegeFor(run: RunState, depth: number): SiegeSetup {
   const t = Math.min(1, depth / Math.max(1, run.nodes[run.heart].depth));
-  return {
-    seconds: Math.round(lerp(180, 300, t)),
-    first: 20,
-    every: Math.round(lerp(36, 26, t)),
-    size: Math.round(lerp(22, 38, t) * swarmScale(bloomStrength(run))),
-    grow: 1.18,
-    depth: t,
-  };
+  return siegeAt(t, swarmScale(bloomStrength(run)));
 }
 
 /** A rival slot as the warlord: its trait in mods (and production, and powers), its personality, weakened by erosion. */

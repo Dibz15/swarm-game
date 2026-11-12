@@ -157,6 +157,33 @@ describe('lobby (#162)', () => {
     expect(parseLobby(JSON.stringify(h.lobby.state))).toEqual(h.lobby.state);
     expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'hold' }))).toBeNull();
   });
+
+  it('a room saved before match types (#222) reads as Conquest', () => {
+    const { host } = room();
+    const { mode: _, ...old } = host().lobby.state;
+    expect(parseLobby(JSON.stringify(old))?.mode).toBe('conquest');
+  });
+
+  it("a stronghold that can't be played any more when the countdown ends doesn't start as Conquest (#222)", () => {
+    const { host, guest, clock } = room();
+    const h = host();
+    // a guest too: with the bots gone there are still two players, so only the stronghold check can stop it
+    guest('A');
+    h.lobby.setMode('stronghold');
+    h.lobby.setRow(2, { k: 'bot', team: 2, difficulty: 1, personality: 'random' });
+    h.lobby.setRow(3, { k: 'bot', team: 3, difficulty: 1, personality: 'random' });
+    let went = false;
+    h.lobby.onGo = () => (went = true);
+    expect(h.lobby.start()).not.toBeNull();
+    // the holder's seat empties under the countdown, then the other bot's
+    h.lobby.setRow(2, { k: 'open', team: 2 });
+    h.lobby.setRow(3, { k: 'open', team: 3 });
+    clock.now += COUNTDOWN_MS + 10_000;
+    h.lobby.update();
+    expect(roomProblem(h.lobby.state)).toMatch(/bot/);
+    expect(h.lobby.state.phase).toBe('lobby');
+    expect(went).toBe(false);
+  });
 });
 
 describe('lobby to match (#162)', () => {

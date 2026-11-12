@@ -8,7 +8,7 @@ import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
-import { buildSetup, loadPrefs, MATCH_MODES, MATCH_MODE_BLURB, MATCH_MODE_LABEL, modeProblem, randomMap, randomSeed, savePrefs, WAVE_NAMES, type MatchMode, type SetupPrefs } from '../game/matchSetup';
+import { buildSetup, loadPrefs, MATCH_MODES, MATCH_MODE_BLURB, MATCH_MODE_LABEL, prefsProblem, randomMap, randomSeed, savePrefs, settleTeams, WAVE_NAMES, type MatchMode, type SetupPrefs } from '../game/matchSetup';
 import { relayOnly, setRelayOnly, TURN_URL } from '../net/ice';
 import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
@@ -735,8 +735,12 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     (m.querySelector('.waves') as HTMLElement).hidden = prefs.mode !== 'hold';
     (m.querySelector('.opponents') as HTMLElement).hidden = prefs.mode === 'hold';
     const fort = prefs.mode === 'hold' || prefs.mode === 'stronghold';
-    fields.render(prefs, false, fort ? { caves: 'off', ...(prefs.mode === 'hold' && prefs.events === 'off' ? { events: 'calm' } : {}) } : {});
-    const problem = modeProblem(buildSetup({ ...prefs, mode: 'conquest' }, 'x'), prefs.mode, 1 + prefs.holder);
+    // Hold the line's waves come from the swarm spawns: events can be anything but off (Calm, if they were)
+    if (prefs.mode === 'hold' && prefs.events === 'off') prefs.events = 'calm';
+    fields.render(prefs, false, fort ? { caves: 'off' } : {});
+    const noEvents = fields.el.querySelector<HTMLButtonElement>('[data-a=events] button[data-v=off]')!;
+    if (prefs.mode === 'hold') noEvents.disabled = true;
+    const problem = prefsProblem(prefs);
     const p = m.querySelector('.problem') as HTMLElement;
     p.hidden = !problem;
     p.textContent = problem ? `${problem}: change the teams, or pick another match type.` : '';
@@ -823,9 +827,9 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
   });
   m.querySelector('[data-a=back]')!.addEventListener('click', onBack);
   m.querySelector('[data-a=start]')!.addEventListener('click', () => {
-    if (prefs.teams && prefs.bots.every((b) => b.team === 0)) {
-      prefs.bots[prefs.bots.length - 1].team = 1;
-    }
+    settleTeams(prefs);
+    // checked as it will start (#222): a match type it can't be stays unstarted, rather than quietly Conquest
+    if (prefsProblem(prefs)) return render();
     savePrefs(prefs);
     const setup = buildSetup(prefs, seedInput.value);
     if (scenario?.domShare) setup.domShare = scenario.domShare;

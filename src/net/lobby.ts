@@ -102,13 +102,18 @@ export const players = (s: LobbyState) => s.rows.filter((r) => r.k === 'human' |
 export const seatOf = (s: LobbyState, peer: string) => s.rows.findIndex((r) => r.k === 'human' && r.peer === peer);
 const nameOf = (r: SeatRow) => (r.k === 'human' ? playerCharacter(r.char).name : null);
 
+/** The holder's index in the match's `players` (the seats before it that play), -1 if no bot sits. */
+function holderIndex(s: LobbyState): number {
+  const seat = holderSeat(s);
+  return seat < 0 ? -1 : s.rows.slice(0, seat).filter((r) => r.k === 'human' || r.k === 'bot').length;
+}
+
 /** Why the room can't start as its match type (#222), or null. */
 export function roomProblem(s: LobbyState): string | null {
   if (s.mode !== 'stronghold') return null;
-  if (holderSeat(s) < 0) return 'Add a bot to hold the stronghold';
-  const plain = buildNetSetup({ ...s, mode: 'conquest' });
-  const seat = holderSeat(s);
-  return modeProblem(plain, 'stronghold', s.rows.slice(0, seat).filter((r) => r.k === 'human' || r.k === 'bot').length);
+  const holder = holderIndex(s);
+  if (holder < 0) return 'Add a bot to hold the stronghold';
+  return modeProblem(buildNetSetup({ ...s, mode: 'conquest' }), 'stronghold', holder);
 }
 
 /** The match a lobby describes: row i plays faction i; without teams, every seat is its own team. */
@@ -121,10 +126,7 @@ export function buildNetSetup(s: LobbyState): MatchSetup {
     if (r.k === 'human') players.push({ faction: i, team, human: true });
     else if (r.k === 'bot') players.push({ faction: i, team, human: false, bot: { difficulty: r.difficulty, personality: pick(r.personality) } });
   });
-  // the holder's seat as an index in `players`: the rows before it that play
-  const seat = holderSeat(s);
-  const holder = seat < 0 ? -1 : s.rows.slice(0, seat).filter((r) => r.k === 'human' || r.k === 'bot').length;
-  return applyMode({ seed, ...s.map, players }, s.mode, { holder });
+  return applyMode({ seed, ...s.map, players }, s.mode, { holder: holderIndex(s) });
 }
 
 /** A lobby state from JSON, or null if it isn't one (it came over the wire). */
@@ -151,11 +153,12 @@ export function parseLobby(json: string): LobbyState | null {
       o.rows.every(validRow) &&
       BOT_SECS.includes(o.botSecs) &&
       (o.runner === undefined || (typeof o.runner === 'string' && o.runner.length <= 64)) &&
-      ROOM_MODES.includes(o.mode) &&
+      // a state from before match types (#222: a saved room or match) has none: Conquest
+      (o.mode === undefined || ROOM_MODES.includes(o.mode)) &&
       (o.holder === undefined || (Number.isInteger(o.holder) && o.holder >= 0 && o.holder < MAX_SEATS)) &&
       uniqueSeals(o.rows);
     if (!ok) return null;
-    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs, ...(o.runner ? { runner: o.runner } : {}), mode: o.mode, ...(o.holder !== undefined ? { holder: o.holder } : {}) };
+    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs, ...(o.runner ? { runner: o.runner } : {}), mode: o.mode ?? 'conquest', ...(o.holder !== undefined ? { holder: o.holder } : {}) };
   } catch {
     return null;
   }
@@ -357,6 +360,8 @@ export class HostLobby {
       // a room in a match always knows the match, to hand it to a player who comes back (#192)
       if (o.takeOver.state.phase === 'playing' && (o.takeOver.reclaim || !o.takeOver.setup)) throw new Error(o.takeOver.reclaim ? 'lobby: a reload reclaims a room only before a match' : 'lobby: taking over a match needs its setup');
       this.state = { ...structuredClone(o.takeOver.state), host: t.self };
+      // saved before match types (#222): Conquest, as it was played
+      this.state.mode ??= 'conquest';
       if (this.state.phase === 'starting') this.state.phase = 'lobby';
       for (const peer of o.takeOver.connected) this.connected.add(peer);
       for (const tok of o.takeOver.tokens ?? []) this.seenTokens.add(tok);
@@ -549,7 +554,8 @@ export class HostLobby {
     // before a match, everyone gets the room again now and then: a change lost on the way is made good (#214)
     if (this.state.phase !== 'playing' && this.o.clock() - this.sentAt >= RESEND_MS) this.broadcast();
     if (this.state.phase === 'starting' && this.countdownUntil >= 0 && this.o.clock() >= this.countdownUntil) {
-      if (players(this.state) >= 2 && this.mySeat >= 0) this.launch();
+      // the same checks as Start: a room that changed under the countdown mustn't quietly play another match type (#222)
+      if (players(this.state) >= 2 && this.mySeat >= 0 && !roomProblem(this.state)) this.launch();
       else this.cancelStart();
     }
     const w = this.waiting;

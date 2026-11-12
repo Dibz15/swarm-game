@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { applyMode, buildSetup, DOMINATION_SHARE, loadPrefs, modeProblem, quickSetup, skirmishSiege, STRONGHOLD_SHARE, type SetupPrefs } from '../src/game/matchSetup';
+import { applyMode, buildSetup, prefsProblem, DOMINATION_SHARE, loadPrefs, modeProblem, quickSetup, skirmishSiege, STRONGHOLD_SHARE, type SetupPrefs } from '../src/game/matchSetup';
 import { buildNetSetup, type LobbyState } from '../src/net/lobby';
 import { MAX_SEATS } from '../src/net/protocol';
 import { TICK_HZ } from '../src/sim/constants';
@@ -8,6 +8,7 @@ import { worldHash } from '../src/sim/hash';
 import { createWorld, type MatchSetup } from '../src/sim/setup';
 import { step } from '../src/sim/step';
 import { Proxy } from '../src/proxy/proxy';
+import { siegeAt } from '../src/sim/siege';
 
 /** A skirmish: you (0) against three Normal bots, in a mode. */
 const prefs = (over: Partial<SetupPrefs> = {}): SetupPrefs => ({
@@ -98,6 +99,21 @@ describe('match types (#222)', () => {
     expect(applyMode(allied, 'stronghold', { holder: 1 }).stronghold).toBeUndefined();
     expect(() => createWorld({ ...allied, stronghold: { player: 1 } })).toThrow();
     expect(modeProblem(buildSetup(prefs(), 'seed'), 'stronghold', 0)).toMatch(/bot/);
+  });
+
+  it("the skirmish screen's check is Start's: teams settled first (#222)", () => {
+    // every bot on your team: Start moves the last one to team B, and that's the setup checked
+    const allies = prefs({ mode: 'stronghold', teams: true, holder: 0, bots: prefs().bots.map((b) => ({ ...b, team: 0 })) });
+    expect(prefsProblem(allies)).toMatch(/bots only/);
+    expect(prefsProblem({ ...allies, holder: 2 })).toBeNull();
+    expect(prefsProblem(prefs({ mode: 'stronghold' }))).toBeNull();
+    expect(prefsProblem(prefs({ mode: 'hold' }))).toBeNull();
+  });
+
+  it("the skirmish's waves are the campaign's curve", () => {
+    expect(skirmishSiege(0)).toEqual(siegeAt(0));
+    expect(skirmishSiege(1)).toEqual(siegeAt(0.5));
+    expect(skirmishSiege(2)).toEqual(siegeAt(1));
   });
 
   it('Hold the line: you alone against the waves; events stay on', () => {

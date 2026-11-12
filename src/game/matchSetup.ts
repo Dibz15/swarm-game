@@ -8,7 +8,7 @@ import { DIFFICULTY, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
 import { hashString } from '../sim/rng';
 import type { MatchSetup } from '../sim/setup';
-import type { SiegeSetup } from '../sim/siege';
+import { siegeAt, type SiegeSetup } from '../sim/siege';
 
 export interface BotRow {
   faction: number;
@@ -180,13 +180,24 @@ export const STRONGHOLD_PER_SIDE = 0.25;
 export const WAVE_NAMES = ['Easy', 'Normal', 'Hard'] as const;
 
 /**
- * A skirmish's Hold the line (#222): the campaign's siege (`siegeFor`) at the
- * start, middle and end of a run, without a run's Bloom growth.
+ * A skirmish's Hold the line (#222): the campaign's siege curve at a run's
+ * start, middle and end, without a run's Bloom growth.
  */
-export function skirmishSiege(level: number): SiegeSetup {
-  const t = Math.max(0, Math.min(2, Math.round(level))) / 2;
-  const lerp = (a: number, b: number) => a + (b - a) * t;
-  return { seconds: Math.round(lerp(180, 300)), first: 20, every: Math.round(lerp(36, 26)), size: Math.round(lerp(22, 38)), grow: 1.18, depth: t };
+export const skirmishSiege = (level: number): SiegeSetup => siegeAt(Math.max(0, Math.min(2, Math.round(level))) / 2);
+
+/**
+ * Teams on but every bot on your team (A): the last bot goes to team B, so
+ * there's someone to fight. The skirmish screen does this at Start.
+ */
+export function settleTeams(p: SetupPrefs): void {
+  if (p.teams && p.bots.length && p.bots.every((b) => b.team === 0)) p.bots[p.bots.length - 1].team = 1;
+}
+
+/** Why the skirmish screen's choices can't be played as their match type (#222), or null: as Start would build them. */
+export function prefsProblem(p: SetupPrefs): string | null {
+  const settled = structuredClone(p);
+  settleTeams(settled);
+  return modeProblem(buildSetup({ ...settled, mode: 'conquest' }, ''), p.mode, 1 + p.holder);
 }
 
 /** The sides in a setup: distinct teams. */

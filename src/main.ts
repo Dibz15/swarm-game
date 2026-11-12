@@ -1763,7 +1763,9 @@ class App {
     const w = g.world;
     const type = battleType(w);
     if (type !== 'domination' && type !== 'stronghold' && type !== 'hold') return;
-    const holder = type === 'stronghold' ? w.nests[w.citadel].owner : -1;
+    // the holder from the setup, not the citadel's owner now: it may have fallen before a rejoin or resume
+    const hs = g.setup.stronghold;
+    const holder = hs ? g.setup.players[hs.player].faction : -1;
     const text =
       type === 'domination'
         ? 'Domination: score on the gold-ringed key nests'
@@ -1771,11 +1773,13 @@ class App {
           ? `♛ Stronghold: take ${this.seatName(holder)}'s citadel to win`
           : 'Hold the line: keep your capital until the clock runs out';
     this.hud?.toast(text, type === 'stronghold' ? FACTION_HEX[holder] : '#ffd166');
-    if (g.session.net || g.human < 0 || briefsSeen().includes(type)) return;
+    // seen apart from the campaign's: its briefings name the warlord, and a skirmish's mustn't use them up
+    const seen = `skirmish:${type}`;
+    if (g.session.net || g.human < 0 || briefsSeen().includes(seen)) return;
     const m = briefingFor(w, type === 'stronghold' ? 'conquest' : type);
     if (!m) return;
     g.briefing = new MissionRun(m, 0);
-    g.onGuideEnd = () => markBriefSeen(type);
+    g.onGuideEnd = () => markBriefSeen(seen);
   }
 
   private endGame(reason: EndReason = 'quit'): void {

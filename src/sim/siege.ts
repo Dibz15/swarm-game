@@ -27,6 +27,17 @@ export interface SiegeSetup {
   depth: number;
 }
 
+/**
+ * The siege at `t` (0..1) along the campaign's curve: longer, faster and
+ * bigger later, waves times `scale` (#67). The campaign places a node on it by
+ * run depth and the Bloom's growth; a skirmish picks Easy, Normal or Hard (#222).
+ * PROVISIONAL (#68).
+ */
+export function siegeAt(t: number, scale = 1): SiegeSetup {
+  const lerp = (a: number, b: number) => a + (b - a) * t;
+  return { seconds: Math.round(lerp(180, 300)), first: 20, every: Math.round(lerp(36, 26)), size: Math.round(lerp(22, 38) * scale), grow: 1.18, depth: t };
+}
+
 export const SIEGE = {
   /** a fallen capital has this long to be retaken */
   retake: 20 * TICK_HZ,
