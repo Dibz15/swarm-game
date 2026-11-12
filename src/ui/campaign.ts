@@ -47,16 +47,12 @@ import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, rewardText, type Famil
 import { COST, KIND_NAME, KIND_NEST, KIND_ONE, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
 import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
+import { tourFor, type TourCamp, type TourFocus, type TourMark } from '../campaign/tour';
+import { mountTour, runHowTo, type Tour } from './runtour';
+import { el, esc } from './dom';
 import { FACTION_HEX } from '../content/factions';
 import { DIFFICULTY_NAMES, type Personality } from '../sim/ai/bot';
 
-function el(html: string): HTMLDivElement {
-  const d = document.createElement('div');
-  d.innerHTML = html.trim();
-  return d.firstElementChild as HTMLDivElement;
-}
-
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 const SIZE_LABEL = { small: 'Small', medium: 'Medium', large: 'Large' } as const;
 const CAVE_LABEL = { off: 'Open', belt: 'Cave belt', full: 'Caves' } as const;
@@ -272,7 +268,7 @@ const EDGE_GLOW: readonly (readonly [number, number])[] = [
 function drawMap(
   c: HTMLCanvasElement,
   run: RunState,
-  opts: { bloomT: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam; fx?: MapFx; ghost?: boolean; fog?: HTMLCanvasElement },
+  opts: { bloomT: number; selected: number | null; hover: number | null; time: number; fresh: Set<number>; freshT: number; thumb?: boolean; cam?: Cam; fx?: MapFx; ghost?: boolean; fog?: HTMLCanvasElement; peek?: readonly number[] },
 ): View {
   // Thumbnails stay sharp; the live map follows the Resolution setting.
   const dpr = opts.thumb ? window.devicePixelRatio || 1 : renderScale();
@@ -286,6 +282,8 @@ function drawMap(
   const X = (x: number) => v.ox + x * v.s, Y = (y: number) => v.oy + y * v.s;
   const u = opts.thumb ? dpr * 0.35 : dpr; // pixel unit
   const known = revealed(run);
+  // The tour (#217) lifts the fog off what it's talking about.
+  for (const id of opts.peek ?? []) known.add(id);
   g.clearRect(0, 0, cw, ch);
   if (opts.fog) drawFog(opts.fog, g, run, known, v, cw, ch, opts.time, u);
 
@@ -654,8 +652,11 @@ const CAMP_TABS: { id: CampTab; label: string; icon: string }[] = [
  * The camp: a tabbed modal of brood character cards (portraits from #72),
  * unlock cards and the run's rewards. Buying goes through run.ts and saves.
  */
-function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close: () => void; changed: () => void }): HTMLDivElement {
-  let tab: CampTab = 'broods';
+/** The camp's element, and a way to switch its tab from outside (the tour) without rebuilding it. */
+type CampEl = HTMLDivElement & { show: (t: CampTab) => void };
+
+function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close: () => void; changed: () => void }, first: CampTab = 'broods'): CampEl {
+  let tab: CampTab = first;
   const m = el(`
     <div class="camp" role="dialog" aria-label="Camp">
       <div class="card camp-card">
@@ -804,7 +805,13 @@ function campModal(run: RunState, sfx: AudioEngine, h: { save: () => void; close
     );
   };
   draw();
-  return m;
+  return Object.assign(m, {
+    show: (t: CampTab) => {
+      if (t === tab) return;
+      tab = t;
+      draw();
+    },
+  });
 }
 
 /** A small static picture of a run, for the hub. */
@@ -822,7 +829,7 @@ export function runHub(
   history: PastRun[],
   suggestion: string,
   sfx: AudioEngine,
-  h: { resume: (run: RunState) => void; start: (seed: string) => void; remove: (run: RunState) => void; back: () => void },
+  h: { resume: (run: RunState) => void; start: (seed: string) => void; remove: (run: RunState) => void; back: () => void; howto: () => void },
 ): HTMLDivElement {
   const m = el(`
     <div class="screen modal">
@@ -838,9 +845,10 @@ export function runHub(
         </div>
         <p class="hint">Leave the seed blank for a random run, or type one to replay a map.</p>
         <div class="past-wrap"></div>
-        <div class="row end"><button data-a="back">Back</button></div>
+        <div class="row end"><button data-a="howto">How to play</button><button data-a="back">Back</button></div>
       </div>
     </div>`);
+  m.querySelector('[data-a=howto]')!.addEventListener('click', h.howto);
   const list = m.querySelector('.runs')!;
   if (!runs.length) list.appendChild(el(`<p class="hint">None yet.</p>`));
   for (const run of runs) {
@@ -917,8 +925,10 @@ export interface MapIntro {
 export function runMap(
   run: RunState,
   sfx: AudioEngine,
-  h: { go: (id: number, fielded: number[]) => void; leave: () => void; save: () => void },
+  h: { go: (id: number, fielded: number[]) => void; leave: () => void; save: () => void; toured?: () => void },
   intro: MapIntro | null = null,
+  /** open with the map tour (#217) */
+  tour = false,
 ): HTMLDivElement {
   const m = el(`
     <div class="screen modal runmap">
@@ -926,6 +936,7 @@ export function runMap(
         <header>
           <div class="run-title"><b>${esc(run.seedText)}</b><span>${RUN_DIFFICULTY[difficultyOf(run)].name} · turn ${run.turn}</span></div>
           <div class="run-stats"></div>
+          <button class="small" data-a="howto" title="How to play" aria-label="How to play">?</button>
           <button class="small" data-a="leave">← All runs</button>
         </header>
         <div class="map-wrap">
@@ -953,19 +964,18 @@ export function runMap(
   const showStats = () => (stats.innerHTML = `<span class="biomass" title="Biomass: spend it at the camp"><b>${run.biomass}</b> biomass</span>`);
   showStats();
   m.querySelector('[data-a=leave]')!.addEventListener('click', h.leave);
-  let campEl: HTMLElement | null = null;
-  const camp = () => {
-    close();
-    sfx.mapSelect();
+  let campEl: CampEl | null = null;
+  const closeCamp = () => {
     campEl?.remove();
-    campEl = campModal(run, sfx, {
-      save: h.save,
-      changed: showStats,
-      close: () => {
-        campEl?.remove();
-        campEl = null;
-      },
-    });
+    campEl = null;
+  };
+  const camp = (tab: CampTab = 'broods', quiet = false) => {
+    close();
+    // The tour plays its own step sound, and moves between tabs of the camp it already opened.
+    if (campEl && quiet) return campEl.show(tab);
+    if (!quiet) sfx.mapSelect();
+    campEl?.remove();
+    campEl = campModal(run, sfx, { save: h.save, changed: showStats, close: closeCamp }, tab);
     m.querySelector('.map-wrap')!.append(campEl);
   };
 
@@ -1060,7 +1070,7 @@ export function runMap(
     // The battle's actual map: you in your colour, the rivals in theirs.
     panel.querySelector('.battle-map-slot')?.append(battleMapCanvas(run, n, 210, FACTION_HEX[run.color]));
     panel.querySelector('[data-a=close]')!.addEventListener('click', close);
-    panel.querySelector('[data-a=camp]')?.addEventListener('click', camp);
+    panel.querySelector('[data-a=camp]')?.addEventListener('click', () => camp());
     panel.querySelector('[data-a=go]')?.addEventListener('click', () => {
       if (verb === 'Fight') return choose(n);
       march(n, []);
@@ -1222,6 +1232,93 @@ export function runMap(
     { passive: false },
   );
 
+  // ---- the tour (#217) and How to play ----
+  let marks: TourMark[] = [];
+  let peek: number[] = [];
+  /** a camera flight: from, to, start time (ms) */
+  let fly: { from: Cam; to: Cam; t0: number } | null = null;
+  const FLY = 700;
+  const wrap = m.querySelector('.map-wrap') as HTMLElement;
+  const camFor = (f: TourFocus): Cam => {
+    const cw = c.clientWidth * dpr(), ch = c.clientHeight * dpr();
+    return { cx: f.x, cy: f.y, zoom: f.span === null || cw <= 0 ? 1 : cw / f.span / fitScale(cw, ch) };
+  };
+  let active: Tour | null = null;
+  const startTour = () => {
+    if (active || moving || run.status !== 'active') return;
+    close();
+    closeCamp();
+    hover = null;
+    c.style.cursor = '';
+    m.classList.add('touring');
+    active = mountTour(wrap, tourFor(run), run, {
+      focus: (f) => {
+        if (!cam) return;
+        fly = { from: { ...cam }, to: camFor(f), t0: performance.now() };
+      },
+      mark: (ms) => (marks = ms),
+      peek: (ids) => (peek = ids),
+      select: (id) => {
+        if (id === null) return close();
+        selected = id;
+        preview();
+      },
+      camp: (tab: TourCamp | null) => (tab ? camp(tab, true) : closeCamp()),
+      pulse: (sel) => {
+        m.querySelectorAll('.coach-pulse').forEach((e) => e.classList.remove('coach-pulse'));
+        if (sel) m.querySelector(sel)?.classList.add('coach-pulse');
+      },
+      sound: () => sfx.mapHover(),
+      end: () => {
+        active = null;
+        marks = [];
+        peek = [];
+        m.classList.remove('touring');
+        close();
+        closeCamp();
+        if (cam) fly = { from: { ...cam }, to: homeCam(run, c.clientWidth * dpr(), c.clientHeight * dpr()), t0: performance.now() };
+        h.toured?.();
+      },
+    });
+  };
+  m.querySelector('[data-a=howto]')!.addEventListener('click', () => {
+    if (active) return;
+    close();
+    closeCamp();
+    const card = runHowTo({
+      back: () => card.remove(),
+      replay: () => {
+        card.remove();
+        startTour();
+      },
+    });
+    card.classList.add('in-map');
+    wrap.append(card);
+  });
+  /** Rings around what the tour step is about, over the map. */
+  const drawMarks = (time: number) => {
+    if (!marks.length) return;
+    const g = c.getContext('2d')!;
+    const u = dpr();
+    const k = 0.5 + 0.5 * Math.sin(time * 4);
+    g.save();
+    g.strokeStyle = '#ffffff';
+    for (const mk of marks) {
+      const x = view.ox + mk.x * view.s, y = view.oy + mk.y * view.s;
+      g.globalAlpha = 0.55 + 0.45 * k;
+      g.lineWidth = 2.5 * u;
+      g.beginPath();
+      g.arc(x, y, mk.r * u * (1 + 0.12 * k), 0, Math.PI * 2);
+      g.stroke();
+      g.globalAlpha = 0.25 * (1 - k);
+      g.lineWidth = 1.5 * u;
+      g.beginPath();
+      g.arc(x, y, mk.r * u * (1.25 + 0.35 * k), 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.restore();
+  };
+
   // The Bloom's advance plays when the map opens after a turn.
   const ANIM = 1.4;
   if (intro && intro.from !== run.bloom.time) sfx.bloomAdvance();
@@ -1240,7 +1337,19 @@ export function runMap(
       swallowSounded = true;
       [...fresh].forEach((_, i) => sfx.swallow(i));
     }
-    if (!cam && c.clientWidth > 0) cam = homeCam(run, c.clientWidth * dpr(), c.clientHeight * dpr());
+    if (!cam && c.clientWidth > 0) {
+      cam = homeCam(run, c.clientWidth * dpr(), c.clientHeight * dpr());
+      if (tour) startTour();
+    }
+    if (fly && cam) {
+      const t = Math.min(1, (performance.now() - fly.t0) / FLY);
+      const e = t * t * (3 - 2 * t);
+      // Zoom moves in log space, so zooming in and out feel alike.
+      cam.cx = fly.from.cx + (fly.to.cx - fly.from.cx) * e;
+      cam.cy = fly.from.cy + (fly.to.cy - fly.from.cy) * e;
+      cam.zoom = fly.from.zoom * Math.pow(fly.to.zoom / fly.from.zoom, e);
+      if (t >= 1) fly = null;
+    }
     fx.tick(time);
     // A burst of spores as each swallowed node goes under.
     if (!fx.burstDone && freshT >= 1 && fresh.size) {
@@ -1248,7 +1357,10 @@ export function runMap(
       for (const id of fresh) fx.spores.burst(run.nodes[id].x, run.nodes[id].y, 36);
     }
     // Hidden or not laid out yet: nothing to draw (and a zero-size view would break the fog).
-    if (c.clientWidth > 0 && c.clientHeight > 0) view = drawMap(c, run, { bloomT, selected, hover, time, fresh, freshT, cam: cam ?? undefined, fx, ghost: k >= 1 && !moving, fog });
+    if (c.clientWidth > 0 && c.clientHeight > 0) {
+      view = drawMap(c, run, { bloomT, selected, hover, time, fresh, freshT, cam: cam ?? undefined, fx, ghost: k >= 1 && !moving, fog, peek });
+      drawMarks(time);
+    }
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
