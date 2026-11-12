@@ -9,6 +9,7 @@ import { BLOOM, BloomField, MapFx, battleMapCanvas, cardMap, bloomGapView, sigil
 import { LONE_WOLF, bloomLabel, keyNests, rivals, siegeFor, warlordOf, type Rival } from '../campaign/battle';
 import { FORTRESS_LABEL } from '../sim/fortify';
 import { STRONGHOLD_WEIGHT, TRAITS, trophyOf } from '../campaign/warlords';
+import { FORT_TEXT, KIND_TEXT } from '../campaign/kinds';
 import { broodCreature, broodTemper } from '../campaign/character';
 import { renderScale } from '../render/resolution';
 import {
@@ -45,7 +46,7 @@ import {
 } from '../campaign/run';
 import { FAMILY_LABEL, POWER_LABEL, REWARD, STRAIN_SLOTS, rewardText, type Family, type Reward } from '../campaign/rewards';
 import { COST, KIND_NAME, KIND_NEST, KIND_ONE, MAX_ROSTER, PACKS, UNLOCKS, fit, veteran, type Brood, type BroodEvent, type PackId, type Unlock } from '../campaign/broods';
-import { KEYS, Kind, NestType, SURGE, TICK_HZ } from '../sim/constants';
+import { KEYS, Kind, NestType, TICK_HZ } from '../sim/constants';
 import type { PastRun } from '../campaign/store';
 import { tourFor, type TourCamp, type TourFocus, type TourMark } from '../campaign/tour';
 import { mountTour, runHowTo, type Tour } from './runtour';
@@ -67,19 +68,6 @@ export const KIND_LABEL: Record<RunNode['kind'], string> = {
 };
 /** What a lost battle leaves a brood, in words. */
 const lossText = (keep: number) => (keep === 0.5 ? 'halved' : `cut to ${Math.round(keep * 100)}%`);
-
-const KIND_TEXT: Record<RunNode['kind'], string> = {
-  start: 'Where the run began.',
-  conquest: `Wipe out every rival, or hold 80% of the nests for 30 seconds. Past ${SURGE.after / 60} minutes, the Bloom surges in, every wave bigger.`,
-  domination: `Score on the key nests: hold them all for ${KEYS.points / TICK_HZ} seconds, or fewer for longer. Or wipe out every rival.`,
-  hold: "Dug in behind your own walls: keep your capital until the clock runs out, against the Bloom's waves. Its nests in the field feed them; sally out to take them. Every other wave, pick a boon. Lose the capital and you have 20 seconds to take it back.",
-  finale: "The final battle: a large map, the Bloom's heart and the rivals around it. Win it to end the run.",
-};
-/** A stronghold's Conquest or Domination keeps the plain share rules (#87: no key nests, no surge). */
-const FORT_TEXT: Partial<Record<RunNode['kind'], string>> = {
-  conquest: 'Wipe out every rival, or hold 80% of the nests for 30 seconds.',
-  domination: 'Hold half the nests for 30 seconds, or wipe out every rival.',
-};
 
 /** A shape per unit kind, matching the in-battle silhouettes as closely as text allows. */
 const KIND_GLYPH: Record<number, string> = { [Kind.Dot]: '●', [Kind.Tank]: '■', [Kind.Lancer]: '▲', [Kind.Swift]: '◆' };
@@ -829,7 +817,7 @@ export function runHub(
   history: PastRun[],
   suggestion: string,
   sfx: AudioEngine,
-  h: { resume: (run: RunState) => void; start: (seed: string) => void; remove: (run: RunState) => void; back: () => void; howto: () => void },
+  h: { resume: (run: RunState) => void; start: (seed: string) => void; remove: (run: RunState) => void; replayBriefs: () => void; back: () => void; howto: () => void },
 ): HTMLDivElement {
   const m = el(`
     <div class="screen modal">
@@ -845,10 +833,16 @@ export function runHub(
         </div>
         <p class="hint">Leave the seed blank for a random run, or type one to replay a map.</p>
         <div class="past-wrap"></div>
-        <div class="row end"><button data-a="howto">How to play</button><button data-a="back">Back</button></div>
+        <div class="row end"><button data-a="howto">How to play</button><button data-a="briefs" title="Explain each kind of battle again the next time you meet it">Replay battle briefings</button><button data-a="back">Back</button></div>
       </div>
     </div>`);
   m.querySelector('[data-a=howto]')!.addEventListener('click', h.howto);
+  const briefs = m.querySelector('[data-a=briefs]') as HTMLButtonElement;
+  briefs.addEventListener('click', () => {
+    h.replayBriefs();
+    briefs.textContent = 'Briefings on again';
+    briefs.disabled = true;
+  });
   const list = m.querySelector('.runs')!;
   if (!runs.length) list.appendChild(el(`<p class="hint">None yet.</p>`));
   for (const run of runs) {

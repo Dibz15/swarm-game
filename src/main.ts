@@ -16,7 +16,8 @@ import { PERSONALITIES } from './sim/ai/bot';
 import { Kind, MAX_UNITS, NEUTRAL, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
-import { mapBloom, needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
+import { mapBloom, needsBattle, newRun, resolveTurn, type RunNode, type RunState, type TurnResult } from './campaign/run';
+import { battleType, briefingFor, briefsSeen, markBriefSeen, resetBriefs, type BriefLord } from './campaign/briefings';
 import type { BattleReport } from './campaign/broods';
 import { battleReport, nodeSetup, warlordOf } from './campaign/battle';
 import { PLAYTEST, type Playtest } from './campaign/playtest';
@@ -272,6 +273,7 @@ class App {
           deleteRun(run.id);
           this.showRunHub();
         },
+        replayBriefs: resetBriefs,
         back: () => this.showCampaign(),
         howto: () => this.showRunHowTo(),
       }),
@@ -403,6 +405,15 @@ class App {
     const node = run.nodes[id];
     this.startGame(nodeSetup(run, id, fielded), { scenario: `campaign: ${node.kind}` });
     this.run = { state: run, node: id, fielded };
+    this.armRunBattle(run, id);
+  }
+
+  /**
+   * What a campaign battle adds on top of its match, once it has started (and
+   * again on a restart): campaign locks, the warlord, the first-time briefing.
+   */
+  private armRunBattle(run: RunState, id: number): void {
+    const node = run.nodes[id];
     if (!run.unlocks.nova) this.game!.lock('nova', 'Unlock Nova at the camp');
     // A warlord's ground (#66): its sting, and its trait announced and kept on screen.
     const lord = warlordOf(run, id);
@@ -412,6 +423,22 @@ class App {
       this.hud?.toast(lord.citadel ? `♛ ${lord.name}'s stronghold: take the citadel to win` : `♛ ${lord.name}: ${lord.text}`, FACTION_HEX[lord.faction]);
       this.sfx.warlordSting(lord.faction);
     }
+    this.briefBattle(run, node.kind, lord);
+  }
+
+  /**
+   * The first battle of each kind (#218): hold at the start and show what's
+   * different about it. Once per kind, finished or skipped; never in playtests.
+   */
+  private briefBattle(run: RunState, kind: RunNode['kind'], lord: BriefLord | null): void {
+    const g = this.game;
+    if (!g || run.id.startsWith(PLAYTEST)) return;
+    const type = battleType(g.world);
+    if (!type || briefsSeen().includes(type)) return;
+    const m = briefingFor(g.world, kind, lord ?? undefined);
+    if (!m) return;
+    g.briefing = new MissionRun(m, 0);
+    g.onGuideEnd = () => markBriefSeen(type);
   }
 
   /** How the battle ended for the run: survivors by kind, nests held, time. */
@@ -527,6 +554,8 @@ class App {
 
   private skipMission(): void {
     const m = this.game?.mission;
+    // A battle briefing (#218): skipping it just lets the battle go on.
+    if (this.game?.briefing) return this.game.endGuide();
     // The graduation match can't be skipped (#147).
     if (!m || m.mission.real) return;
     this.completeMission(m.index);
@@ -658,6 +687,8 @@ class App {
             if (g.mission) this.playMission(g.mission.index, 'restart');
             else this.startGame(g.setup, { scenario: g.rec?.scenario }, 'restart');
             this.run = run;
+            // A campaign battle keeps its locks and warlord, and a briefing not yet seen shows again.
+            if (run) this.armRunBattle(run.state, run.node);
           },
           // Leaving a campaign battle is a retreat: it counts as a loss.
           quit: () => {
