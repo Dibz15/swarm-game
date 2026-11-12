@@ -230,9 +230,8 @@ function checkVictory(w: World): void {
     return;
   }
 
-  const need = Math.ceil(w.nests.length * w.domShare);
   for (const t of aliveTeams) {
-    if (nestsByTeam[t] >= need) {
+    if (nestsByTeam[t] >= w.domNeed(t)) {
       if (w.domTicks[t] === 0) pushFx(w, 'domStart', 0, 0, teamFace(w, t));
       w.domTicks[t] += 15;
       if (w.domTicks[t] >= DOMINATION.ticks) {
@@ -348,7 +347,7 @@ export function dominationStatus(w: World): DominationStatus | null {
     if (w.domTicks[t] <= 0) continue;
     let held = 0;
     for (const n of w.nests) if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === t) held++;
-    const need = Math.ceil(w.nests.length * w.domShare);
+    const need = w.domNeed(t);
     const left = Math.max(0, DOMINATION.ticks - w.domTicks[t]);
     return { team: t, face: teamFace(w, t), left, frac: left / DOMINATION.ticks, held, need, toBreak: Math.max(1, held - need + 1) };
   }

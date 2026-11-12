@@ -447,7 +447,7 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
         <div class="howto-grid">
           <div>
             <h3>The goal</h3>
-            <p>Every color wants the map. <b>Nests</b> are the only way to make more dots, so capture them. Win by wiping out every rival, or by holding <b>70% of the nests for 30 seconds</b> (60% on large maps).</p>
+            <p>Every color wants the map. <b>Nests</b> are the only way to make more dots, so capture them. Win by wiping out every rival, or by holding <b>70% of the nests for 30 seconds</b> (60% on large maps). In a team match the bar is higher, and higher still for the bigger team, since a team starts with more of the map.</p>
             <h3>Fighting</h3>
             <p>Dots fight automatically. Any dot near an enemy locks on and shoots. The thin lines are the shots. Your job is to decide where your dots go and when they go there.</p>
             <h3>Capturing</h3>

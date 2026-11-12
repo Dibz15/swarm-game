@@ -98,6 +98,22 @@ export function mapParamsOf(setup: MatchSetup): MapParams {
 
 export const START_UNITS = 10;
 
+/**
+ * Team matches (#213): a team's domination share starts from its slice of the
+ * map (its players over all players), plus DOMINATION.take of the rest. Without
+ * this, the bigger side of a 3v2 starts at about 60% and the 70% bar is nearly
+ * free; in a 2v2, beating one rival is enough. FFA keeps `domShare`.
+ */
+function teamDomShares(w: World, setup: MatchSetup): void {
+  const size = new Map<number, number>();
+  for (const p of setup.players) size.set(p.team, (size.get(p.team) ?? 0) + 1);
+  if (size.size === setup.players.length) return;
+  for (const [team, k] of size) {
+    const fair = k / setup.players.length;
+    w.domShares[team] = fair + DOMINATION.take * (1 - fair);
+  }
+}
+
 export function createWorld(setup: MatchSetup): World {
   validateSetup(setup);
   const map = setup.map ?? generateMap(mapParamsOf(setup));
@@ -124,6 +140,8 @@ export function createWorld(setup: MatchSetup): World {
       w.bots.push(new Bot(p.faction, cfg, setup.seed));
     }
   }
+
+  if (setup.domShare === undefined) teamDomShares(w, setup);
 
   map.nests.forEach((s, id) => {
     const owner = s.player >= 0 ? setup.players[s.player].faction : NEUTRAL;

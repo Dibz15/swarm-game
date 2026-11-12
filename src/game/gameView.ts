@@ -839,7 +839,7 @@ export class GameView {
           // In a team match, name the team (#74).
           const who = teamName(w, this.human, e.f);
           const are = verb(who, 'is', 'are');
-          if (mine) toast(keys ? `Halfway to a key-nest win! Keep scoring on the ${keys} key nests` : `${who.name} ${are} dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
+          if (mine) toast(keys ? `Halfway to a key-nest win! Keep scoring on the ${keys} key nests` : `${who.name} ${are} dominating! Hold ${w.domNeed(w.teamOf[e.f])} nests for 30s to win`, hex(e.f));
           else toast(keys ? `${who.name} ${are} halfway to a key-nest win! Take or contest their key nests` : `${who.name} ${are} dominating! Take back a nest to stop them`, '#ff5d73');
           for (const n of w.nests) {
             if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === w.teamOf[e.f]) {

@@ -349,7 +349,6 @@ export class Proxy {
       const pushing = this.mode === 'counter' && this.pushFrom > 0;
       const bled = pushing && mySize < this.pushFrom * this.k.bleed;
       if (bled) this.pushFrom = 0;
-      const need = Math.ceil(w.nests.length * w.domShare);
       const held = new Map<number, number>();
       for (const n of w.nests) if (n.owner >= 0) held.set(w.teamOf[n.owner], (held.get(w.teamOf[n.owner]) ?? 0) + 1);
       // A rival nearing the domination share is everyone's problem: like the
@@ -364,6 +363,7 @@ export class Proxy {
           if (w.domTicks[team] > 0) leaders.add(team), (racing = true);
           continue;
         }
+        const need = w.domNeed(team);
         if (k < need - this.k.domWatch) continue;
         leaders.add(team);
         if (k >= need) racing = true;

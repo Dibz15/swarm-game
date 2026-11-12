@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { botMatch } from './helpers';
+import { createWorld, type MatchSetup } from '../src/sim/setup';
+import { restoreWorld, snapshotWorld } from '../src/sim/snapshot';
 import { DOMINATION, Kind, NestType, TICK_HZ } from '../src/sim/constants';
 import { dominationStatus, step } from '../src/sim/step';
 import { spawnUnit, World } from '../src/sim/world';
@@ -58,5 +61,57 @@ describe('domination', () => {
     }
     expect(broke).toBe(true);
     expect(dominationStatus(w)).toBeNull();
+  });
+});
+
+/** A bot match with these team ids, one faction each. */
+function teams(ids: number[], size: MatchSetup['size'] = 'medium', domShare?: number): MatchSetup {
+  const s = botMatch(7, ids.length, size);
+  s.players.forEach((p, i) => (p.team = ids[i]));
+  if (domShare !== undefined) s.domShare = domShare;
+  return s;
+}
+
+describe('team domination (#213)', () => {
+  it('leaves FFA on the map size share', () => {
+    const w = createWorld(teams([0, 1, 2, 3]));
+    for (const t of [0, 1, 2, 3]) expect(w.domShareOf(t)).toBe(DOMINATION.share.medium);
+  });
+
+  it('asks a team for its slice plus a share of the rest', () => {
+    const w = createWorld(teams([0, 0, 1, 1]));
+    expect(w.domShareOf(0)).toBeCloseTo(0.8);
+    expect(w.domShareOf(1)).toBeCloseTo(0.8);
+    const u = createWorld(teams([0, 0, 0, 1, 1]));
+    expect(u.domShareOf(0)).toBeCloseTo(0.84);
+    expect(u.domShareOf(1)).toBeCloseTo(0.76);
+    expect(u.domNeed(0)).toBe(Math.ceil(u.nests.length * 0.84));
+  });
+
+  it('keeps a lone player near the FFA share, the same on large maps', () => {
+    const w = createWorld(teams([0, 0, 1, 2]));
+    expect(w.domShareOf(1)).toBeCloseTo(0.7);
+    const l = createWorld(teams([0, 0, 1, 1], 'large'));
+    expect(l.domShareOf(0)).toBeCloseTo(0.8);
+  });
+
+  it('keeps a share the setup fixed for every team', () => {
+    const w = createWorld(teams([0, 0, 1, 1], 'medium', 0.5));
+    expect(w.domShareOf(0)).toBe(0.5);
+    expect(w.domShareOf(1)).toBe(0.5);
+  });
+
+  it('does not end a 2v2 at the old 70% bar, and survives a snapshot', () => {
+    const w = createWorld(teams([0, 0, 1, 1]));
+    const need = w.domNeed(0);
+    w.nests.forEach((n, i) => (n.owner = i < need - 1 ? 0 : 2));
+    expect(need - 1).toBeGreaterThanOrEqual(Math.ceil(w.nests.length * 0.7));
+    step(w, []);
+    expect(w.domTicks[0]).toBe(0);
+    w.nests[need - 1].owner = 1;
+    for (let t = 0; t < 20 && !w.domTicks[0]; t++) step(w, []);
+    expect(w.domTicks[0]).toBeGreaterThan(0);
+    const r = restoreWorld(teams([0, 0, 1, 1]), snapshotWorld(w));
+    expect(r.domShareOf(0)).toBeCloseTo(0.8);
   });
 });
