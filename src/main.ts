@@ -19,7 +19,8 @@ import { PERSONALITIES } from './sim/ai/bot';
 import { Kind, MAX_UNITS, NEUTRAL, TICK_HZ } from './sim/constants';
 import type { MatchSetup } from './sim/setup';
 import { spawnUnit } from './sim/world';
-import { mapBloom, needsBattle, newRun, resolveTurn, type RunState, type TurnResult } from './campaign/run';
+import { mapBloom, needsBattle, newRun, resolveTurn, type RunNode, type RunState, type TurnResult } from './campaign/run';
+import { battleType, briefingFor, briefsSeen, markBriefSeen, resetBriefs, type BriefLord } from './campaign/briefings';
 import type { BattleReport } from './campaign/broods';
 import { battleReport, nodeSetup, warlordOf } from './campaign/battle';
 import { PLAYTEST, type Playtest } from './campaign/playtest';
@@ -29,6 +30,8 @@ import { mapGrid } from './ui/mapGrid';
 import { FORTIFY } from './sim/fortify';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
 import { recruitPick, rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
+import { runHowTo } from './ui/runtour';
+import { loadGuide, saveGuide, wantsTour } from './campaign/tour';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { ScreenAwake } from './ui/wakeLock';
@@ -462,24 +465,46 @@ class App {
           deleteRun(run.id);
           this.showRunHub();
         },
+        replayBriefs: resetBriefs,
         back: () => this.showCampaign(),
+        howto: () => this.showRunHowTo(),
       }),
     );
   }
 
-  private showRunMap(run: RunState, intro: MapIntro | null = null): void {
+  /** The procedural campaign's How to play (#217): its terms, and the map tour on your latest run. */
+  private showRunHowTo(): void {
+    const latest = listRuns()[0];
+    this.setModal(
+      runHowTo({
+        back: () => this.showRunHub(),
+        replay: latest ? () => this.showRunMap(latest, null, true) : undefined,
+        replayLabel: latest ? `Tour the map (${latest.seedText})` : undefined,
+        note: latest ? undefined : 'Your first run opens with a tour of the map. Tap ? on a run\'s map to see it again.',
+      }),
+    );
+  }
+
+  private showRunMap(run: RunState, intro: MapIntro | null = null, tour = false): void {
     if (this.game) this.showMenu();
     // A rescued brood waiting for a place, then a reward waiting to be picked, come first (also when resuming a run).
     if (run.recruit && run.status === 'active') {
-      this.setModal(recruitPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro) }));
+      this.setModal(recruitPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro, tour) }));
       return;
     }
     if (run.offer && run.status === 'active') {
-      this.setModal(rewardPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro) }));
+      this.setModal(rewardPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro, tour) }));
       return;
     }
     this.setModal(
-      runMap(run, this.sfx, { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.leaveRun(run), save: () => saveRun(run) }, intro),
+      runMap(
+        run,
+        this.sfx,
+        { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.leaveRun(run), save: () => saveRun(run), toured: () => saveGuide({ ...loadGuide(), toured: true }) },
+        intro,
+        // A run's first turn opens with the map tour, once (#217); playtests never.
+        tour || (!run.id.startsWith(PLAYTEST) && wantsTour(run)),
+      ),
     );
     this.sfx.setBloom(mapBloom(run));
   }
@@ -573,6 +598,15 @@ class App {
     const node = run.nodes[id];
     this.startGame(nodeSetup(run, id, fielded), { scenario: `campaign: ${node.kind}` });
     this.run = { state: run, node: id, fielded };
+    this.armRunBattle(run, id);
+  }
+
+  /**
+   * What a campaign battle adds on top of its match, once it has started (and
+   * again on a restart): campaign locks, the warlord, the first-time briefing.
+   */
+  private armRunBattle(run: RunState, id: number): void {
+    const node = run.nodes[id];
     if (!run.unlocks.nova) this.game!.lock('nova', 'Unlock Nova at the camp');
     // A warlord's ground (#66): its sting, and its trait announced and kept on screen.
     const lord = warlordOf(run, id);
@@ -582,6 +616,22 @@ class App {
       this.hud?.toast(lord.citadel ? `♛ ${lord.name}'s stronghold: take the citadel to win` : `♛ ${lord.name}: ${lord.text}`, FACTION_HEX[lord.faction]);
       this.sfx.warlordSting(lord.faction);
     }
+    this.briefBattle(run, node.kind, lord);
+  }
+
+  /**
+   * The first battle of each kind (#218): hold at the start and show what's
+   * different about it. Once per kind, finished or skipped; never in playtests.
+   */
+  private briefBattle(run: RunState, kind: RunNode['kind'], lord: BriefLord | null): void {
+    const g = this.game;
+    if (!g || run.id.startsWith(PLAYTEST)) return;
+    const type = battleType(g.world);
+    if (!type || briefsSeen().includes(type)) return;
+    const m = briefingFor(g.world, kind, lord ?? undefined);
+    if (!m) return;
+    g.briefing = new MissionRun(m, 0);
+    g.onGuideEnd = () => markBriefSeen(type);
   }
 
   /** How the battle ended for the run: survivors by kind, nests held, time. */
@@ -697,6 +747,8 @@ class App {
 
   private skipMission(): void {
     const m = this.game?.mission;
+    // A battle briefing (#218): skipping it just lets the battle go on.
+    if (this.game?.briefing) return this.game.endGuide();
     // The graduation match can't be skipped (#147).
     if (!m || m.mission.real) return;
     this.completeMission(m.index);
@@ -1750,6 +1802,8 @@ class App {
             if (g.mission) this.playMission(g.mission.index, 'restart');
             else this.startGame(g.setup, { scenario: g.rec?.scenario, seat: g.human >= 0 ? g.human : undefined }, 'restart');
             this.run = run;
+            // A campaign battle keeps its locks and warlord, and a briefing not yet seen shows again.
+            if (run) this.armRunBattle(run.state, run.node);
           },
           // Leaving a campaign battle is a retreat: it counts as a loss.
           quit: () => {

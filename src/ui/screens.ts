@@ -14,12 +14,8 @@ import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialPr
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
 import { AUDIO_QUALITIES, type AudioQuality } from '../audio/quality';
+import { el } from './dom';
 
-function el(html: string): HTMLDivElement {
-  const d = document.createElement('div');
-  d.innerHTML = html.trim();
-  return d.firstElementChild as HTMLDivElement;
-}
 
 const PERSONA_LABEL: Record<Personality | 'random', string> = {
   random: 'Random',
@@ -433,6 +429,8 @@ function howToPlayMobile(onBack: () => void): HTMLDivElement {
         <p><b>Surge</b> and <b>Nova</b> fire on your selected dots. Nest powers: tap the button, then tap the target. Tap one of your nests, then <b>Upgrade</b> to feed it dots for faster spawns and a turret.</p>
         <h3>The map</h3>
         <p>Rock blocks paths (cave maps are mostly rock, with tunnels between chambers), purple nebula slows, red rifts burn the longer you stand in them. Hold a crystal or a supply drop alone for energy. Wild swarms and the Colossus fight everyone.</p>
+        <h3>The campaign</h3>
+        <p>The procedural campaign has its own How to play: Campaign, then Procedural campaign, then How to play, or tap <b>?</b> on a run's map.</p>
         <div class="row end"><button class="primary" data-a="back">Got it</button></div>
       </div>
     </div>`);
@@ -480,6 +478,7 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
             <p><b>Energy</b> builds up over time, and faster from kills and captures. <b>Surge</b> (30) makes your selected dots faster, stronger and tougher for 6 seconds. <b>Nova</b> (60) sacrifices some of your dots to blast everything around them.</p>
           </div>
         </div>
+        <p class="hint">The procedural campaign has its own How to play, with a tour of its map: open it from the campaign's run list, or with <b>?</b> on a run's map.</p>
         <h3>Controls</h3>
         ${CONTROLS_HTML}
         <div class="row end"><button class="primary" data-a="back">Got it</button></div>

@@ -57,6 +57,11 @@ export interface Step {
   next?: true;
   /** a HUD element brought to the middle of the screen, enlarged, while the step lasts (it goes home after) */
   spotlight?: string;
+  /**
+   * Where the camera goes when the step begins (#218): a world point, and how
+   * far in (a multiple of the whole-map zoom; default as it is). Null shows the whole map; undefined leaves it be.
+   */
+  focus?: (c: StepCtx) => { x: number; y: number; zoom?: number } | null | undefined;
 }
 
 export interface Mission {
@@ -164,7 +169,7 @@ const onTheWay = (what: string): Hint => {
   const t = `⏳ Your dots are on their way. The lesson goes on when they ${what}.`;
   return { desktop: t, mobile: t };
 };
-const same = (t: string): Hint => ({ desktop: t, mobile: t });
+export const same = (t: string): Hint => ({ desktop: t, mobile: t });
 /**
  * Nests to take: waiting starts once dots head for any of them, and until
  * every one has dots on the way the coach says what's left (`rest`).

@@ -111,6 +111,15 @@ export class GameView {
   readonly rec: Recorder | null;
   /** tutorial mission being played, if any (#17) */
   mission: MissionRun | null = null;
+  /**
+   * A campaign battle briefing (#218), if one is showing: tour steps on the
+   * coach over a real battle. Ending it (done or skipped) just lets the battle go on.
+   */
+  briefing: MissionRun | null = null;
+  /** the briefing ended, finished or skipped */
+  onGuideEnd: (() => void) | null = null;
+  /** the step whose camera focus was last applied */
+  private focusStep = -1;
   /** actions this mission hides */
   locked = new Set<Lock>();
   /** why a locked action is locked, when it isn't the tutorial's "not in this lesson" */
@@ -199,7 +208,7 @@ export class GameView {
       else if (me?.eliminated) this.finish('defeat', time);
     }
     if (!this.result && !this.spectating) this.checkSupply();
-    if (!this.result && this.mission) this.updateMission(time);
+    if (!this.result && this.coached) this.updateMission(time);
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
     // Domination countdown ticks in the last ten seconds.
     const ds = this.result ? null : dominationStatus(w);
@@ -226,7 +235,7 @@ export class GameView {
 
   /** Advance the tutorial steps, pulse the nests the current step is about, end on success. */
   private updateMission(time: number): void {
-    const m = this.mission!;
+    const m = this.coached!;
     const base = { w: this.world, human: this.human, log: this.session.log };
     let entered = 0;
     const enter = () => {
@@ -244,6 +253,7 @@ export class GameView {
       enter();
     }
     const ctx = m.ctx(base);
+    if (m.complete && m === this.briefing) return this.endGuide();
     if (m.complete) {
       this.session.held = false;
       this.waitHint = null;
@@ -264,6 +274,15 @@ export class GameView {
     this.session.held = time < this.readUntil || !!m.current?.next;
     this.readLeft = this.session.held ? (this.readUntil - time) / READ_PAUSE : 0;
     this.waitHint = m.waitText(base);
+    if (this.focusStep !== m.step) {
+      this.focusStep = m.step;
+      const f = m.current?.focus?.(ctx);
+      const cam = this.s.camera;
+      if (f === null) cam.fit();
+      else if (f) cam.focus(f.x, f.y, f.zoom ? cam.fitZoom * f.zoom : cam.zoom);
+      // Rings on the step's nests right away, not up to a second later.
+      this.highlightAt = 0;
+    }
     if (time - this.highlightAt < 1.1) return;
     this.highlightAt = time;
     for (const id of m.current?.highlight?.(ctx) ?? []) {
@@ -277,9 +296,32 @@ export class GameView {
     return this.readHeld || this.session.issued > this.readIssued;
   }
 
+  /**
+   * End a battle briefing (#218), done or skipped: the battle goes on from
+   * where it was held, the camera back on your home.
+   */
+  endGuide(): void {
+    if (!this.briefing) return;
+    this.briefing = null;
+    this.focusStep = -1;
+    this.readUntil = 0;
+    this.readLeft = 0;
+    this.waitHint = null;
+    this.session.held = false;
+    this.s.camera.open(...this.homePoint(), this.s.renderer.dpr);
+    const done = this.onGuideEnd;
+    this.onGuideEnd = null;
+    done?.();
+  }
+
+  /** What the coach is running: the tutorial mission, or a battle briefing. */
+  get coached(): MissionRun | null {
+    return this.mission ?? this.briefing;
+  }
+
   /** Next, on a tour step (#115). */
   nextStep(): void {
-    this.mission?.ack();
+    this.coached?.ack();
   }
 
   /** End the reading pause now (the coach's Go button). */
