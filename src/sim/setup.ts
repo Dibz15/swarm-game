@@ -70,12 +70,16 @@ export const MAX_HUMANS = NEUTRAL;
 
 /**
  * Reject setups the sim can't run (#156). Several human seats are fine in
- * FFA or teams; a Hold the line siege is built around a single human.
+ * FFA or teams; a Hold the line siege is built around a single human, and a
+ * stronghold's side is all bots.
  */
 export function validateSetup(setup: MatchSetup): void {
   const humans = setup.players.filter((p) => p.human).length;
   if (humans > MAX_HUMANS) throw new Error(`MatchSetup: ${humans} human seats, at most ${MAX_HUMANS}`);
   if (setup.siege && humans > 1) throw new Error(`MatchSetup: a siege (Hold the line) takes one human seat, not ${humans}`);
+  // A human's side taking the citadel wins (#222): the holder's side is bots only, or it would win at the start.
+  const holder = setup.stronghold ? setup.players[setup.stronghold.player] : undefined;
+  if (setup.stronghold && (!holder || setup.players.some((p) => p.human && p.team === holder.team))) throw new Error('MatchSetup: a stronghold is held by a side of bots');
 }
 
 /** The generator's params for a setup's map (thumbnails use this too, so they match the battle). */

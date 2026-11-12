@@ -113,13 +113,14 @@ function domination(w: World): Step[] {
 
 function stronghold(w: World, lord?: BriefLord): Step[] {
   const cit = w.citadel;
-  const who = lord ? `${lord.name}'s` : "The warlord's";
+  // A skirmish's stronghold (#222) has no warlord: a bot holds it, and its guards grow with the sides attacking.
+  const who = lord ? `${lord.name}'s` : "The holder's";
   const steps = [
-    tour(`<b>A warlord's stronghold.</b> ${who} citadel (ringed) sits behind walls. Take it and the battle is won, even with rivals left.`, {
+    tour(`<b>${lord ? "A warlord's stronghold" : 'The stronghold'}.</b> ${who} citadel (ringed) sits behind walls. Take it and the battle is won, even with rivals left.`, {
       highlight: () => [cit],
       focus: onNest(cit, 1.8),
     }),
-    tour('Walls stop your dots: find a gate. The citadel is heavily guarded, and its guards grow with the army you bring, so bring them all at once.', {
+    tour(`Walls stop your dots: find a gate. The citadel is heavily guarded, and its guards grow with ${lord ? 'the army you bring' : 'every side attacking it'}, so bring them all at once.`, {
       highlight: () => [cit],
     }),
   ];
