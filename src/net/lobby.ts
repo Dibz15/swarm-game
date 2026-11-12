@@ -16,8 +16,11 @@ import type { Transport } from './transport';
  *
  * A row per colour (row = seat = faction). The host owns the state and
  * sends all of it (`lobby`) on every change: it's small, and a guest that
- * missed one is whole again with the next. Guests only ask (`hello`,
- * `pick`); the host decides.
+ * missed one is whole again with the next. A link can lose a message with no
+ * word (one held while it reconnects, a send that fails), so the host also
+ * sends it again every `RESEND_MS` before a match, and to a player whose
+ * link comes back (#214, #215). Guests only ask (`hello`, `pick`); the host
+ * decides.
  */
 
 export type SeatRow =
@@ -65,6 +68,9 @@ const PHASES: readonly LobbyPhase[] = ['lobby', 'starting', 'playing'];
 
 /** Start's countdown, ms: everyone sees 3, 2, 1 before the match (#184). */
 export const COUNTDOWN_MS = 3000;
+
+/** Before a match, the host sends its state to everyone again this often, ms: a guest that missed a change catches up (#214). */
+export const RESEND_MS = 3000;
 
 /** The bot timeouts a host can choose (#164). */
 export const BOT_SECS = [30, 60, 120] as const;
@@ -291,11 +297,14 @@ export class HostLobby {
   private countdownUntil = -1;
   /** the tokens of everyone who has sat in this room: they get back in when it's locked (a reload, #184) */
   private readonly seenTokens = new Set<string>();
+  /** when everyone was last sent the state: `update()` sends it again after `RESEND_MS` */
+  private sentAt: number;
 
   constructor(t: Transport, o: HostLobbyOptions) {
     this.t = t;
     this.o = o;
     this.resumed = !!o.takeOver?.resume;
+    this.sentAt = o.clock();
     const p = o.prefs;
     const rows: SeatRow[] = Array.from({ length: MAX_SEATS }, (_, i) => ({ k: 'open', team: i }) as SeatRow);
     const me = Math.min(MAX_SEATS - 1, Math.max(0, p.color));
@@ -339,6 +348,8 @@ export class HostLobby {
         this.connected.add(peer);
         // picked up from a save (#191): another resumer would never say hello; this way, we meet
         if (this.resumed && seatOf(this.state, peer) < 0) this.send(peer, { k: 'lobby', state: this.json() });
+        // a seated player's link is back: what we sent while it was down never arrived (#214)
+        else if (this.state.phase !== 'playing' && seatOf(this.state, peer) >= 0) this.send(peer, { k: 'lobby', state: this.json() });
       } else this.lost(peer);
     };
     t.onMessage = (peer, bytes) => {
@@ -495,6 +506,8 @@ export class HostLobby {
   }
 
   update(): void {
+    // before a match, everyone gets the room again now and then: a change lost on the way is made good (#214)
+    if (this.state.phase !== 'playing' && this.o.clock() - this.sentAt >= RESEND_MS) this.broadcast();
     if (this.state.phase === 'starting' && this.countdownUntil >= 0 && this.o.clock() >= this.countdownUntil) {
       if (players(this.state) >= 2 && this.mySeat >= 0) this.launch();
       else this.cancelStart();
@@ -654,9 +667,15 @@ export class HostLobby {
 
   private edit(fn: () => void): void {
     fn();
-    const json = this.json();
-    for (const r of this.state.rows) if (r.k === 'human' && r.peer !== this.t.self) this.send(r.peer, { k: 'lobby', state: json });
+    this.broadcast();
     this.onChange?.(this.state);
+  }
+
+  /** the whole state to every player in the room */
+  private broadcast(): void {
+    const json = this.json();
+    this.sentAt = this.o.clock();
+    for (const r of this.state.rows) if (r.k === 'human' && r.peer !== this.t.self) this.send(r.peer, { k: 'lobby', state: json });
   }
 
   private send(peer: string, m: Msg): void {
@@ -753,6 +772,9 @@ export class GuestLobby {
   private firstAsk = -1;
   /** the host left (its link went away): we don't vouch for it to newcomers */
   private hostGone = false;
+  /** the last room taken, as it came, and from whom: a resend of it changes nothing (#214) */
+  private heardJson = '';
+  private heardFrom = '';
 
   constructor(t: Transport, o: GuestLobbyOptions) {
     this.t = t;
@@ -919,8 +941,12 @@ export class GuestLobby {
         if (!inIt && this.introducedTo !== peer) return this.sayHello(peer, true);
         this.host = peer;
         if (inIt) this.introducedTo = peer;
+        // the host sends the room again now and then (#214): the same room again, from the same host, is no news
+        const same = this.heardJson === m.state && this.heardFrom === peer;
+        this.heardJson = m.state;
+        this.heardFrom = peer;
         this.state = s;
-        this.onChange?.(s);
+        if (!same) this.onChange?.(s);
         return;
       }
       case 'host':

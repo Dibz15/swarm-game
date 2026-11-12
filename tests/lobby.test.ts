@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { playerCharacter } from '../src/game/character';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { ASK_MS, LONE_ASKS, buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
+import { ASK_MS, LONE_ASKS, RESEND_MS, buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { PROTOCOL_VERSION, type Msg } from '../src/net/protocol';
 import { decodeMsg, encodeMsg } from '../src/net/codec';
@@ -1059,5 +1059,89 @@ describe('the seat token reaches the host only (#202)', () => {
     b.lobby.update();
     expect(gotToken(rm, rm.tokenOf('B'))).toEqual(['H']);
     expect(h.lobby.state.rows[b.lobby.mySeat]).toMatchObject({ peer: 'B' });
+  });
+});
+
+describe('every guest sees the host’s room (#214, #215)', () => {
+  it('every setting the host changes reaches each guest: the map, Quick match, teams, the seed, the bot time, who runs the match', () => {
+    const { host, guest } = room();
+    const h = host();
+    const a = guest('A');
+    const b = guest('B');
+    h.lobby.setMap({ size: 'large', terrain: 'heavy', caves: 'full', layout: 'lanes', events: 'wild' });
+    h.lobby.setRandomMap(true);
+    h.lobby.setRandomMap(false);
+    h.lobby.setTeams(true);
+    h.lobby.setSeed('north-wind-3');
+    h.lobby.setBotSecs(120);
+    h.lobby.setRunner('A');
+    h.lobby.setRow(4, { k: 'bot', team: 1, difficulty: 2, personality: 'rusher' });
+    for (const g of [a, b]) expect(g.lobby.state).toEqual(h.lobby.state);
+    // a guest that joins after the changes gets them all at once
+    const c = guest('C');
+    expect(c.lobby.state).toEqual(h.lobby.state);
+    expect(c.lobby.state!.teams).toBe(true);
+  });
+
+  it('a change lost on the way, with no word from the link: the host sends the room again, and the guest catches up', () => {
+    const { clock, host, guest, silence, heal } = room();
+    const h = host();
+    const a = guest('A');
+    silence('A', 'H');
+    h.lobby.setTeams(true);
+    h.lobby.setMap({ size: 'large' });
+    heal('A', 'H');
+    expect(a.lobby.state!.teams).toBe(false); // missed, and nothing has changed since
+    clock.now += RESEND_MS - 1;
+    h.lobby.update();
+    expect(a.lobby.state!.teams).toBe(false);
+    clock.now += 1;
+    h.lobby.update();
+    expect(a.lobby.state).toEqual(h.lobby.state);
+  });
+
+  it('the room sent again is no news: the guest’s screen only hears of a change', () => {
+    const { clock, host, guest } = room();
+    const h = host();
+    const a = guest('A');
+    let changes = 0;
+    a.lobby.onChange = () => changes++;
+    for (let i = 0; i < 3; i++) {
+      clock.now += RESEND_MS;
+      h.lobby.update();
+    }
+    expect(changes).toBe(0);
+    h.lobby.setTeams(true);
+    expect(changes).toBe(1);
+  });
+
+  it('a link back from a drop gets the room from the host, even when the guest never saw it go', () => {
+    const { host, guest, silence, heal, routerOf } = room();
+    const h = host();
+    const a = guest('A');
+    // the host's side alone saw the link drop and come back
+    silence('A', 'H');
+    h.lobby.setTeams(true);
+    heal('A', 'H');
+    routerOf('H').transport.onPeer?.('A', true);
+    expect(a.lobby.state).toEqual(h.lobby.state);
+  });
+
+  it('stops sending the room again once the match is on', () => {
+    const rm = room();
+    const h = rm.host();
+    rm.guest('A');
+    rm.startNow(h);
+    expect(h.lobby.state.phase).toBe('playing');
+    let lobbies = 0;
+    const t = rm.routerOf('H').transport;
+    const send = t.send.bind(t);
+    t.send = (peer, bytes) => {
+      if (decodeMsg(bytes)?.k === 'lobby') lobbies++;
+      send(peer, bytes);
+    };
+    rm.clock.now += RESEND_MS * 3;
+    h.lobby.update();
+    expect(lobbies).toBe(0);
   });
 });
