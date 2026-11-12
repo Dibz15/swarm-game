@@ -582,7 +582,7 @@ class App {
     const run = newRun(`heart-${strength}`, loadPrefs().color, 'swarm', Date.now());
     run.swallowed = run.nodes.filter((n) => n.kind !== 'start' && n.kind !== 'finale').slice(0, strength).map((n) => n.id);
     for (const b of run.broods) b.size = 20;
-    this.startGame(nodeSetup(run, run.heart, run.broods.map((b) => b.id)), { scenario: 'campaign: finale (dev)' });
+    this.startGame(nodeSetup(run, run.heart, run.broods.map((b) => b.id)), { scenario: 'campaign: finale (dev)', goal: false });
   }
 
   /** Move to a node: fight for it, or march through a node already taken. */
@@ -596,7 +596,7 @@ class App {
       return;
     }
     const node = run.nodes[id];
-    this.startGame(nodeSetup(run, id, fielded), { scenario: `campaign: ${node.kind}` });
+    this.startGame(nodeSetup(run, id, fielded), { scenario: `campaign: ${node.kind}`, goal: false });
     this.run = { state: run, node: id, fielded };
     this.armRunBattle(run, id);
   }
@@ -693,7 +693,7 @@ class App {
 
   private playMission(i: number, prevEnd: EndReason = 'quit'): void {
     const m = MISSIONS[i];
-    this.startGame(m.setup(), { scenario: `tutorial: ${m.title}` }, prevEnd);
+    this.startGame(m.setup(), { scenario: `tutorial: ${m.title}`, goal: false }, prevEnd);
     const g = this.game!;
     g.mission = new MissionRun(m, i);
     g.locked = new Set(m.locked);
@@ -949,6 +949,8 @@ class App {
         ? {
             map: (patch) => hostLobby()?.setMap(patch),
             teams: (on) => hostLobby()?.setTeams(on),
+            mode: (mode) => hostLobby()?.setMode(mode),
+            holder: (seat) => hostLobby()?.setHolder(seat),
             botSecs: (secs) => hostLobby()?.setBotSecs(secs),
             seed: (text) => hostLobby()?.setSeed(text),
             row: (seat, row) => hostLobby()?.setRow(seat, row),
@@ -1656,7 +1658,7 @@ class App {
    * `opts.seat`: the local seat (#156), one of the setup's human factions; default: the first human.
    * `opts.match`: a networked match (#162), which brings its own session.
    */
-  private startGame(setup: MatchSetup, opts: { scenario?: string; record?: boolean; seat?: number; match?: NetMatch } = {}, prevEnd: EndReason = 'quit'): void {
+  private startGame(setup: MatchSetup, opts: { scenario?: string; record?: boolean; seat?: number; match?: NetMatch; goal?: boolean } = {}, prevEnd: EndReason = 'quit'): void {
     this.endGame(prevEnd);
     this.match = opts.match ?? null;
     // a phone running the match hands it on when its page hides (#193): it freezes there
@@ -1746,6 +1748,34 @@ class App {
     if (record) this.hud.toast(opts.scenario ? `Recording: ${opts.scenario}` : 'Recording this match', '#8aa0b8');
     // Open on the player's home, zoomed in a little.
     this.camera.open(...this.game.homePoint(), this.renderer.dpr);
+    if (opts.goal !== false) this.announceGoal();
+  }
+
+  /**
+   * A skirmish or room's match type (#222), outside the campaign and the
+   * tutorial (which brief their own): what wins, as a toast; alone, the first
+   * time, the campaign's briefing for that kind of battle (#218), which holds
+   * the match while it shows.
+   */
+  private announceGoal(): void {
+    const g = this.game;
+    if (!g) return;
+    const w = g.world;
+    const type = battleType(w);
+    if (type !== 'domination' && type !== 'stronghold' && type !== 'hold') return;
+    const holder = type === 'stronghold' ? w.nests[w.citadel].owner : -1;
+    const text =
+      type === 'domination'
+        ? 'Domination: score on the gold-ringed key nests'
+        : type === 'stronghold'
+          ? `♛ Stronghold: take ${this.seatName(holder)}'s citadel to win`
+          : 'Hold the line: keep your capital until the clock runs out';
+    this.hud?.toast(text, type === 'stronghold' ? FACTION_HEX[holder] : '#ffd166');
+    if (g.session.net || g.human < 0 || briefsSeen().includes(type)) return;
+    const m = briefingFor(w, type === 'stronghold' ? 'conquest' : type);
+    if (!m) return;
+    g.briefing = new MissionRun(m, 0);
+    g.onGuideEnd = () => markBriefSeen(type);
   }
 
   private endGame(reason: EndReason = 'quit'): void {
@@ -1800,7 +1830,7 @@ class App {
           restart: () => {
             const run = this.run;
             if (g.mission) this.playMission(g.mission.index, 'restart');
-            else this.startGame(g.setup, { scenario: g.rec?.scenario, seat: g.human >= 0 ? g.human : undefined }, 'restart');
+            else this.startGame(g.setup, { scenario: g.rec?.scenario, seat: g.human >= 0 ? g.human : undefined, goal: !run }, 'restart');
             this.run = run;
             // A campaign battle keeps its locks and warlord, and a briefing not yet seen shows again.
             if (run) this.armRunBattle(run.state, run.node);

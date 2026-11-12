@@ -6,9 +6,9 @@
 import { creatureCanvas } from '../art/creature';
 import { FACTION_HEX, FACTION_NAMES } from '../content/factions';
 import { characterCreature, playerCharacter, type Character } from '../game/character';
-import { randomSeed } from '../game/matchSetup';
+import { MATCH_MODE_BLURB, MATCH_MODE_LABEL, randomSeed } from '../game/matchSetup';
 import qrcode from 'qrcode-generator';
-import { BOT_SECS, COUNTDOWN_MS, type BotSecs, type LobbyState, type SeatRow } from '../net/lobby';
+import { BOT_SECS, COUNTDOWN_MS, holderSeat, ROOM_MODES, roomProblem, type BotSecs, type LobbyState, type RoomMode, type SeatRow } from '../net/lobby';
 import type { LinkInfo } from '../net/transport';
 import { DIFFICULTY_NAMES, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import { relayOnly } from '../net/ice';
@@ -147,6 +147,10 @@ export interface LobbyHandlers {
   host?: {
     map: (patch: Partial<MapChoice>) => void;
     teams: (on: boolean) => void;
+    /** the match type (#222) */
+    mode: (mode: RoomMode) => void;
+    /** Stronghold: this bot's seat holds the citadel */
+    holder: (seat: number) => void;
     /** how long a dropped player's seat idles before an Easy bot takes it (#164) */
     botSecs: (s: BotSecs) => void;
     seed: (text: string) => void;
@@ -246,6 +250,10 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
           </section>
           <section data-pane="match">
             ${isHost ? '' : '<p class="hint">The host chooses the map.</p>'}
+            <div class="field">
+              <label>Match type <small class="mode-blurb"></small></label>
+              <div class="seg wrap" data-a="matchmode">${ROOM_MODES.map((t) => `<button data-v="${t}">${MATCH_MODE_LABEL[t]}</button>`).join('')}</div>
+            </div>
             <label class="check quick"><input type="checkbox" data-a="random"${isHost ? '' : ' disabled'}> Quick match <small class="hint">a new random map at each start, sized for the players</small></label>
             <div class="mapfields"></div>
             <label class="check"><input type="checkbox" data-a="teams"${isHost ? '' : ' disabled'}> Teams <small class="hint">choose each colour’s team in the roster</small></label>
@@ -354,6 +362,7 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
     const r = state.rows[i];
     const a = t.dataset.a;
     if (a === 'sit') h.pick(i, myTeam(), myChar());
+    else if (a === 'holder') h.host?.holder(i);
     else if (a === 'bot') h.host?.row(i, { k: 'bot', team: r.team, difficulty: 1, personality: 'random' });
     else if (a === 'close') h.host?.row(i, { k: 'closed', team: r.team });
     else if (a === 'open') h.host?.row(i, { k: 'open', team: r.team });
@@ -375,6 +384,10 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
 
   // ---- host controls
   teamsBox.addEventListener('change', () => h.host?.teams(teamsBox.checked));
+  $('[data-a=matchmode]').addEventListener('click', (e) => {
+    const b = (e.target as HTMLElement).closest('button');
+    if (b && !b.disabled && b.dataset.v) h.host?.mode(b.dataset.v as RoomMode);
+  });
   randomBox.addEventListener('change', () => h.host?.randomMap(randomBox.checked));
   botBox?.addEventListener('change', () => h.host?.botSecs(Number(botBox.value) as BotSecs));
   runnerBox?.addEventListener('change', () => h.host?.runner(runnerBox.value || null));
@@ -425,6 +438,11 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
         ? `<span class="bot-tag">Bot</span><select data-a="diff">${DIFFICULTY_NAMES.map((d, k) => `<option value="${k}"${k === r.difficulty ? ' selected' : ''}>${d}</option>`).join('')}</select>
            <select data-a="pers">${(['random', ...PERSONALITIES] as const).map((p) => `<option value="${p}"${p === r.personality ? ' selected' : ''}>${PERSONA[p]}</option>`).join('')}</select>`
         : `<span class="bot-tag">Bot</span> ${DIFFICULTY_NAMES[r.difficulty]} · ${PERSONA[r.personality]}`;
+      // Stronghold (#222): a crown on the bot holding the citadel; the host can hand it to another bot
+      if (state!.mode === 'stronghold') {
+        const holds = holderSeat(state!) === i;
+        side = isHost && open ? `<button class="small icon crown${holds ? ' on' : ''}" data-a="holder" title="${holds ? 'Holds the stronghold' : 'Hold the stronghold'}">♛</button>` : holds ? '<span class="crown on" title="Holds the stronghold">♛</span>' : '';
+      }
       if (isHost && open) actions = '<button class="small" data-a="open" title="Remove the bot">✕</button>';
     } else if (r.k === 'open') {
       who = `<span class="hint" title="${state!.locked ? 'Empty: the room is closed' : 'A player who joins sits here'}">${state!.locked ? 'Empty' : 'Open'}</span>`;
@@ -497,7 +515,8 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
       startBtn.disabled = !starting && !canStart;
       startBtn.textContent = starting ? 'Cancel' : 'Start match';
       startBtn.classList.toggle('primary', !starting);
-      note.textContent = starting ? 'Starting…' : sides < 2 ? 'Add a player or a bot to start' : guests.length ? `${ready}/${guests.length} ready` : 'Just you and bots';
+      const problem = roomProblem(s);
+      note.textContent = starting ? 'Starting…' : sides < 2 ? 'Add a player or a bot to start' : problem ? problem : guests.length ? `${ready}/${guests.length} ready` : 'Just you and bots';
     }
     if (readyBtn) {
       const r = s.rows[myRow()];
@@ -563,11 +582,17 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
     });
     renderChars();
     // Quick match rolls the map at Start: the fields show it, but there's nothing to choose
-    fields.render(s.map, !isHost || s.phase !== 'lobby' || s.randomMap);
+    // a stronghold is a fortress: no cave rock, which could seal its gates (#222)
+    fields.render(s.map, !isHost || s.phase !== 'lobby' || s.randomMap, s.mode === 'stronghold' ? { caves: 'off' } : {});
     randomBox.checked = s.randomMap;
     m.classList.toggle('random-map', s.randomMap);
     seedInput.readOnly = !isHost || s.randomMap;
     teamsBox.checked = s.teams;
+    m.querySelectorAll<HTMLButtonElement>('[data-a=matchmode] button').forEach((b) => {
+      b.classList.toggle('on', b.dataset.v === s.mode);
+      b.disabled = (!isHost || s.phase !== 'lobby') && b.dataset.v !== s.mode;
+    });
+    $('.mode-blurb').textContent = MATCH_MODE_BLURB[s.mode];
     if (botBox && document.activeElement !== botBox) botBox.value = String(s.botSecs);
     if (runnerBox && document.activeElement !== runnerBox) {
       // Auto, then each player in the room

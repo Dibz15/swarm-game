@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { playerCharacter } from '../src/game/character';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { ASK_MS, LONE_ASKS, RESEND_MS, buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
+import { ASK_MS, LONE_ASKS, RESEND_MS, buildNetSetup, roomProblem, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { PROTOCOL_VERSION, type Msg } from '../src/net/protocol';
 import { decodeMsg, encodeMsg } from '../src/net/codec';
@@ -134,6 +134,28 @@ describe('lobby (#162)', () => {
     expect(ffa.players[2].bot?.personality).not.toBe('random');
     h.lobby.setTeams(true);
     expect(buildNetSetup(h.lobby.state).players.map((p) => p.team)).toEqual([0, 1, 1]);
+  });
+
+  it('a match type (#222): the guest sees it, and a stronghold needs a bot to hold it', () => {
+    const { host, guest } = room();
+    const h = host();
+    const a = guest('A');
+    h.lobby.setMode('stronghold');
+    expect(a.lobby.state?.mode).toBe('stronghold');
+    // no bot yet: Start waits, and says why
+    expect(roomProblem(h.lobby.state)).toMatch(/bot/);
+    expect(h.lobby.canStart()).toBe(false);
+    h.lobby.setRow(2, { k: 'bot', team: 2, difficulty: 1, personality: 'random' });
+    h.lobby.setRow(4, { k: 'bot', team: 4, difficulty: 1, personality: 'random' });
+    expect(h.lobby.canStart()).toBe(true);
+    expect(buildNetSetup(h.lobby.state).stronghold?.player).toBe(2);
+    // the crown moves to another bot; a player's seat can't take it
+    h.lobby.setHolder(4);
+    h.lobby.setHolder(1);
+    expect(a.lobby.state?.holder).toBe(4);
+    expect(buildNetSetup(h.lobby.state).stronghold?.player).toBe(3);
+    expect(parseLobby(JSON.stringify(h.lobby.state))).toEqual(h.lobby.state);
+    expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'hold' }))).toBeNull();
   });
 });
 

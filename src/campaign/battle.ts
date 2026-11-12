@@ -9,6 +9,7 @@ import type { MatchSetup } from '../sim/setup';
 import { SURGE, TICK_HZ } from '../sim/constants';
 import { heartSlot } from '../sim/heart';
 import type { World } from '../sim/world';
+import { DOMINATION_SHARE, STRONGHOLD_PROD, keyNests } from '../game/matchSetup';
 import { MILITIA, fighters, veteran, type BattleReport } from './broods';
 import { modsFor } from './rewards';
 import { RUN_DIFFICULTY, bloomStrength, difficultyOf, erosion, finaleWarlords, maxFielded, pressure, warlordFighting, type RunState } from './run';
@@ -23,12 +24,8 @@ export const CONQUEST_SHARE = 0.8;
 /** The army size (#100) a stronghold's starting garrisons are tuned for; bigger armies meet bigger garrisons. */
 export const STRONGHOLD_ARMY = 32;
 const armySize = (run: RunState, fielded: number[]) => armyFor(run, fielded).reduce((a, b) => a + b.count, 0);
-/** A warlord's production in its own stronghold (#100): it starts with three nests, not one. */
-export const STRONGHOLD_PROD = 0.7;
-/** Domination nodes: hold half the nests (the usual share is 0.6-0.7); with key nests (#87) the share is only the HUD's guide. */
-const DOMINATION_SHARE = 0.5;
-/** Key nests in a Domination battle (#87): two, three with three rivals. */
-export const keyNests = (rivals: number) => (rivals >= 3 ? 3 : 2);
+// A warlord's production in its stronghold, Domination's share and key nests: as a skirmish's (#222).
+export { DOMINATION_SHARE, STRONGHOLD_PROD, keyNests } from '../game/matchSetup';
 
 /** Lone wolf's one brood fights this many times its size, as veterans: as many units as three broods, all of one kind (#68, #125). */
 export const LONE_WOLF = 3;

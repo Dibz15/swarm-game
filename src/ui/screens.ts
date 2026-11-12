@@ -8,7 +8,7 @@ import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
-import { buildSetup, loadPrefs, randomMap, randomSeed, savePrefs, type SetupPrefs } from '../game/matchSetup';
+import { buildSetup, loadPrefs, MATCH_MODES, MATCH_MODE_BLURB, MATCH_MODE_LABEL, modeProblem, randomMap, randomSeed, savePrefs, WAVE_NAMES, type MatchMode, type SetupPrefs } from '../game/matchSetup';
 import { relayOnly, setRelayOnly, TURN_URL } from '../net/ice';
 import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
@@ -139,6 +139,7 @@ export function randomSetup(difficulty: number): MatchSetup {
       ...p,
       ...randomMap(bots + 1),
       teams: false,
+      mode: 'conquest',
       bots: others.slice(0, bots).map((faction, i) => ({ faction, difficulty, personality: 'random', team: i + 1 })),
     },
     randomSeed(),
@@ -547,7 +548,7 @@ export interface MapChoice {
  * `onChange` gets each pick; `render` shows a choice (and, with `readOnly`,
  * nothing can be picked: a guest's view of the host's lobby).
  */
-export function mapFields(onChange: (patch: Partial<MapChoice>) => void): { el: HTMLDivElement; render: (m: MapChoice, readOnly?: boolean) => void } {
+export function mapFields(onChange: (patch: Partial<MapChoice>) => void): { el: HTMLDivElement; render: (m: MapChoice, readOnly?: boolean, fixed?: Partial<MapChoice>) => void } {
   const f = el(`
     <div class="mapfields">
       <div class="field two">
@@ -587,14 +588,17 @@ export function mapFields(onChange: (patch: Partial<MapChoice>) => void): { el: 
   for (const k of keys) {
     f.querySelector(`[data-a=${k}]`)!.addEventListener('click', (e) => {
       const v = (e.target as HTMLElement).dataset.v;
-      if (v) onChange({ [k]: v } as Partial<MapChoice>);
+      const b = (e.target as HTMLElement).closest('button');
+      if (v && !b?.disabled) onChange({ [k]: v } as Partial<MapChoice>);
     });
   }
-  const render = (m: MapChoice, readOnly = false) => {
+  /** `fixed`: fields the match type sets (#222: a fortress has open ground), shown but not pickable */
+  const render = (m: MapChoice, readOnly = false, fixed: Partial<MapChoice> = {}) => {
     for (const k of keys) {
+      const v = fixed[k] ?? m[k];
       f.querySelectorAll<HTMLButtonElement>(`[data-a=${k}] button`).forEach((b) => {
-        b.classList.toggle('on', b.dataset.v === m[k]);
-        b.disabled = readOnly && b.dataset.v !== m[k];
+        b.classList.toggle('on', b.dataset.v === v);
+        b.disabled = (readOnly || fixed[k] !== undefined) && b.dataset.v !== v;
       });
     }
   };
@@ -620,6 +624,18 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
           <div class="swatches"></div>
         </div>
         <div class="field">
+          <label>Match type <small class="mode-blurb"></small></label>
+          <div class="seg wrap" data-a="matchmode">
+            ${MATCH_MODES.map((t) => `<button data-v="${t}">${MATCH_MODE_LABEL[t]}</button>`).join('')}
+          </div>
+        </div>
+        <div class="field waves">
+          <label>Waves <small>how big and how often; harder holds longer</small></label>
+          <div class="seg" data-a="waves">
+            ${WAVE_NAMES.map((t, i) => `<button data-v="${i}">${t}</button>`).join('')}
+          </div>
+        </div>
+        <div class="field opponents">
           <label>Opponents <small>bots</small></label>
           <div class="bots"></div>
           <div class="row">
@@ -632,6 +648,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
           <label>Map seed</label>
           <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
         </div>
+        <p class="problem" hidden></p>
         <div class="row end">
           <button data-a="back">Back</button>
           <button class="primary" data-a="start">Start match</button>
@@ -666,6 +683,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     prefs.layout = 'random';
     prefs.events = 'normal';
     prefs.teams = false;
+    prefs.mode = 'conquest';
     teamsBox.checked = false;
     prefs.bots = scenario.bots.map((personality, i) => ({ faction: free[i], difficulty, personality, team: i + 1 }));
     seedInput.value = scenario.seed;
@@ -703,13 +721,40 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
           <select data-a="diff">${DIFFICULTY_NAMES.map((d, k) => `<option value="${k}"${k === b.difficulty ? ' selected' : ''}>${d}</option>`).join('')}</select>
           <select data-a="pers">${(['random', ...PERSONALITIES] as const).map((p) => `<option value="${p}"${p === b.personality ? ' selected' : ''}>${PERSONA_LABEL[p]}</option>`).join('')}</select>
           <select data-a="team" ${prefs.teams ? '' : 'hidden'}>${[0, 1, 2, 3, 4, 5].map((t) => `<option value="${t}"${t === b.team ? ' selected' : ''}>Team ${'ABCDEF'[t]}${t === 0 ? ' (ally)' : ''}</option>`).join('')}</select>
+          ${prefs.mode === 'stronghold' ? `<button class="small icon crown${i === prefs.holder ? ' on' : ''}" data-a="holder" title="${i === prefs.holder ? 'Holds the stronghold' : 'Hold the stronghold'}">♛</button>` : ''}
           <button class="small icon" data-a="del" title="Remove" ${prefs.bots.length <= 1 ? 'disabled' : ''}>✕</button>
         </div>`,
       )
       .join('');
     (m.querySelector('[data-a=add]') as HTMLButtonElement).disabled = prefs.bots.length >= 5;
-    fields.render(prefs);
+    // The match type (#222): Hold the line has no bots; fortresses have no cave rock (it could seal the gates).
+    if (prefs.holder >= prefs.bots.length) prefs.holder = 0;
+    m.querySelectorAll<HTMLButtonElement>('[data-a=matchmode] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.mode));
+    m.querySelectorAll<HTMLButtonElement>('[data-a=waves] button').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === prefs.waves));
+    (m.querySelector('.mode-blurb') as HTMLElement).textContent = MATCH_MODE_BLURB[prefs.mode];
+    (m.querySelector('.waves') as HTMLElement).hidden = prefs.mode !== 'hold';
+    (m.querySelector('.opponents') as HTMLElement).hidden = prefs.mode === 'hold';
+    const fort = prefs.mode === 'hold' || prefs.mode === 'stronghold';
+    fields.render(prefs, false, fort ? { caves: 'off', ...(prefs.mode === 'hold' && prefs.events === 'off' ? { events: 'calm' } : {}) } : {});
+    const problem = modeProblem(buildSetup({ ...prefs, mode: 'conquest' }, 'x'), prefs.mode, 1 + prefs.holder);
+    const p = m.querySelector('.problem') as HTMLElement;
+    p.hidden = !problem;
+    p.textContent = problem ? `${problem}: change the teams, or pick another match type.` : '';
+    (m.querySelector('[data-a=start]') as HTMLButtonElement).disabled = !!problem;
   };
+
+  m.querySelector('[data-a=matchmode]')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).dataset.v as MatchMode | undefined;
+    if (!v) return;
+    prefs.mode = v;
+    render();
+  });
+  m.querySelector('[data-a=waves]')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).dataset.v;
+    if (v === undefined) return;
+    prefs.waves = Number(v);
+    render();
+  });
 
   swatches.addEventListener('click', (e) => {
     const c = Number((e.target as HTMLElement).dataset.c);
@@ -727,7 +772,12 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     if (!row) return;
     const b = prefs.bots[Number(row.dataset.i)];
     if (t.dataset.a === 'del' && prefs.bots.length > 1) {
-      prefs.bots.splice(Number(row.dataset.i), 1);
+      const i = Number(row.dataset.i);
+      prefs.bots.splice(i, 1);
+      if (prefs.holder > i) prefs.holder--;
+      render();
+    } else if (t.dataset.a === 'holder') {
+      prefs.holder = Number(row.dataset.i);
       render();
     } else if (t.dataset.a === 'color') {
       const u = used();
@@ -748,7 +798,10 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     const b = prefs.bots[Number(row.dataset.i)];
     if (t.dataset.a === 'diff') b.difficulty = Number(t.value);
     if (t.dataset.a === 'pers') b.personality = t.value as Personality | 'random';
-    if (t.dataset.a === 'team') b.team = Number(t.value);
+    if (t.dataset.a === 'team') {
+      b.team = Number(t.value);
+      render();
+    }
   });
 
   m.querySelector('[data-a=add]')!.addEventListener('click', () => {
