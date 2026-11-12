@@ -30,7 +30,7 @@ const TIPS = [
   'Click one of your nests, then right-click somewhere to set its rally point.',
   'Select a nest and press U to feed it dots and level it up.',
   'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
-  'Hold 70% of the nests (60% on large maps) for 30 seconds to win by domination.',
+  'Hold 70% of the nests (60% on large maps; more in a team match, most for the bigger team) for 30 seconds to win by domination. The mark on the nest bar shows your line.',
   'Your count at the top is army / supply cap. Every nest you hold raises the cap; at the cap your nests stop producing.',
   'Ctrl+5–9 saves a control group, 5–9 recalls it. C centers the camera on your selection, 0 fits the map.',
   'Each nest type you hold unlocks a power: Forge → Fortify (R), Spire → Barrage (F), Den → Blink (G), Bastion → Lockdown (T).',
@@ -667,9 +667,11 @@ export class Hud {
     if (this.nestShare.children.length !== active.length) {
       this.nestShare.innerHTML = active.map((f) => `<i style="background:${hex(f.id)}"></i>`).join('');
     }
-    this.domMark.style.left = `${w.domShare * 100}%`;
+    // Your team's line (#213: in a team match each team has its own).
+    const domShare = w.domShareOf(g.human >= 0 ? w.teamOf[g.human] : -1);
+    this.domMark.style.left = `${domShare * 100}%`;
     // No domination win in this match (a share past 1, #146): no marker.
-    this.domMark.style.display = w.domShare > 1 ? 'none' : '';
+    this.domMark.style.display = domShare > 1 ? 'none' : '';
     active.forEach((f, k) => {
       (this.nestShare.children[k] as HTMLElement).style.width = `${(100 * nestsOf(f.id)) / Math.max(1, w.nests.length)}%`;
     });

@@ -405,6 +405,11 @@ export class World {
 
   /** share of nests a team must hold for DOMINATION.ticks to win */
   domShare = 0.7;
+  /**
+   * Team matches (#213): each team's own share, from its starting slice of the
+   * map; 0 (FFA, or a share the setup fixed) means `domShare`.
+   */
+  readonly domShares = new Float64Array(NEUTRAL_TEAM + 1);
   over = false;
   winnerTeam = -1;
   /** no elimination or domination win (tutorial missions without an opponent) */
@@ -442,6 +447,16 @@ export class World {
       this.teamOf[f] = f === NEUTRAL ? NEUTRAL_TEAM : f;
       this.history.push([]);
     }
+  }
+
+  /** the share of nests `team` must hold to dominate */
+  domShareOf(team: number): number {
+    return (team >= 0 && this.domShares[team]) || this.domShare;
+  }
+
+  /** how many nests `team` must hold to dominate */
+  domNeed(team: number): number {
+    return Math.ceil(this.nests.length * this.domShareOf(team));
   }
 
   setTeam(f: number, team: number): void {
