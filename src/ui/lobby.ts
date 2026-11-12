@@ -576,7 +576,8 @@ export function lobbyScreen(link: string, choices: Character[], h: LobbyHandlers
       runnerBox.innerHTML = opts.join('');
       runnerBox.value = s.runner && s.rows.some((r) => r.k === 'human' && r.peer === s.runner) ? s.runner : '';
     }
-    if (document.activeElement !== seedInput) seedInput.value = s.seed;
+    // a field you can't type in shows the host's seed even while focused: skipped now, it would stay stale (#215)
+    if (seedInput.readOnly || document.activeElement !== seedInput) seedInput.value = s.seed;
     if (s.phase === 'starting') startCount();
     else stopCount();
   };
