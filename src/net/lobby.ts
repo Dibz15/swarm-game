@@ -824,6 +824,13 @@ export class GuestLobby {
     return this.state ? seatOf(this.state, this.t.self) : -1;
   }
 
+  /** Where finding the host stands, for the net log (#216). Peer ids cut to 6 characters. */
+  debug(): string {
+    const p = (x: string | null) => (x ? x.slice(0, 6) : '-');
+    const votes = [...this.votes].map(([a, b]) => `${p(a)}→${p(b)}`).join(' ') || 'none';
+    return `host ${p(this.host)}, told ${p(this.introducedTo)}, seat ${this.mySeat}, phase ${this.state?.phase ?? '-'}, votes ${votes}, heard ${this.heard.size}, gaveUp ${this.gaveUp}, hostGone ${this.hostGone}, dropped ${this.dropped}, open ${Math.round(this.o.clock() - this.since)} ms`;
+  }
+
   pick(seat: number, team: number, char: number): void {
     if (this.host) this.send(this.host, { k: 'pick', seat, team, char: char >>> 0 });
   }

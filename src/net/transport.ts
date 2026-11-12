@@ -1,4 +1,5 @@
 import { decodeMsg, encodeMsg, msgKind } from './codec';
+import { netMsg, netNote, short } from './netlog';
 import type { Msg, MsgKind } from './protocol';
 import { Sequencer, type SequencerConfig } from './sequencer';
 
@@ -162,19 +163,26 @@ export class Router {
     transport.onMessage = (peer, bytes) => {
       const k = msgKind(bytes);
       if (!k) return;
+      netMsg('<', peer, bytes);
       for (const v of this.views) if (v.kinds.has(k)) v.t.onMessage?.(peer, bytes);
     };
     transport.onPeer = (peer, up) => {
+      netNote(`${up ? '+' : '-'} ${short(peer)} peer ${up ? 'up' : 'down'}`);
       for (const v of this.views) v.t.onPeer?.(peer, up);
     };
     transport.onLink = (peer, state) => {
+      netNote(`~ ${short(peer)} link ${state}`);
       for (const v of this.views) v.t.onLink?.(peer, state);
     };
   }
 
   view(kinds: readonly MsgKind[]): Transport {
     const base = this.transport;
-    const t: Transport = { self: base.self, onMessage: null, onPeer: null, onLink: null, send: (peer, bytes) => base.send(peer, bytes), close: () => this.drop(t) };
+    const send = (peer: string, bytes: Uint8Array) => {
+      netMsg('>', peer, bytes);
+      base.send(peer, bytes);
+    };
+    const t: Transport = { self: base.self, onMessage: null, onPeer: null, onLink: null, send, close: () => this.drop(t) };
     if (base.linkInfo) t.linkInfo = (peer) => base.linkInfo!(peer);
     this.views.push({ kinds: new Set(kinds), t });
     return t;
