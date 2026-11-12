@@ -27,6 +27,8 @@ import { mapGrid } from './ui/mapGrid';
 import { FORTIFY } from './sim/fortify';
 import { deleteRun, finishRun, listRuns, loadHistory, saveRun } from './campaign/store';
 import { recruitPick, rewardPick, runDebrief, runHub, runMap, starterPick, type MapIntro } from './ui/campaign';
+import { runHowTo } from './ui/runtour';
+import { loadGuide, saveGuide, wantsTour } from './campaign/tour';
 import { DemoOverlay } from './ui/demo';
 import { Hud } from './ui/hud';
 import { initUiMode, isMobile, markMobileNoticeSeen, setUiMode, shouldShowMobileNotice } from './ui/mobile';
@@ -273,23 +275,44 @@ class App {
         },
         replayBriefs: resetBriefs,
         back: () => this.showCampaign(),
+        howto: () => this.showRunHowTo(),
       }),
     );
   }
 
-  private showRunMap(run: RunState, intro: MapIntro | null = null): void {
+  /** The procedural campaign's How to play (#217): its terms, and the map tour on your latest run. */
+  private showRunHowTo(): void {
+    const latest = listRuns()[0];
+    this.setModal(
+      runHowTo({
+        back: () => this.showRunHub(),
+        replay: latest ? () => this.showRunMap(latest, null, true) : undefined,
+        replayLabel: latest ? `Tour the map (${latest.seedText})` : undefined,
+        note: latest ? undefined : 'Your first run opens with a tour of the map. Tap ? on a run\'s map to see it again.',
+      }),
+    );
+  }
+
+  private showRunMap(run: RunState, intro: MapIntro | null = null, tour = false): void {
     if (this.game) this.showMenu();
     // A rescued brood waiting for a place, then a reward waiting to be picked, come first (also when resuming a run).
     if (run.recruit && run.status === 'active') {
-      this.setModal(recruitPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro) }));
+      this.setModal(recruitPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro, tour) }));
       return;
     }
     if (run.offer && run.status === 'active') {
-      this.setModal(rewardPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro) }));
+      this.setModal(rewardPick(run, this.sfx, { save: () => saveRun(run), done: () => this.showRunMap(run, intro, tour) }));
       return;
     }
     this.setModal(
-      runMap(run, this.sfx, { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.leaveRun(run), save: () => saveRun(run) }, intro),
+      runMap(
+        run,
+        this.sfx,
+        { go: (id, fielded) => this.runMove(run, id, fielded), leave: () => this.leaveRun(run), save: () => saveRun(run), toured: () => saveGuide({ ...loadGuide(), toured: true }) },
+        intro,
+        // A run's first turn opens with the map tour, once (#217); playtests never.
+        tour || (!run.id.startsWith(PLAYTEST) && wantsTour(run)),
+      ),
     );
     this.sfx.setBloom(mapBloom(run));
   }
