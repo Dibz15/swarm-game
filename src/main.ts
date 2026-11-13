@@ -2100,6 +2100,7 @@ class App {
       this.particles.draw(r);
       this.rings.draw(r);
       this.camera.update(dt, this.time);
+      if (this.game) this.hud?.placeYou(this.game);
       r.draw(this.camera, this.time);
     }
 

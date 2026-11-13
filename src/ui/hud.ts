@@ -586,6 +586,25 @@ export class Hud {
     for (const k of ['surge', 'nova', 'fortify', 'barrage', 'blink', 'lockdown', 'upgrade'] as const) this.btn[k].classList.toggle('pending', g.pending.has(k));
   }
 
+  /**
+   * You are here (#235): YOU on your home nest for the first seconds (by its
+   * edge arrow while it's off screen). Every frame, after the camera moves,
+   * so it keeps up with the map.
+   */
+  placeYou(g: GameView): void {
+    const you = g.youAt;
+    const t = this.youTag;
+    t.classList.toggle('on', !!you);
+    if (!you) return;
+    const c = hex(g.human);
+    if (t.style.getPropertyValue('--c') !== c) t.style.setProperty('--c', c);
+    t.classList.toggle('below', you.place === 'below');
+    t.classList.toggle('edge', you.place === 'edge');
+    const shift = you.place === 'above' ? '-50%, -100%' : you.place === 'below' ? '-50%, 0' : '-50%, -50%';
+    t.style.transform = `translate(${you.tx}px, ${you.ty}px) translate(${shift})`;
+    t.style.opacity = String(you.level);
+  }
+
   update(g: GameView, dt: number): void {
     this.game = g;
     this.updateSiege(g);
@@ -630,22 +649,6 @@ export class Hud {
     }
     const layout = this.layout;
     if (w.tick > 6 * TICK_HZ) this.teamBanner.classList.remove('on');
-    // You are here (#235): YOU on your home nest for the first seconds, your chip lit with it.
-    // Off screen, the edge arrow points home instead.
-    const you = g.youAt;
-    const seen = !!you && you.sx >= 0 && you.sy >= 0 && you.sx <= innerWidth && you.sy <= innerHeight;
-    this.youTag.classList.toggle('on', seen);
-    if (you && seen) {
-      const t = this.youTag;
-      const c = hex(g.human);
-      if (t.style.getPropertyValue('--c') !== c) t.style.setProperty('--c', c);
-      // just above the nest (below it, pointing up, if that's off the top)
-      const above = you.sy - you.sr - 8;
-      const below = above <= 24;
-      t.classList.toggle('below', below);
-      t.style.transform = below ? `translate(${you.sx}px, ${you.sy + you.sr + 8}px) translate(-50%, 0)` : `translate(${you.sx}px, ${above}px) translate(-50%, -100%)`;
-      t.style.opacity = String(you.level);
-    }
     // Refresh the open list twice a second (by ticks elapsed, so a frame that steps several can't skip it).
     if (this.teamPop.classList.contains('on') && w.tick - this.popTick >= 15) {
       this.popTick = w.tick;
@@ -674,7 +677,7 @@ export class Hud {
       seg.style.flexGrow = String(w.unitCount[f.id] / total + 0.0001);
       const chip = this.chipEls[k];
       chip.classList.toggle('dead', f.eliminated);
-      chip.classList.toggle('lit', f.id === g.human && !!you);
+      chip.classList.toggle('lit', f.id === g.human && !!g.youAt);
       if (f.id === g.human) {
         // Your own chip shows supply: army / cap, red while production is blocked.
         const sp = g.supply();

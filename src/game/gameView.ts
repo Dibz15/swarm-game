@@ -332,17 +332,27 @@ export class GameView {
   }
 
   /**
-   * Your marked home nest while it's shown: world position, where it is on
-   * screen (CSS px, with its radius there), and how strongly to show it (0..1).
+   * Your marked home nest while it's shown: its world position, where the
+   * YOU tag goes on screen (CSS px) and how, and how strongly (0..1). Off
+   * screen, the tag sits inside its edge arrow.
    */
-  get youAt(): { x: number; y: number; sx: number; sy: number; sr: number; level: number } | null {
+  get youAt(): { x: number; y: number; tx: number; ty: number; place: 'above' | 'below' | 'edge'; level: number } | null {
     const level = this.beacon.level();
     const n = this.world.nests[this.beaconNest];
     if (level <= 0 || !n) return null;
     const { camera, renderer } = this.s;
-    const [px, py] = camera.toScreen(n.x, n.y);
     const d = renderer.dpr;
-    return { x: n.x, y: n.y, sx: px / d, sy: py / d, sr: (n.r * camera.zoom) / d, level };
+    const e = this.edgeOf(n.x, n.y);
+    if (e) {
+      // a little in from the arrow, toward the middle
+      const len = Math.hypot(e.dx, e.dy) || 1;
+      const step = 30 * d;
+      return { x: n.x, y: n.y, tx: (e.x - (e.dx / len) * step) / d, ty: (e.y - (e.dy / len) * step) / d, place: 'edge', level };
+    }
+    const [px, py] = camera.toScreen(n.x, n.y);
+    const sx = px / d, sy = py / d, sr = (n.r * camera.zoom) / d;
+    const above = sy - sr - 8;
+    return above > 24 ? { x: n.x, y: n.y, tx: sx, ty: above, place: 'above', level } : { x: n.x, y: n.y, tx: sx, ty: sy + sr + 8, place: 'below', level };
   }
 
   private updateBeacon(time: number): void {
@@ -539,19 +549,29 @@ export class GameView {
       if (n >= 6) marks.push([x / n, y / n, FERAL]);
     }
     const { camera, renderer } = this.s;
-    const pad = 28;
     const pulse = 0.6 + 0.4 * Math.sin(time * 5);
     for (const [x, y, c] of marks) {
-      const [sx, sy] = camera.toScreen(x, y);
-      if (sx >= 0 && sy >= 0 && sx <= camera.viewW && sy <= camera.viewH) continue;
-      const cx = camera.viewW / 2, cy = camera.viewH / 2;
-      const dx = sx - cx, dy = sy - cy;
-      const k = Math.min((cx - pad) / Math.abs(dx || 1e-6), (cy - pad) / Math.abs(dy || 1e-6));
-      const [wx, wy] = camera.toWorld(cx + dx * k, cy + dy * k);
+      const e = this.edgeOf(x, y);
+      if (!e) continue;
+      const [wx, wy] = camera.toWorld(e.x, e.y);
       // Triangle shape points "up" at rotation 0; turn it toward the target.
-      const rot = Math.atan2(dx, -dy);
-      renderer.shape(true, wx, wy, (11 * renderer.dpr) / camera.zoom, 3, 0, -rot, 0.6, c, Math.round(230 * pulse));
+      renderer.shape(true, wx, wy, (11 * renderer.dpr) / camera.zoom, 3, 0, -e.rot, 0.6, c, Math.round(230 * pulse));
     }
+  }
+
+  /**
+   * Where an edge arrow for a world point sits (device px), and the direction
+   * it points from the view's center; null while the point is on screen.
+   */
+  private edgeOf(x: number, y: number): { x: number; y: number; dx: number; dy: number; rot: number } | null {
+    const camera = this.s.camera;
+    const pad = 28;
+    const [sx, sy] = camera.toScreen(x, y);
+    if (sx >= 0 && sy >= 0 && sx <= camera.viewW && sy <= camera.viewH) return null;
+    const cx = camera.viewW / 2, cy = camera.viewH / 2;
+    const dx = sx - cx, dy = sy - cy;
+    const k = Math.min((cx - pad) / Math.abs(dx || 1e-6), (cy - pad) / Math.abs(dy || 1e-6));
+    return { x: cx + dx * k, y: cy + dy * k, dx, dy, rot: Math.atan2(dx, -dy) };
   }
 
   /** How far Blink carries your dots: the same reach the sim clamps to (commands.ts). */
