@@ -19,6 +19,8 @@ export function step(w: World, commands: readonly Command[]): void {
   w.beamCount = 0;
   w.px.set(w.x.subarray(0, w.n));
   w.py.set(w.y.subarray(0, w.n));
+  // The opening (#235): the world waits for GO; orders sent early do nothing.
+  if (w.tick <= w.opening) return;
 
   w.grid.build(w);
   // a command that does nothing says why, for its sender's pending marker (#161): fx are render output, never hashed

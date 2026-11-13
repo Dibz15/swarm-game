@@ -1749,7 +1749,10 @@ class App {
     if (record) this.hud.toast(opts.scenario ? `Recording: ${opts.scenario}` : 'Recording this match', '#8aa0b8');
     // Open on the player's home, zoomed in a little.
     this.camera.open(...this.game.homePoint(), this.renderer.dpr);
-    if (opts.goal !== false) this.announceGoal();
+    if (opts.goal !== false) {
+      this.announceGoal();
+      this.game.markHome();
+    }
   }
 
   /**
@@ -2097,6 +2100,7 @@ class App {
       this.particles.draw(r);
       this.rings.draw(r);
       this.camera.update(dt, this.time);
+      if (this.game) this.hud?.placeYou(this.game);
       r.draw(this.camera, this.time);
     }
 

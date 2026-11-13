@@ -45,6 +45,8 @@ export interface MatchSetup {
   fill?: MapFill | 'random';
   /** a hand-authored map (tutorial missions); replaces generation from the fields above */
   map?: MapSpec;
+  /** ticks at the start where the world waits, for the opening (#235); default none */
+  opening?: number;
   /** nobody wins by elimination or domination: the mission script ends the match */
   endless?: boolean;
   /** share of nests needed for domination, instead of the map size's default */
@@ -84,6 +86,8 @@ export function validateSetup(setup: MatchSetup): void {
   // A human's side taking the citadel wins (#222): the holder's side is bots only, or it would win at the start.
   const holder = setup.stronghold ? setup.players[setup.stronghold.player] : undefined;
   if (setup.stronghold && (!holder || setup.players.some((p) => p.human && p.team === holder.team))) throw new Error('MatchSetup: a stronghold is held by a side of bots');
+  // the opening (#235) is a few seconds, not a stall (a setup can come over the wire)
+  if (setup.opening !== undefined && !(Number.isInteger(setup.opening) && setup.opening >= 0 && setup.opening <= 10 * TICK_HZ)) throw new Error('MatchSetup: an opening is 0 to 10 seconds of ticks');
 }
 
 /** The generator's params for a setup's map (thumbnails use this too, so they match the battle). */
@@ -134,6 +138,7 @@ export function createWorld(setup: MatchSetup): World {
   const w = new World(setup.seed, map.width, map.height, map.terrain);
   w.domShare = setup.domShare ?? DOMINATION.share[setup.size] ?? 0.7;
   w.endless = !!setup.endless;
+  w.opening = Math.max(0, Math.floor(setup.opening ?? 0));
 
   // Inactive factions get unique teams so they never count as allies.
   for (let f = 0; f < NUM_FACTIONS; f++) if (f !== NEUTRAL) w.setTeam(f, 200 + f);

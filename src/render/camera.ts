@@ -134,10 +134,25 @@ export class Camera {
    * more), within kMin..kMax of the fit. Held until the player pans or zooms.
    */
   open(x: number, y: number, dpr: number, cssPerUnit = 0.75, kMin = 1.3, kMax = 1.8): void {
+    this.openPart(x, y, dpr, 1, cssPerUnit, kMin, kMax);
+  }
+
+  /**
+   * Part way from the whole map (`t` 0) to the opening view on (x, y) (`t` 1):
+   * a match's zoom in toward your home (#235). Held like `open`.
+   */
+  openPart(x: number, y: number, dpr: number, t: number, cssPerUnit = 0.75, kMin = 1.3, kMax = 1.8): void {
     this.computeFit();
-    const k = clamp((dpr * cssPerUnit) / this.fitZoom, kMin, kMax);
-    this.place(x, y, this.fitZoom * k);
-    this.anchor = { x, y, k };
+    t = clamp(t, 0, 1);
+    const k = clamp((dpr * cssPerUnit) / this.fitZoom, kMin, kMax) ** t;
+    const ax = this.mapW / 2 + (x - this.mapW / 2) * t, ay = this.mapH / 2 + (y - this.mapH / 2) * t;
+    this.place(ax, ay, this.fitZoom * k);
+    this.anchor = { x: ax, y: ay, k };
+  }
+
+  /** Still on a view it was set to (fit, open), not one the player panned or zoomed to. */
+  get anchored(): boolean {
+    return this.anchor !== null;
   }
 
   /** Put (x, y) at the middle of the visible area (between the HUD insets), at `zoom`. */

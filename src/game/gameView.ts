@@ -17,6 +17,7 @@ import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
 import { LocalSession, type OrderFail, type Session } from './session';
 import { drawPending, PendingOrders } from './pending';
+import { Beacon } from './beacon';
 import type { Command } from '../sim/commands';
 import type { Hint, Lock, MissionRun } from './tutorial';
 
@@ -70,6 +71,10 @@ export function rejectText(cmd: Command, why: OrderFail, blood: boolean): string
 }
 
 /** A match in progress: owns the session, selection and event feedback. */
+/** The opening (#235): seconds on the whole map before the zoom in, and settled on home before GO. */
+const INTRO_HOLD = 0.4;
+const INTRO_SETTLE = 0.5;
+
 export class GameView {
   readonly session: Session;
   /**
@@ -86,6 +91,13 @@ export class GameView {
   private blinkFlash: { x: number; y: number; r: number; tx: number; ty: number; at: number } | null = null;
   /** the last render time (s), for the flash */
   private now = 0;
+  /** "you are here" on your home nest at the start (#235) */
+  private readonly beacon = new Beacon();
+  private beaconNest = -1;
+  /** the opening's zoom in toward home is running (#235) */
+  private intro = false;
+  /** the world's tick last update, to hear GO as it happens */
+  private seenTick = -1;
   /** world position under the cursor, for previews and key casts */
   cursor: [number, number] | null = null;
   /** world units per ~1 css px, for HUD pick radii */
@@ -209,6 +221,8 @@ export class GameView {
     }
     if (!this.result && !this.spectating) this.checkSupply();
     if (!this.result && this.coached) this.updateMission(time);
+    this.updateBeacon(time);
+    this.updateIntro();
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
     // Domination countdown ticks in the last ten seconds.
     const ds = this.result ? null : dominationStatus(w);
@@ -312,6 +326,81 @@ export class GameView {
     const done = this.onGuideEnd;
     this.onGuideEnd = null;
     done?.();
+  }
+
+  /**
+   * Mark your home nest for the first few seconds (#235): rings in your color,
+   * an edge arrow if it's off screen, and the HUD's YOU tag on it.
+   */
+  markHome(): void {
+    if (this.human < 0) return;
+    const home = this.homeNest();
+    if (!home) return;
+    this.beaconNest = home.id;
+    this.beacon.arm();
+    // The opening (#235): start on the whole map and zoom in toward home, GO at its end.
+    if (this.world.tick < this.world.opening) {
+      this.intro = true;
+      this.s.camera.openPart(home.x, home.y, this.s.renderer.dpr, 0);
+    }
+  }
+
+  /** In the opening (#235): the world waits for GO. */
+  get waiting(): boolean {
+    return this.world.tick < this.world.opening;
+  }
+
+  /** The opening's camera: a beat on the whole map, then a slow zoom in toward home, settled before GO. */
+  private updateIntro(): void {
+    const w = this.world;
+    if (w.tick > this.seenTick && this.seenTick >= 0 && this.seenTick < w.opening && w.tick >= w.opening) this.s.sfx.countTick(0);
+    this.seenTick = w.tick;
+    if (!this.intro) return;
+    const cam = this.s.camera;
+    // the player panned or zoomed (or a briefing moved the view): it's theirs
+    if (!cam.anchored) return void (this.intro = false);
+    const n = w.nests[this.beaconNest];
+    if (!n) return void (this.intro = false);
+    const secs = (w.tick + this.session.alpha) / TICK_HZ;
+    const span = w.opening / TICK_HZ;
+    const u = Math.max(0, Math.min(1, (secs - INTRO_HOLD) / Math.max(0.1, span - INTRO_HOLD - INTRO_SETTLE)));
+    // ease in and out
+    const e = u * u * (3 - 2 * u);
+    cam.openPart(n.x, n.y, this.s.renderer.dpr, e);
+    if (u >= 1) this.intro = false;
+  }
+
+  /**
+   * Your marked home nest while it's shown: its world position, where the
+   * YOU tag goes on screen (CSS px) and how, and how strongly (0..1). Off
+   * screen, the tag sits inside its edge arrow.
+   */
+  get youAt(): { x: number; y: number; tx: number; ty: number; place: 'above' | 'below' | 'edge'; level: number } | null {
+    const level = this.beacon.level();
+    const n = this.world.nests[this.beaconNest];
+    if (level <= 0 || !n) return null;
+    const { camera, renderer } = this.s;
+    const d = renderer.dpr;
+    const e = this.edgeOf(n.x, n.y);
+    if (e) {
+      // a little in from the arrow, toward the middle
+      const len = Math.hypot(e.dx, e.dy) || 1;
+      const step = 30 * d;
+      return { x: n.x, y: n.y, tx: (e.x - (e.dx / len) * step) / d, ty: (e.y - (e.dy / len) * step) / d, place: 'edge', level };
+    }
+    const [px, py] = camera.toScreen(n.x, n.y);
+    const sx = px / d, sy = py / d, sr = (n.r * camera.zoom) / d;
+    const above = sy - sr - 8;
+    return above > 24 ? { x: n.x, y: n.y, tx: sx, ty: above, place: 'above', level } : { x: n.x, y: n.y, tx: sx, ty: sy + sr + 8, place: 'below', level };
+  }
+
+  private updateBeacon(time: number): void {
+    const n = this.world.nests[this.beaconNest];
+    if (n && (n.owner !== this.human || this.result || this.spectating)) this.beacon.clear();
+    this.beacon.update(time, !this.session.held && !this.session.paused && !this.session.syncing);
+    if (n && this.beacon.pulse(time)) {
+      this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.3, r1: n.r * 3, dur: 0.9, c: FACTION_RGB[this.human] ?? WHITE, thick: 3 });
+    }
   }
 
   /** What the coach is running: the tutorial mission, or a battle briefing. */
@@ -479,6 +568,9 @@ export class GameView {
       const c = w.nests[w.citadel];
       marks.push([c.x, c.y, FACTION_RGB[this.warlord?.faction ?? c.owner] ?? WHITE]);
     }
+    // Your home, at the start (#235).
+    const you = this.youAt;
+    if (you) marks.push([you.x, you.y, FACTION_RGB[this.human] ?? WHITE]);
     for (const d of ev?.drops ?? []) marks.push([d.x, d.y, DROP_MARK]);
     for (const c of ev?.colossi ?? []) {
       const s = w.uidToSlot.get(c.uid);
@@ -496,19 +588,29 @@ export class GameView {
       if (n >= 6) marks.push([x / n, y / n, FERAL]);
     }
     const { camera, renderer } = this.s;
-    const pad = 28;
     const pulse = 0.6 + 0.4 * Math.sin(time * 5);
     for (const [x, y, c] of marks) {
-      const [sx, sy] = camera.toScreen(x, y);
-      if (sx >= 0 && sy >= 0 && sx <= camera.viewW && sy <= camera.viewH) continue;
-      const cx = camera.viewW / 2, cy = camera.viewH / 2;
-      const dx = sx - cx, dy = sy - cy;
-      const k = Math.min((cx - pad) / Math.abs(dx || 1e-6), (cy - pad) / Math.abs(dy || 1e-6));
-      const [wx, wy] = camera.toWorld(cx + dx * k, cy + dy * k);
+      const e = this.edgeOf(x, y);
+      if (!e) continue;
+      const [wx, wy] = camera.toWorld(e.x, e.y);
       // Triangle shape points "up" at rotation 0; turn it toward the target.
-      const rot = Math.atan2(dx, -dy);
-      renderer.shape(true, wx, wy, (11 * renderer.dpr) / camera.zoom, 3, 0, -rot, 0.6, c, Math.round(230 * pulse));
+      renderer.shape(true, wx, wy, (11 * renderer.dpr) / camera.zoom, 3, 0, -e.rot, 0.6, c, Math.round(230 * pulse));
     }
+  }
+
+  /**
+   * Where an edge arrow for a world point sits (device px), and the direction
+   * it points from the view's center; null while the point is on screen.
+   */
+  private edgeOf(x: number, y: number): { x: number; y: number; dx: number; dy: number; rot: number } | null {
+    const camera = this.s.camera;
+    const pad = 28;
+    const [sx, sy] = camera.toScreen(x, y);
+    if (sx >= 0 && sy >= 0 && sx <= camera.viewW && sy <= camera.viewH) return null;
+    const cx = camera.viewW / 2, cy = camera.viewH / 2;
+    const dx = sx - cx, dy = sy - cy;
+    const k = Math.min((cx - pad) / Math.abs(dx || 1e-6), (cy - pad) / Math.abs(dy || 1e-6));
+    return { x: cx + dx * k, y: cy + dy * k, dx, dy, rot: Math.atan2(dx, -dy) };
   }
 
   /** How far Blink carries your dots: the same reach the sim clamps to (commands.ts). */
@@ -1128,6 +1230,8 @@ export class GameView {
   private order(cmd: Command, cost = 0): void {
     // out and watching (#183), rejoining, or a bot has the seat until we take it back (#164)
     if (this.spectating || this.session.syncing || this.session.seatBot) return;
+    // the opening (#235): orders wait for GO
+    if (this.waiting) return void this.s.toast('Wait for GO', '#9aa4c7');
     const id = this.session.issue(cmd);
     if (!this.session.net) return;
     // Blood price pays in units, not energy (#60): nothing to take off the bar
@@ -1373,10 +1477,16 @@ export class GameView {
     return { enemy: false, counts };
   }
 
+  /** Your home nest: your capital, or else your first nest. */
+  private homeNest(): Nest | undefined {
+    const mine = this.world.nests.filter((n) => n.owner === this.human);
+    return mine.find((n) => n.capital) ?? mine[0];
+  }
+
   homePoint(): [number, number] {
     const w = this.world;
-    const mine = w.nests.filter((n) => n.owner === this.human);
-    if (mine.length) return [mine[0].x, mine[0].y];
+    const home = this.homeNest();
+    if (home) return [home.x, home.y];
     let x = 0, y = 0, c = 0;
     for (let i = 0; i < w.n; i++) {
       if (w.alive[i] && w.owner[i] === this.human) {
