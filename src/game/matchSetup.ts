@@ -7,6 +7,7 @@
 import { DIFFICULTY, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
 import { hashString } from '../sim/rng';
+import { OPENING_TICKS } from '../sim/constants';
 import { MAX_DEFENDERS, type MatchSetup } from '../sim/setup';
 import { siegeAt, type SiegeSetup } from '../sim/siege';
 
@@ -118,6 +119,7 @@ export function buildSetup(p: SetupPrefs, seedText: string): MatchSetup {
   const bots = p.mode === 'hold' ? [] : p.bots;
   const setup: MatchSetup = {
     seed,
+    opening: OPENING_TICKS,
     size: p.size,
     terrain: p.terrain,
     caves: p.caves,

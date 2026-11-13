@@ -2,6 +2,7 @@ import { playerCharacter } from '../game/character';
 import { applyMode, MATCH_MODES, modeProblem, personalityPicker, randomMap, randomSeed, seedOf, WAVE_NAMES, type MatchMode, type SetupPrefs } from '../game/matchSetup';
 import { PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
+import { OPENING_TICKS } from '../sim/constants';
 import { MAX_DEFENDERS, type MatchSetup } from '../sim/setup';
 import { decodeMsg, encodeMsg } from './codec';
 import type { MatchPeer } from './match';
@@ -132,7 +133,7 @@ export function buildNetSetup(s: LobbyState): MatchSetup {
     if (r.k === 'human') players.push({ faction: i, team, human: true });
     else if (r.k === 'bot') players.push({ faction: i, team, human: false, bot: { difficulty: r.difficulty, personality: pick(r.personality) } });
   });
-  return applyMode({ seed, ...s.map, players }, s.mode, { holder: holderIndex(s), waves: s.waves });
+  return applyMode({ seed, opening: OPENING_TICKS, ...s.map, players }, s.mode, { holder: holderIndex(s), waves: s.waves });
 }
 
 /** A lobby state from JSON, or null if it isn't one (it came over the wire). */

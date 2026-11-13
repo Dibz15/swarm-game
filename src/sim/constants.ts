@@ -2,6 +2,12 @@
 
 export const TICK_HZ = 30;
 export const DT = 1 / TICK_HZ;
+/**
+ * A skirmish or room match's opening (#235): this many ticks where the world
+ * waits (no orders, no bots, no spawning) while everyone sees the map and
+ * their home, then GO. Part of the setup, so every peer starts together.
+ */
+export const OPENING_TICKS = 3 * TICK_HZ;
 export const MAX_UNITS = 8192;
 /** 6 playable colors + 1 neutral faction. Faction id == color index. */
 export const NUM_FACTIONS = 7;

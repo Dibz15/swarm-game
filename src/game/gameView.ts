@@ -71,6 +71,10 @@ export function rejectText(cmd: Command, why: OrderFail, blood: boolean): string
 }
 
 /** A match in progress: owns the session, selection and event feedback. */
+/** The opening (#235): seconds on the whole map before the zoom in, and settled on home before GO. */
+const INTRO_HOLD = 0.4;
+const INTRO_SETTLE = 0.5;
+
 export class GameView {
   readonly session: Session;
   /**
@@ -90,6 +94,10 @@ export class GameView {
   /** "you are here" on your home nest at the start (#235) */
   private readonly beacon = new Beacon();
   private beaconNest = -1;
+  /** the opening's zoom in toward home is running (#235) */
+  private intro = false;
+  /** the world's tick last update, to hear GO as it happens */
+  private seenTick = -1;
   /** world position under the cursor, for previews and key casts */
   cursor: [number, number] | null = null;
   /** world units per ~1 css px, for HUD pick radii */
@@ -214,6 +222,7 @@ export class GameView {
     if (!this.result && !this.spectating) this.checkSupply();
     if (!this.result && this.coached) this.updateMission(time);
     this.updateBeacon(time);
+    this.updateIntro();
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
     // Domination countdown ticks in the last ten seconds.
     const ds = this.result ? null : dominationStatus(w);
@@ -329,6 +338,36 @@ export class GameView {
     if (!home) return;
     this.beaconNest = home.id;
     this.beacon.arm();
+    // The opening (#235): start on the whole map and zoom in toward home, GO at its end.
+    if (this.world.tick < this.world.opening) {
+      this.intro = true;
+      this.s.camera.openPart(home.x, home.y, this.s.renderer.dpr, 0);
+    }
+  }
+
+  /** In the opening (#235): the world waits for GO. */
+  get waiting(): boolean {
+    return this.world.tick < this.world.opening;
+  }
+
+  /** The opening's camera: a beat on the whole map, then a slow zoom in toward home, settled before GO. */
+  private updateIntro(): void {
+    const w = this.world;
+    if (w.tick > this.seenTick && this.seenTick >= 0 && this.seenTick < w.opening && w.tick >= w.opening) this.s.sfx.countTick(0);
+    this.seenTick = w.tick;
+    if (!this.intro) return;
+    const cam = this.s.camera;
+    // the player panned or zoomed (or a briefing moved the view): it's theirs
+    if (!cam.anchored) return void (this.intro = false);
+    const n = w.nests[this.beaconNest];
+    if (!n) return void (this.intro = false);
+    const secs = (w.tick + this.session.alpha) / TICK_HZ;
+    const span = w.opening / TICK_HZ;
+    const u = Math.max(0, Math.min(1, (secs - INTRO_HOLD) / Math.max(0.1, span - INTRO_HOLD - INTRO_SETTLE)));
+    // ease in and out
+    const e = u * u * (3 - 2 * u);
+    cam.openPart(n.x, n.y, this.s.renderer.dpr, e);
+    if (u >= 1) this.intro = false;
   }
 
   /**
@@ -1191,6 +1230,8 @@ export class GameView {
   private order(cmd: Command, cost = 0): void {
     // out and watching (#183), rejoining, or a bot has the seat until we take it back (#164)
     if (this.spectating || this.session.syncing || this.session.seatBot) return;
+    // the opening (#235): orders wait for GO
+    if (this.waiting) return void this.s.toast('Wait for GO', '#9aa4c7');
     const id = this.session.issue(cmd);
     if (!this.session.net) return;
     // Blood price pays in units, not energy (#60): nothing to take off the bar

@@ -14,7 +14,7 @@ import type { Command } from '../sim/commands';
  */
 
 /** Bumped on any wire change; a peer with another version is refused. */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 /** Largest snapshot chunk: safe for any WebRTC data channel. */
 export const SNAP_CHUNK = 16 * 1024;

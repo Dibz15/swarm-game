@@ -87,7 +87,8 @@ describe('match types (#222)', () => {
     resolveDamage(w);
     w.nests[w.citadel].owner = 1;
     w.nests[w.citadel].control = 1;
-    for (let t = 0; t < TICK_HZ && !w.over; t++) step(w, []);
+    // (past the opening, #235: the world waits until GO)
+    for (let t = 0; t < w.opening + TICK_HZ && !w.over; t++) step(w, []);
     expect(w.winReason).toBe('citadel');
     expect(w.winnerTeam).toBe(w.teamOf[0]);
   });

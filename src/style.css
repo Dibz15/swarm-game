@@ -429,6 +429,20 @@ button.crown.on { background: rgba(255, 209, 102, 0.16); }
   content: ''; position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%);
   border: 5px solid transparent; border-bottom: 0; border-top-color: var(--c);
 }
+/* GO (#235): the opening is over, everyone can move. */
+.go-banner {
+  position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); display: none; pointer-events: none;
+  font-size: 72px; font-weight: 800; letter-spacing: 0.14em; color: #fff; text-shadow: 0 0 18px var(--c), 0 0 42px var(--c);
+}
+.go-banner.on { display: block; animation: go-pop 1.2s ease-out forwards; }
+@keyframes go-pop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+  15% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+  30% { transform: translate(-50%, -50%) scale(1); }
+  70% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.25); }
+}
+@media (prefers-reduced-motion: reduce) { .go-banner.on { animation: none; } }
 .you-tag.edge::after { display: none; }
 .you-tag.below::after { bottom: auto; top: -5px; border: 5px solid transparent; border-top: 0; border-bottom-color: var(--c); }
 .chip.me.lit { animation: chip-lit 0.8s ease-in-out infinite alternate; }

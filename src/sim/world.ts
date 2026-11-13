@@ -432,6 +432,8 @@ export class World {
   winnerTeam = -1;
   /** no elimination or domination win (tutorial missions without an opponent) */
   endless = false;
+  /** the opening (#235): through this tick the world waits, then the match starts */
+  opening = 0;
   /** how the match ended */
   winReason: '' | 'elimination' | 'domination' | 'heart' | 'citadel' | 'held' | 'fallen' = '';
   /** consecutive ticks each team has held the domination share; with key nests, the team past KEYS.threat (its score) */

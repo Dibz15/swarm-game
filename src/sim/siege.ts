@@ -105,8 +105,9 @@ export function initSiege(w: World, s: SiegeSetup, humans: readonly number[]): v
   const others = (c: (typeof caps)[number]) => caps.filter((o) => o !== c).map(({ cap }) => [cap!.x, cap!.y] as [number, number]);
   const defenders: Defender[] = caps.map((c) => ({ f: c.f, capital: c.cap!.id, lostAt: -1, drop: k ? dropSpot(w, c.cap!.x, c.cap!.y, spawns, others(c)) : null }));
   w.siege = {
-    until: w.tick + Math.round(s.seconds * TICK_HZ),
-    waves: rollWaves(new Rng(w.seed ^ 0x5e1e9e), ss, spawns, w.tick),
+    // the clock and the waves start after the opening (#235)
+    until: w.tick + w.opening + Math.round(s.seconds * TICK_HZ),
+    waves: rollWaves(new Rng(w.seed ^ 0x5e1e9e), ss, spawns, w.tick + w.opening),
     next: 0,
     defenders,
     spawns,

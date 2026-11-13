@@ -5,7 +5,7 @@
  * the match does, so a briefing hold, a pause or a rejoin's catch-up doesn't
  * use it up.
  */
-export const BEACON_SECS = 5;
+export const BEACON_SECS = 6;
 /** the tag fades over the last part */
 const FADE_SECS = 1;
 /** a ring every this many seconds */
