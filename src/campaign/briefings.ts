@@ -78,7 +78,7 @@ function hold(w: World): Step[] {
   return [
     tour(
       `<b>Hold the line.</b> You're dug in behind your own walls. Keep your capital (ringed) until the clock runs out${mins ? `, about ${mins} minute${mins > 1 ? 's' : ''}` : ''}: that's the win.`,
-      { highlight: () => [sg.capital], focus: onNest(sg.capital, 2) },
+      { highlight: () => [sg.defenders[0].capital], focus: onNest(sg.defenders[0].capital, 2) },
     ),
     tour("The Bloom comes in waves. This timeline shows them marching toward now, and the clock at its end is how long you have left to hold.", {
       spotlight: '.siege',
@@ -89,7 +89,7 @@ function hold(w: World): Step[] {
     ),
     tour(
       `Every ${SIEGE.boonEvery === 2 ? 'other wave' : `${SIEGE.boonEvery} waves`}, you pick a boon. If your capital falls, you have ${SIEGE.retake / TICK_HZ} seconds to take it back. Hold on!`,
-      { highlight: () => [sg.capital], focus: onNest(sg.capital, 1.6) },
+      { highlight: () => [sg.defenders[0].capital], focus: onNest(sg.defenders[0].capital, 1.6) },
     ),
   ];
 }
@@ -113,13 +113,14 @@ function domination(w: World): Step[] {
 
 function stronghold(w: World, lord?: BriefLord): Step[] {
   const cit = w.citadel;
-  const who = lord ? `${lord.name}'s` : "The warlord's";
+  // A skirmish's stronghold (#222) has no warlord: a bot holds it, and its guards grow with the sides attacking.
+  const who = lord ? `${lord.name}'s` : "The holder's";
   const steps = [
-    tour(`<b>A warlord's stronghold.</b> ${who} citadel (ringed) sits behind walls. Take it and the battle is won, even with rivals left.`, {
+    tour(`<b>${lord ? "A warlord's stronghold" : 'The stronghold'}.</b> ${who} citadel (ringed) sits behind walls. Take it and the battle is won, even with rivals left.`, {
       highlight: () => [cit],
       focus: onNest(cit, 1.8),
     }),
-    tour('Walls stop your dots: find a gate. The citadel is heavily guarded, and its guards grow with the army you bring, so bring them all at once.', {
+    tour(`Walls stop your dots: find a gate. The citadel is heavily guarded, and its guards grow with ${lord ? 'the army you bring' : 'every side attacking it'}, so bring them all at once.`, {
       highlight: () => [cit],
     }),
   ];

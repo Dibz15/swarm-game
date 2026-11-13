@@ -1,20 +1,24 @@
 import type { TraitId } from '../campaign/warlords';
-import { BOONS, WAVE_KINDS, waveSize } from '../sim/siege';
+import { BOONS, SIEGE, WAVE_KINDS, waveSize } from '../sim/siege';
 import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
 import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
-import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
+import { BOON_RGB, DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import { BLOOM_GLOW, BLOOM_RGB, bloomNestMask, growthTarget, type BloomView } from '../render/bloom';
 import { isAlly, possessive, teamName, verb } from '../ui/teams';
 import type { AudioEngine } from '../audio/engine';
 import { DAMAGE_VS, KEYS, dominationStatus, MAX_LEVEL, MAX_UNITS, TICK_HZ, NEST_NAMES, NEUTRAL, POWER, POWER_NEST, supplyCap, type MatchSetup, type NestPower } from '../sim/index';
 import { barrageLaunch, feedNeed, hasPower, novaRadius, powerBoost, siphonWait, surgeCost } from '../sim/commands';
 import { inArmy, type Nest, type World } from '../sim/world';
+import { placingOf, type Placing } from './standing';
 import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
-import { LocalSession } from './session';
+import { LocalSession, type OrderFail, type Session } from './session';
+import { drawPending, PendingOrders } from './pending';
+import { Beacon } from './beacon';
+import type { Command } from '../sim/commands';
 import type { Hint, Lock, MissionRun } from './tutorial';
 
 export interface Services {
@@ -33,9 +37,51 @@ const READ_PAUSE = 10;
 /** Barrage aim outside every nest's range */
 const OUT_OF_RANGE: RGB = [150, 155, 175];
 
+/** The local seat (#156): `seat` if it is one of the setup's human seats, else the first human (-1: none). */
+export function localSeat(setup: MatchSetup, seat?: number): number {
+  if (seat === undefined) return setup.players.find((p) => p.human)?.faction ?? -1;
+  if (!setup.players.some((p) => p.human && p.faction === seat)) throw new Error(`GameView: seat ${seat} is not a human seat`);
+  return seat;
+}
+
+const POWER_LABEL: Partial<Record<Command['t'], string>> = { surge: 'Surge', nova: 'Nova', fortify: 'Fortify', barrage: 'Barrage', blink: 'Blink', lockdown: 'Lockdown', upgrade: 'the upgrade' };
+
+/** What to tell the player when an order did nothing (null: nothing worth a toast). */
+export function rejectText(cmd: Command, why: OrderFail, blood: boolean): string | null {
+  const what = POWER_LABEL[cmd.t] ?? 'That order';
+  switch (why) {
+    case 'cost':
+      return blood ? `Not enough dots left to pay for ${what}` : `Not enough energy for ${what} by the time it landed`;
+    case 'units':
+      return 'Those dots were gone before the order landed';
+    case 'power':
+      return `You lost the nest ${what} needs`;
+    case 'locked':
+      return `${what} is locked`;
+    case 'target':
+      if (cmd.t === 'barrage') return 'Barrage: out of range of your nests by the time it landed';
+      if (cmd.t === 'lockdown') return 'Lockdown: that nest can’t be locked any more';
+      return 'That nest isn’t yours any more';
+    case 'lost':
+      return 'An order didn’t reach the host: try again';
+    default:
+      // 'upgrade' has its own toast (upgradeFail); 'needless' and 'invalid' aren't news
+      return null;
+  }
+}
+
 /** A match in progress: owns the session, selection and event feedback. */
+/** The opening (#235): seconds on the whole map before the zoom in, and settled on home before GO. */
+const INTRO_HOLD = 0.4;
+const INTRO_SETTLE = 0.5;
+
 export class GameView {
-  readonly session: LocalSession;
+  readonly session: Session;
+  /**
+   * The local seat (#156): the faction this client plays. With several human
+   * seats it is whichever one was passed in; it defaults to the first human.
+   * (Named `human` from single-player days.)
+   */
   readonly human: number;
   readonly selection = new Selection();
   hoverNest = -1;
@@ -45,6 +91,13 @@ export class GameView {
   private blinkFlash: { x: number; y: number; r: number; tx: number; ty: number; at: number } | null = null;
   /** the last render time (s), for the flash */
   private now = 0;
+  /** "you are here" on your home nest at the start (#235) */
+  private readonly beacon = new Beacon();
+  private beaconNest = -1;
+  /** the opening's zoom in toward home is running (#235) */
+  private intro = false;
+  /** the world's tick last update, to hear GO as it happens */
+  private seenTick = -1;
   /** world position under the cursor, for previews and key casts */
   cursor: [number, number] | null = null;
   /** world units per ~1 css px, for HUD pick radii */
@@ -55,6 +108,17 @@ export class GameView {
   brush: { x: number; y: number; r: number } | null = null;
   result: MatchResult | null = null;
   resultTime = 0;
+  /**
+   * Out of the match but watching the rest (#183): a room match, where the
+   * others play on. Orders are off; clicks inspect instead of selecting.
+   */
+  spectating = false;
+  /** where you finished, once out: 4th of 6 */
+  placing: Placing | null = null;
+  /** what a spectator last clicked: a nest, or someone's dots */
+  inspect: { nest: number } | { owner: number; count: number } | null = null;
+  /** watch on after your defeat instead of ending (a room match: the others play on) */
+  private readonly watchOnDefeat: boolean;
   /** match recorder (#29), when the player opted in */
   readonly rec: Recorder | null;
   /** tutorial mission being played, if any (#17) */
@@ -112,9 +176,17 @@ export class GameView {
     readonly setup: MatchSetup,
     private readonly s: Services,
     record: { scenario?: string; mobile: boolean } | null = null,
+    opts: { seat?: number; session?: Session; spectate?: boolean } = {},
   ) {
-    this.session = new LocalSession(setup);
-    this.human = setup.players.find((p) => p.human)?.faction ?? -1;
+    this.watchOnDefeat = !!opts.spectate;
+    // a networked match brings its own session (#159); otherwise play locally
+    this.session = opts.session ?? new LocalSession(setup, localSeat(setup, opts.seat));
+    this.human = this.session.localSeat;
+    // Networked, orders take a moment to run: show them on their way (#161).
+    if (this.session.net) {
+      this.session.onEffect = (id) => void this.pending.take(id);
+      this.session.onReject = (id, why) => this.rejected(id, why);
+    }
     this.rec = record
       ? new Recorder(setup, this.human, { mobile: record.mobile, touch: matchMedia('(pointer: coarse)').matches, w: innerWidth, h: innerHeight }, record.scenario)
       : null;
@@ -135,6 +207,7 @@ export class GameView {
 
   update(dt: number, time: number): void {
     this.session.update(dt);
+    this.pending.expire(this.now);
     this.drainEvents();
     this.updateBloom(dt, time);
     this.selection.prune(this.world, this.human);
@@ -142,11 +215,14 @@ export class GameView {
     this.rec?.frame(w, this.s.camera);
     if (!this.result) {
       const me = w.factions[this.human];
-      if (me?.eliminated) this.finish('defeat', time);
-      else if (w.over) this.finish(w.winnerTeam === w.teamOf[this.human] ? 'victory' : 'defeat', time);
+      if (w.over) this.finish(w.winnerTeam === w.teamOf[this.human] ? 'victory' : 'defeat', time);
+      else if (me?.eliminated && this.watchOnDefeat) this.spectate();
+      else if (me?.eliminated) this.finish('defeat', time);
     }
-    if (!this.result) this.checkSupply();
+    if (!this.result && !this.spectating) this.checkSupply();
     if (!this.result && this.coached) this.updateMission(time);
+    this.updateBeacon(time);
+    this.updateIntro();
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
     // Domination countdown ticks in the last ten seconds.
     const ds = this.result ? null : dominationStatus(w);
@@ -252,6 +328,81 @@ export class GameView {
     done?.();
   }
 
+  /**
+   * Mark your home nest for the first few seconds (#235): rings in your color,
+   * an edge arrow if it's off screen, and the HUD's YOU tag on it.
+   */
+  markHome(): void {
+    if (this.human < 0) return;
+    const home = this.homeNest();
+    if (!home) return;
+    this.beaconNest = home.id;
+    this.beacon.arm();
+    // The opening (#235): start on the whole map and zoom in toward home, GO at its end.
+    if (this.world.tick < this.world.opening) {
+      this.intro = true;
+      this.s.camera.openPart(home.x, home.y, this.s.renderer.dpr, 0);
+    }
+  }
+
+  /** In the opening (#235): the world waits for GO. */
+  get waiting(): boolean {
+    return this.world.tick < this.world.opening;
+  }
+
+  /** The opening's camera: a beat on the whole map, then a slow zoom in toward home, settled before GO. */
+  private updateIntro(): void {
+    const w = this.world;
+    if (w.tick > this.seenTick && this.seenTick >= 0 && this.seenTick < w.opening && w.tick >= w.opening) this.s.sfx.countTick(0);
+    this.seenTick = w.tick;
+    if (!this.intro) return;
+    const cam = this.s.camera;
+    // the player panned or zoomed (or a briefing moved the view): it's theirs
+    if (!cam.anchored) return void (this.intro = false);
+    const n = w.nests[this.beaconNest];
+    if (!n) return void (this.intro = false);
+    const secs = (w.tick + this.session.alpha) / TICK_HZ;
+    const span = w.opening / TICK_HZ;
+    const u = Math.max(0, Math.min(1, (secs - INTRO_HOLD) / Math.max(0.1, span - INTRO_HOLD - INTRO_SETTLE)));
+    // ease in and out
+    const e = u * u * (3 - 2 * u);
+    cam.openPart(n.x, n.y, this.s.renderer.dpr, e);
+    if (u >= 1) this.intro = false;
+  }
+
+  /**
+   * Your marked home nest while it's shown: its world position, where the
+   * YOU tag goes on screen (CSS px) and how, and how strongly (0..1). Off
+   * screen, the tag sits inside its edge arrow.
+   */
+  get youAt(): { x: number; y: number; tx: number; ty: number; place: 'above' | 'below' | 'edge'; level: number } | null {
+    const level = this.beacon.level();
+    const n = this.world.nests[this.beaconNest];
+    if (level <= 0 || !n) return null;
+    const { camera, renderer } = this.s;
+    const d = renderer.dpr;
+    const e = this.edgeOf(n.x, n.y);
+    if (e) {
+      // a little in from the arrow, toward the middle
+      const len = Math.hypot(e.dx, e.dy) || 1;
+      const step = 30 * d;
+      return { x: n.x, y: n.y, tx: (e.x - (e.dx / len) * step) / d, ty: (e.y - (e.dy / len) * step) / d, place: 'edge', level };
+    }
+    const [px, py] = camera.toScreen(n.x, n.y);
+    const sx = px / d, sy = py / d, sr = (n.r * camera.zoom) / d;
+    const above = sy - sr - 8;
+    return above > 24 ? { x: n.x, y: n.y, tx: sx, ty: above, place: 'above', level } : { x: n.x, y: n.y, tx: sx, ty: sy + sr + 8, place: 'below', level };
+  }
+
+  private updateBeacon(time: number): void {
+    const n = this.world.nests[this.beaconNest];
+    if (n && (n.owner !== this.human || this.result || this.spectating)) this.beacon.clear();
+    this.beacon.update(time, !this.session.held && !this.session.paused && !this.session.syncing);
+    if (n && this.beacon.pulse(time)) {
+      this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.3, r1: n.r * 3, dur: 0.9, c: FACTION_RGB[this.human] ?? WHITE, thick: 3 });
+    }
+  }
+
   /** What the coach is running: the tutorial mission, or a battle briefing. */
   get coached(): MissionRun | null {
     return this.mission ?? this.briefing;
@@ -271,6 +422,7 @@ export class GameView {
 
   /** A mission hides this action: say so instead of doing it. */
   private blocked(a: Lock): boolean {
+    if (this.spectating || this.session.syncing || this.session.seatBot) return true;
     if (!this.locked.has(a)) return false;
     this.s.toast(this.lockReason.get(a) ?? 'Not in this lesson: it comes later', '#9aa4c7');
     return true;
@@ -287,7 +439,19 @@ export class GameView {
     this.resultTime = time;
     if (r === 'victory' && this.world.winReason === 'held') this.s.sfx.lineHeld();
     if (r === 'victory') this.s.sfx.victory();
-    else this.s.sfx.defeat();
+    // a spectator heard the defeat when it happened
+    else if (!this.spectating) this.s.sfx.defeat();
+  }
+
+  /** Out, with the match going on (#183): watch the rest. */
+  private spectate(): void {
+    if (this.spectating) return;
+    this.spectating = true;
+    this.placing = placingOf(this.world, this.human);
+    this.aim = null;
+    this.selection.clear();
+    this.pending.clear();
+    this.s.sfx.defeat();
   }
 
   render(time: number): void {
@@ -306,6 +470,10 @@ export class GameView {
       bloom: this.bloom,
       allies: this.allyMask(),
     });
+    if (this.pending.size) {
+      const { renderer, camera } = this.s;
+      drawPending(renderer, this.world, this.pending.values(), { alpha: this.session.alpha, color: FACTION_RGB[this.human], time, now: this.now, zoom: camera.zoom / renderer.dpr });
+    }
     this.drawAim(time);
     this.drawBlinkFlash(time);
     this.drawEdgeMarkers(time);
@@ -400,6 +568,9 @@ export class GameView {
       const c = w.nests[w.citadel];
       marks.push([c.x, c.y, FACTION_RGB[this.warlord?.faction ?? c.owner] ?? WHITE]);
     }
+    // Your home, at the start (#235).
+    const you = this.youAt;
+    if (you) marks.push([you.x, you.y, FACTION_RGB[this.human] ?? WHITE]);
     for (const d of ev?.drops ?? []) marks.push([d.x, d.y, DROP_MARK]);
     for (const c of ev?.colossi ?? []) {
       const s = w.uidToSlot.get(c.uid);
@@ -417,19 +588,29 @@ export class GameView {
       if (n >= 6) marks.push([x / n, y / n, FERAL]);
     }
     const { camera, renderer } = this.s;
-    const pad = 28;
     const pulse = 0.6 + 0.4 * Math.sin(time * 5);
     for (const [x, y, c] of marks) {
-      const [sx, sy] = camera.toScreen(x, y);
-      if (sx >= 0 && sy >= 0 && sx <= camera.viewW && sy <= camera.viewH) continue;
-      const cx = camera.viewW / 2, cy = camera.viewH / 2;
-      const dx = sx - cx, dy = sy - cy;
-      const k = Math.min((cx - pad) / Math.abs(dx || 1e-6), (cy - pad) / Math.abs(dy || 1e-6));
-      const [wx, wy] = camera.toWorld(cx + dx * k, cy + dy * k);
+      const e = this.edgeOf(x, y);
+      if (!e) continue;
+      const [wx, wy] = camera.toWorld(e.x, e.y);
       // Triangle shape points "up" at rotation 0; turn it toward the target.
-      const rot = Math.atan2(dx, -dy);
-      renderer.shape(true, wx, wy, (11 * renderer.dpr) / camera.zoom, 3, 0, -rot, 0.6, c, Math.round(230 * pulse));
+      renderer.shape(true, wx, wy, (11 * renderer.dpr) / camera.zoom, 3, 0, -e.rot, 0.6, c, Math.round(230 * pulse));
     }
+  }
+
+  /**
+   * Where an edge arrow for a world point sits (device px), and the direction
+   * it points from the view's center; null while the point is on screen.
+   */
+  private edgeOf(x: number, y: number): { x: number; y: number; dx: number; dy: number; rot: number } | null {
+    const camera = this.s.camera;
+    const pad = 28;
+    const [sx, sy] = camera.toScreen(x, y);
+    if (sx >= 0 && sy >= 0 && sx <= camera.viewW && sy <= camera.viewH) return null;
+    const cx = camera.viewW / 2, cy = camera.viewH / 2;
+    const dx = sx - cx, dy = sy - cy;
+    const k = Math.min((cx - pad) / Math.abs(dx || 1e-6), (cy - pad) / Math.abs(dy || 1e-6));
+    return { x: cx + dx * k, y: cy + dy * k, dx, dy, rot: Math.atan2(dx, -dy) };
   }
 
   /** How far Blink carries your dots: the same reach the sim clamps to (commands.ts). */
@@ -673,23 +854,35 @@ export class GameView {
           break;
         }
         case 'capitalLost':
-          sfx.capitalAlarm();
           rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.6, c: [255, 93, 115], thick: 3 });
-          toast('Your capital has fallen: retake it within 20 seconds!', '#ff5d73');
+          // Co-op (#228): your own capital sounds the alarm; an ally's is a call for help.
+          if (e.f === this.human || (w.siege?.defenders.length ?? 1) === 1) {
+            sfx.capitalAlarm();
+            toast(`Your capital has fallen: retake it within ${SIEGE.retake / TICK_HZ} seconds!`, '#ff5d73');
+          } else toast(`${FACTION_NAMES[e.f]}'s capital has fallen: help retake it!`, hex(e.f));
           break;
         case 'boonOffer':
           sfx.boonOffer();
           break;
         case 'boonTaken': {
           const id = (Object.keys(BOONS) as (keyof typeof BOONS)[])[e.prev];
-          if (id) toast(`${BOONS[id].name}: ${BOONS[id].text.toLowerCase()}`, hex(this.human));
-          rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3, dur: 0.6, c: FACTION_RGB[this.human], thick: 3 });
+          const own = e.f === this.human;
+          if (id) toast(`${own ? '' : `${FACTION_NAMES[e.f]}: `}${BOONS[id].name}: ${BOONS[id].text.toLowerCase()}`, hex(e.f));
+          rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3, dur: 0.6, c: FACTION_RGB[e.f], thick: 3 });
           sfx.levelUp(e.x, e.y, true);
           break;
         }
         case 'capitalRetaken':
-          toast('Capital retaken', hex(this.human));
+          toast('Capital retaken', hex(e.f));
           break;
+        case 'boonDrop': {
+          // Co-op (#228): a boon drops outside a defender's walls; capture it to take it.
+          const id = (Object.keys(BOONS) as (keyof typeof BOONS)[])[e.prev];
+          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.8, c: BOON_RGB, thick: 3 });
+          if (id) toast(`A boon drops${e.f === this.human ? ' outside your walls' : ` near ${FACTION_NAMES[e.f]}`}: ${BOONS[id].name}. Capture it!`, `rgb(${BOON_RGB.join(',')})`);
+          sfx.boonOffer();
+          break;
+        }
         case 'heartPulse': {
           rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r, dur: 0.4, c: FERAL, thick: 5 });
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.4, r1: e.r, dur: 0.35, c: FERAL, thick: 0, disc: true });
@@ -760,7 +953,7 @@ export class GameView {
           // In a team match, name the team (#74).
           const who = teamName(w, this.human, e.f);
           const are = verb(who, 'is', 'are');
-          if (mine) toast(keys ? `Halfway to a key-nest win! Keep scoring on the ${keys} key nests` : `${who.name} ${are} dominating! Hold ${Math.ceil(w.nests.length * w.domShare)} nests for 30s to win`, hex(e.f));
+          if (mine) toast(keys ? `Halfway to a key-nest win! Keep scoring on the ${keys} key nests` : `${who.name} ${are} dominating! Hold ${w.domNeed(w.teamOf[e.f])} nests for 30s to win`, hex(e.f));
           else toast(keys ? `${who.name} ${are} halfway to a key-nest win! Take or contest their key nests` : `${who.name} ${are} dominating! Take back a nest to stop them`, '#ff5d73');
           for (const n of w.nests) {
             if (n.owner >= 0 && n.owner !== NEUTRAL && w.teamOf[n.owner] === w.teamOf[e.f]) {
@@ -848,6 +1041,7 @@ export class GameView {
    */
   selectAt(wx: number, wy: number, radius: number, additive: boolean): boolean {
     this.typeCycle = null;
+    if (this.spectating) return this.inspectAt(wx, wy, radius);
     const n = this.nestAt(wx, wy);
     const own = n && n.owner === this.human ? n : null;
     const units = this.ownUnitsIn((x, y) => (x - wx) ** 2 + (y - wy) ** 2 <= radius * radius);
@@ -878,6 +1072,31 @@ export class GameView {
     }
     if (!additive) this.selection.clear();
     return false;
+  }
+
+  /** A spectator's click (#183): whose nest, or whose dots, is this? */
+  private inspectAt(wx: number, wy: number, radius: number): boolean {
+    const n = this.nestAt(wx, wy);
+    if (n) {
+      this.inspect = { nest: n.id };
+      return true;
+    }
+    const w = this.world;
+    let best = -1, bd = radius * radius;
+    for (let i = 0; i < w.n; i++) {
+      if (!w.alive[i] || w.owner[i] < 0 || w.owner[i] === NEUTRAL) continue;
+      const d = (w.x[i] - wx) ** 2 + (w.y[i] - wy) ** 2;
+      if (d <= bd) (best = i), (bd = d);
+    }
+    if (best < 0) {
+      this.inspect = null;
+      return false;
+    }
+    const owner = w.owner[best], R = radius * 2.2;
+    let count = 0;
+    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === owner && (w.x[i] - wx) ** 2 + (w.y[i] - wy) ** 2 <= R * R) count++;
+    this.inspect = { owner, count };
+    return true;
   }
 
   /** Brush selection (hold Space and move): adds own dots under the brush. */
@@ -1002,19 +1221,52 @@ export class GameView {
     this.noteSelection('cycle');
   }
 
+  // ---- orders on their way (#161) ------------------------------------------
+
+  /** orders given but not yet run (networked play only) */
+  readonly pending = new PendingOrders();
+
+  /** Give an order; networked, show it until it runs. `cost`: the energy it will spend. */
+  private order(cmd: Command, cost = 0): void {
+    // out and watching (#183), rejoining, or a bot has the seat until we take it back (#164)
+    if (this.spectating || this.session.syncing || this.session.seatBot) return;
+    // the opening (#235): orders wait for GO
+    if (this.waiting) return void this.s.toast('Wait for GO', '#9aa4c7');
+    const id = this.session.issue(cmd);
+    if (!this.session.net) return;
+    // Blood price pays in units, not energy (#60): nothing to take off the bar
+    const blood = this.world.factions[this.human]?.mods.bloodPrice;
+    this.pending.add({ id, cmd, at: this.now, cost: blood ? 0 : cost });
+  }
+
+  /** An order ring lasts until the order is expected to run. */
+  private ringDur(): number {
+    return this.session.net ? Math.max(0.35, this.session.expectedDelayMs() / 1000 + 0.1) : 0.35;
+  }
+
+  /** The sim refused one of our orders, or it never reached the host: clear its marker and say so. */
+  private rejected(id: number, why: OrderFail): void {
+    const o = this.pending.take(id);
+    if (!o) return;
+    const text = rejectText(o.cmd, why, !!this.world.factions[this.human]?.mods.bloodPrice);
+    if (!text) return;
+    this.s.sfx.fail();
+    this.s.toast(text, '#ffb627');
+  }
+
   commandAt(wx: number, wy: number): boolean {
     const sel = this.selection;
     if (sel.empty) return false;
     const n = this.nestAt(wx, wy);
     const tx = n ? n.x : wx, ty = n ? n.y : wy;
     if (sel.units.size) {
-      this.session.issue({ t: 'move', p: this.human, units: [...sel.units], x: wx, y: wy, nest: n ? n.id : -1 });
+      this.order({ t: 'move', p: this.human, units: [...sel.units], x: wx, y: wy, nest: n ? n.id : -1 });
     }
     if (sel.nests.size) {
-      this.session.issue({ t: 'rally', p: this.human, nests: [...sel.nests], x: tx, y: ty });
+      this.order({ t: 'rally', p: this.human, nests: [...sel.nests], x: tx, y: ty });
     }
     const c = FACTION_RGB[this.human];
-    this.s.rings.add({ x: tx, y: ty, r0: n ? n.r * 1.8 : 22, r1: n ? n.r * 1.1 : 4, dur: 0.35, c, thick: 2 });
+    this.s.rings.add({ x: tx, y: ty, r0: n ? n.r * 1.8 : 22, r1: n ? n.r * 1.1 : 4, dur: this.ringDur(), c, thick: 2 });
     this.s.sfx.order();
     return true;
   }
@@ -1033,8 +1285,8 @@ export class GameView {
     const c = FACTION_RGB[this.human];
     for (const o of orders) {
       const n = this.world.nests[o.nest];
-      this.session.issue({ t: 'move', p: this.human, units: o.units, x: n.x, y: n.y, nest: n.id });
-      this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.8, r1: n.r * 1.1, dur: 0.35, c, thick: 2 });
+      this.order({ t: 'move', p: this.human, units: o.units, x: n.x, y: n.y, nest: n.id });
+      this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.8, r1: n.r * 1.1, dur: this.ringDur(), c, thick: 2 });
     }
     this.s.sfx.order();
     return this.world.nests[orders[0].nest];
@@ -1042,14 +1294,14 @@ export class GameView {
 
   /** Holding the line (#67): take boon `k` of the offer. */
   pickBoon(k: number): void {
-    if (this.world.siege?.offer) this.session.issue({ t: 'boon', p: this.human, k });
+    if (this.world.siege?.offer && !this.spectating) this.session.issue({ t: 'boon', p: this.human, k });
   }
 
   surge(): void {
     if (this.blocked('surge')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Surge', '#9aa4c7');
     if (this.short(surgeCost(this.world, this.human))) return this.s.sfx.fail();
-    this.session.issue({ t: 'surge', p: this.human, units: [...this.selection.units] });
+    this.order({ t: 'surge', p: this.human, units: [...this.selection.units] }, surgeCost(this.world, this.human));
   }
 
   nova(): void {
@@ -1060,7 +1312,7 @@ export class GameView {
     }
     if (this.selection.units.size < 4) return this.s.toast('Select at least 4 dots for Nova', '#9aa4c7');
     if (this.short(POWER.novaCost)) return this.s.sfx.fail();
-    this.session.issue({ t: 'nova', p: this.human, units: [...this.selection.units] });
+    this.order({ t: 'nova', p: this.human, units: [...this.selection.units] }, POWER.novaCost);
   }
 
   private novaWouldHit(): boolean {
@@ -1109,7 +1361,7 @@ export class GameView {
     if (this.blocked('fortify')) return;
     if (!this.selection.units.size) return this.s.toast('Select dots first, then Fortify', '#9aa4c7');
     if (!this.power('fortify', POWER.fortifyCost)) return;
-    this.session.issue({ t: 'fortify', p: this.human, units: [...this.selection.units] });
+    this.order({ t: 'fortify', p: this.human, units: [...this.selection.units] }, POWER.fortifyCost);
   }
 
   /** Targeted powers: cast at a world point. */
@@ -1123,7 +1375,7 @@ export class GameView {
         this.s.sfx.fail();
         return this.s.toast('Out of range: Barrage launches from your nests', '#9aa4c7');
       }
-      this.session.issue({ t: 'barrage', p: this.human, x: wx, y: wy });
+      this.order({ t: 'barrage', p: this.human, x: wx, y: wy }, POWER.barrageCost);
     } else if (power === 'blink') {
       if (!this.selection.units.size) return this.s.toast('Select dots first, then Blink', '#9aa4c7');
       if (!this.power('blink', POWER.blinkCost)) return;
@@ -1134,7 +1386,7 @@ export class GameView {
         const k = range / Math.hypot(wx - from[0], wy - from[1]);
         this.blinkFlash = { x: from[0], y: from[1], r: range, tx: from[0] + (wx - from[0]) * k, ty: from[1] + (wy - from[1]) * k, at: this.now };
       }
-      this.session.issue({ t: 'blink', p: this.human, units: [...this.selection.units], x: wx, y: wy });
+      this.order({ t: 'blink', p: this.human, units: [...this.selection.units], x: wx, y: wy }, POWER.blinkCost);
     } else {
       const n = this.nestAt(wx, wy, 1.6);
       if (!n || n.owner < 0 || n.owner === NEUTRAL || !this.world.hostile(n.owner, this.human)) {
@@ -1143,7 +1395,7 @@ export class GameView {
       if (!this.power('lockdown', POWER.lockdownCost)) return;
       const rest = siphonWait(this.world, this.human);
       if (rest > 0) return this.s.toast(`Siphon: Lockdown is ready again in ${Math.ceil(rest / TICK_HZ)} s`, '#9aa4c7');
-      this.session.issue({ t: 'lockdown', p: this.human, nest: n.id });
+      this.order({ t: 'lockdown', p: this.human, nest: n.id }, POWER.lockdownCost);
     }
   }
 
@@ -1185,7 +1437,7 @@ export class GameView {
       return n.owner === this.human && (n.level < MAX_LEVEL || n.control < 1);
     });
     if (!ids.length) return this.s.toast('Select one of your nests to upgrade', '#9aa4c7');
-    for (const id of ids) this.session.issue({ t: 'upgrade', p: this.human, nest: id });
+    for (const id of ids) this.order({ t: 'upgrade', p: this.human, nest: id });
   }
 
   /** Remaining dots for the first selected nest that can be fed (repair first, then level). */
@@ -1225,10 +1477,16 @@ export class GameView {
     return { enemy: false, counts };
   }
 
+  /** Your home nest: your capital, or else your first nest. */
+  private homeNest(): Nest | undefined {
+    const mine = this.world.nests.filter((n) => n.owner === this.human);
+    return mine.find((n) => n.capital) ?? mine[0];
+  }
+
   homePoint(): [number, number] {
     const w = this.world;
-    const mine = w.nests.filter((n) => n.owner === this.human);
-    if (mine.length) return [mine[0].x, mine[0].y];
+    const home = this.homeNest();
+    if (home) return [home.x, home.y];
     let x = 0, y = 0, c = 0;
     for (let i = 0; i < w.n; i++) {
       if (w.alive[i] && w.owner[i] === this.human) {

@@ -2,7 +2,7 @@
 
 A fast, colorful dot-swarm RTS for the browser. You command one neon color of tiny square dots and fight rival colors for control of the map's **nests** (spawners). Dots fight automatically when they get close to an enemy. Your job is to decide where they go and when.
 
-Play the latest build at https://dibz15.github.io/swarm-game/.
+Play the latest build at https://fourthcontact.github.io/swarm-game/.
 
 ## Development
 
@@ -34,6 +34,49 @@ Dev URL flags:
 - `?bench=5000` runs a stress battle with about 5,000 units.
 - `?eventdemo` starts a small match where the wild swarm, a supply drop and the Colossus all arrive in the first seconds.
 - `?theme=<id>` forces one music theme everywhere, to audition it (ids in `src/audio/themes.ts`, e.g. `f-lydian`). Settings > Sound > Theme does the same without the URL, and with `?debug` you can call `swarm.sfx.setTheme(id)`.
+- `?lag=400[&jitter=80&loss=0.02]` runs skirmishes on a networked session behind a simulated link (round trip in ms), to feel and tune multiplayer latency alone.
+- `?net=local` makes multiplayer rooms use a BroadcastChannel instead of WebRTC: host in one tab, open the room link in others in the same browser. No internet needed.
+- `?desync=<tick>` (with `?net=local`, in one tab) nudges that tab's world at the tick, to see a desync end to end: every tab stops with the desync screen, the host's names the first differing field, and Resync puts everyone back in step.
+
+### Multiplayer
+Menu > Multiplayer > **Host a game** opens a room and gives you a link (`…#room=<id>.<secret>`). Anyone who opens it joins the lobby: they pick a character, a colour and a team, and the host fills the other seats with bots and starts.
+- **No server of ours.** Peers find each other through public Nostr relays ([Trystero](https://github.com/dmotz/trystero)) and then talk directly over WebRTC. The secret in the link encrypts that signaling, so only people with the link can join.
+- **The host runs the match** (the Sequencer) for everyone, and only the host can pause it. From the pause menu the host can also End match (everyone back to the room, to change settings or let someone in) or Restart it. If the host leaves (or closes the tab), hosting passes to the next player and the match goes on; if the host just vanishes, the players notice within a couple of seconds and elect a new one (desktop before phone, then seat order). The room moves with it, so the new host can end the match and start the next.
+- **Drops and rejoins:** a player whose page is hidden or whose connection drops is shown as away, and after the room's timeout (30 s, 1 min or 2 min, a lobby setting) an Easy bot plays their colour. Back on the same tab, even after a reload, they rejoin from a snapshot of the match and get their colour back. The seat token that proves it lives in that tab's sessionStorage and only the host sees it.
+- **Defeated players watch** the rest of the match; everyone gets the end screen together.
+- **Desyncs** stop the match for everyone at the first hash mismatch. The host compares everyone's world at that tick and shows the first field that differs; anyone can download a report, and the host can resync everyone to the majority's world or play on. `npx vite-node scripts/desync.ts <report.json>` replays the host's report and says whose world left the true course, when, and where.
+- The room link must open the same build: a player on another version is asked to refresh.
+- **Hide my IP** (Settings, or the Multiplayer card): connect only through the relay, so other players never see your address.
+
+#### The relay (TURN)
+Some pairs of players can't reach each other directly: strict NATs, and often mobile carrier CGNAT. A TURN relay carries their traffic instead, still end-to-end encrypted. A tiny Cloudflare Worker in [`workers/turn/`](workers/turn) hands out short-lived credentials for [Cloudflare's TURN service](https://developers.cloudflare.com/realtime/turn/). Without it, the game still works for everyone who can connect directly.
+
+To deploy it:
+1. In the Cloudflare dashboard, go to **Realtime > TURN Server** and create a TURN key. Note its **key ID** and **API token**.
+2. In `workers/turn/`, run `npm install`, then `npx wrangler login`.
+3. For the budget guard (below), create an API token that can read usage: **My Profile > API Tokens > Create Token > Custom token**, with the permission **Account > Account Analytics > Read**, limited to your account. Also note your **account ID** (Account home > the account's menu > Copy account ID).
+4. Store all four values as Worker secrets (they never go in the repo):
+   ```bash
+   npx wrangler secret put TURN_KEY_ID
+   ```
+   ```bash
+   npx wrangler secret put TURN_KEY_API_TOKEN
+   ```
+   ```bash
+   npx wrangler secret put CF_ACCOUNT_ID
+   ```
+   ```bash
+   npx wrangler secret put CF_ANALYTICS_TOKEN
+   ```
+5. Run `npx wrangler deploy`. It prints the Worker's URL, e.g. `https://swarm-turn.<you>.workers.dev`.
+6. In the GitHub repo, go to **Settings > Secrets and variables > Actions > Variables** and add a *repository* variable `VITE_TURN_URL` with that URL (not an environment variable: PR builds can't read the `github-pages` environment). CI builds pass it to the game. For local dev, put `VITE_TURN_URL=…` in `.env.local`.
+
+What it does and doesn't do:
+- `GET /ice?room=<id>` returns ICE servers whose credentials last 2 hours, long enough for a lobby and a match. Only the game's origins may call it (`ALLOWED_ORIGINS` in `wrangler.toml`), and calls are rate-limited to 10 a minute per IP and 30 per room.
+- It logs nothing of its own (`observability` is off). Cloudflare keeps its usual request metrics.
+- **Cost:** Cloudflare bills only what the relay sends down to a relayed player, $0.05/GB after a free 1,000 GB a month per account. A relayed player receives about 6 KB/s (measured), almost all of it framing and packet overhead on 30 tiny turn messages a second: about 22 MB an hour, so the free tier covers about 45,000 relayed player-hours a month. Players who can connect directly cost nothing. Workers' free plan allows 100,000 requests a day, and a player asks once per room.
+- **Budget guard:** Cloudflare TURN has no spending cap, and anyone holding a credential could relay anything through it. So the Worker checks the account's TURN egress for the calendar month (UTC) through Cloudflare's analytics, at most every 5 minutes, and stops handing out credentials once it passes `BUDGET_GB` (800 in `wrangler.toml`). Players then fall back to direct connections. Credentials already handed out keep working until they expire, hence the margin below 1,000. If the analytics can't be read for an hour, or the guard isn't configured, it refuses too; set `BUDGET_GB = "off"` to run without it. The analytics are an estimate, not the bill, and Cloudflare's billing month may not start on the 1st, so check the dashboard now and then.
+- If the Worker can't be reached (or isn't set up), players fall back to direct connections. With Hide my IP on, they can't connect at all until it's back.
 
 ### Working offline
 Everything for day-to-day work runs without a network:
@@ -203,7 +246,9 @@ src/sim/      deterministic simulation — no DOM, no Math.random, no clock
   events.ts     living-map director: wild swarms, supply drops, the Colossus, garrison regrowth
   mathx.ts      table-based deterministic sin/cos
   hash.ts       state checksum
-src/game/     LocalSession (fixed-timestep driver + command log), GameView (match + feedback)
+src/game/     Session: LocalSession (fixed-timestep driver + command log); GameView (match + feedback)
+src/net/      multiplayer (#152): wire codec, Sequencer (host turn clock), NetSession (jitter buffer, catch-up), lobby, transports
+              (WebRTC via Trystero, BroadcastChannel for local tests, a fake network for the net-sim); loaded only when used
 src/render/   WebGL2: instanced units, beams, SDF nest shapes, terrain baked to a distance texture; particles; camera
 src/input/    mouse / touch / keyboard → actions; client-only selection
 src/ui/       DOM HUD, menus, settings, end screen; mobile mode (body.mobile: touch layout + wording)
@@ -214,7 +259,7 @@ tests/        vitest suites, all headless
 ```
 
 **Why deterministic:** the same seed and command log always produce the same match, and `tests/sim.test.ts` checks this. That gives us:
-- **Lockstep multiplayer** later: peers exchange only Commands and compare `worldHash` every N ticks.
+- **Sequenced-lockstep multiplayer** (#152): clients send Commands to one Sequencer, which stamps each with an execution tick and broadcasts a closed turn every tick without waiting for anyone. Each client steps tick T once turn T arrives, behind a small jitter buffer, and reports `fullHash` to catch desyncs. A laggy player's own orders take longer; nobody else stalls.
 - **Replays**: `LocalSession.log` already records every command.
 - **Headless bot-vs-bot tests**.
 
@@ -223,9 +268,9 @@ tests/        vitest suites, all headless
 1. ~~Core engine + playable skirmish vs bots~~
 2. Balance pass after playtesting
 3. Campaign: about 10 levels in JSON, a level-select screen, progress in localStorage
-4. Multiplayer: a `LockstepSession` over WebRTC data channels or a small WebSocket relay, with bots filling empty slots
+4. Multiplayer (#152): sequenced lockstep. The Sequencer runs in the host's browser over WebRTC (P2P), and the same class can later run in a relay. Bots fill empty seats, and an Easy bot takes over a dropped player's seat
 5. Replay viewer and map editor
 
 ## License
 
-[MIT](LICENSE) © 2026 Dibz15
+[MIT](LICENSE) © 2026 Fourth Contact / Dibz15

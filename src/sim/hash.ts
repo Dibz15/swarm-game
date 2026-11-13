@@ -1,6 +1,10 @@
 import type { World } from './world';
 
-/** Checksum of simulation state, for desync detection and tests. */
+/**
+ * Checksum of the main simulation state, for tests and recordings (which
+ * store it, so it must not change). For desync detection use `fullHash` in
+ * snapshot.ts, which covers everything a snapshot holds (RNGs, bots, timers).
+ */
 export function worldHash(w: World): number {
   let h = 2166136261;
   const mix = (v: number) => {
@@ -39,7 +43,11 @@ export function worldHash(w: World): number {
   mix(w.citadel);
   if (w.siege) {
     mix(w.siege.next);
-    mix(w.siege.lostAt);
+    for (const d of w.siege.defenders) mix(d.lostAt);
+    for (const d of w.siege.drops) {
+      mix(Math.round(d.progress * 1000));
+      mix(d.holder);
+    }
     mix(w.siege.boons.length);
     mix(w.siege.offer ? w.siege.offer.until : -1);
   }

@@ -8,7 +8,8 @@ import { formatTime } from './hud';
 import type { AudioEngine, VolumeKind } from '../audio/engine';
 import { THEMES } from '../audio/themes';
 import { clearRecordings, countRecordings, downloadRecordings, recordingEnabled, setRecordingEnabled } from '../game/recordStore';
-import { buildSetup, loadPrefs, randomSeed, savePrefs, type SetupPrefs } from '../game/matchSetup';
+import { buildSetup, loadPrefs, MATCH_MODES, MATCH_MODE_BLURB, MATCH_MODE_LABEL, prefsProblem, randomMap, randomSeed, savePrefs, settleTeams, WAVE_NAMES, type MatchMode, type SetupPrefs } from '../game/matchSetup';
+import { relayOnly, setRelayOnly, TURN_URL } from '../net/ice';
 import { MISSIONS, missionUnlocked, type Mission, type NextStep, type TutorialProgress } from '../game/tutorial';
 import { isMobile, setUiMode, UI_MODES, uiMode, type UiMode } from './mobile';
 import { RESOLUTIONS, resolution, setResolution, type Resolution } from '../render/resolution';
@@ -59,7 +60,7 @@ export function controlsHtml(): string {
   return isMobile() ? TOUCH_CONTROLS_HTML : CONTROLS_HTML;
 }
 
-export function mainMenu(handlers: { skirmish: () => void; campaign: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
+export function mainMenu(handlers: { skirmish: () => void; multiplayer: () => void; campaign: () => void; howto: () => void; settings: () => void }): HTMLDivElement {
   const m = el(`
     <div class="screen menu">
       <button class="menu-corner" data-a="howto" title="How to play"><span aria-hidden="true">?</span> How to play</button>
@@ -68,6 +69,7 @@ export function mainMenu(handlers: { skirmish: () => void; campaign: () => void;
         <p class="tag">a tiny war of colors</p>
         <div class="menu-buttons">
           <button class="primary" data-a="skirmish">Skirmish</button>
+          <button data-a="multiplayer">Multiplayer</button>
           <button data-a="campaign">Campaign</button>
           <button data-a="settings">Settings</button>
         </div>
@@ -75,6 +77,7 @@ export function mainMenu(handlers: { skirmish: () => void; campaign: () => void;
       <footer>v0.1 · fight for the nests</footer>
     </div>`);
   m.querySelector('[data-a=skirmish]')!.addEventListener('click', handlers.skirmish);
+  m.querySelector('[data-a=multiplayer]')!.addEventListener('click', handlers.multiplayer);
   m.querySelector('[data-a=campaign]')!.addEventListener('click', handlers.campaign);
   m.querySelector('[data-a=howto]')!.addEventListener('click', handlers.howto);
   m.querySelector('[data-a=settings]')!.addEventListener('click', handlers.settings);
@@ -131,16 +134,12 @@ export function randomSetup(difficulty: number): MatchSetup {
   const p = loadPrefs();
   const bots = weighted<number>([[1, 3], [2, 2], [3, 4], [4, 2], [5, 2]]);
   const others = [0, 1, 2, 3, 4, 5].filter((c) => c !== p.color);
-  const size: MapSize = bots <= 1 ? 'small' : bots <= 3 ? weighted<MapSize>([['small', 1], ['medium', 3]]) : weighted<MapSize>([['medium', 1], ['large', 3]]);
   return buildSetup(
     {
       ...p,
-      size,
-      terrain: weighted<TerrainLevel>([['light', 2], ['standard', 5], ['heavy', 2]]),
-      caves: weighted<CaveLevel>([['off', 6], ['belt', 2], ['full', 1]]),
-      layout: 'random',
-      events: weighted<EventLevel>([['calm', 2], ['normal', 6], ['wild', 1]]),
+      ...randomMap(bots + 1),
       teams: false,
+      mode: 'conquest',
       bots: others.slice(0, bots).map((faction, i) => ({ faction, difficulty, personality: 'random', team: i + 1 })),
     },
     randomSeed(),
@@ -392,10 +391,12 @@ export function settingsScreen(audio: AudioEngine, onBack: () => void): HTMLDivE
       <div class="card">
         <h2>Settings</h2>
         <div class="fields"></div>
+        <div class="relay-field"></div>
         <div class="row end"><button class="primary" data-a="back">Done</button></div>
       </div>
     </div>`);
   m.querySelector('.fields')!.replaceWith(settingsFields(audio, () => {}));
+  m.querySelector('.relay-field')!.replaceWith(relayField());
   m.querySelector('[data-a=back]')!.addEventListener('click', onBack);
   return m;
 }
@@ -447,7 +448,7 @@ export function howToPlay(onBack: () => void): HTMLDivElement {
         <div class="howto-grid">
           <div>
             <h3>The goal</h3>
-            <p>Every color wants the map. <b>Nests</b> are the only way to make more dots, so capture them. Win by wiping out every rival, or by holding <b>70% of the nests for 30 seconds</b> (60% on large maps).</p>
+            <p>Every color wants the map. <b>Nests</b> are the only way to make more dots, so capture them. Win by wiping out every rival, or by holding <b>70% of the nests for 30 seconds</b> (60% on large maps). In a team match the bar is higher, and higher still for the bigger team, since a team starts with more of the map.</p>
             <h3>Fighting</h3>
             <p>Dots fight automatically. Any dot near an enemy locks on and shoots. The thin lines are the shots. Your job is to decide where your dots go and when they go there.</p>
             <h3>Capturing</h3>
@@ -511,6 +512,99 @@ const SCENARIOS: Scenario[] = [
   { name: '3-player FFA, domination', seed: 'rec-dom-3', size: 'medium', caves: 'off', bots: ['random', 'random'], domShare: 0.5 },
 ];
 
+/**
+ * Multiplayer's "Hide my IP" (#163): connect only through the relay, so other
+ * players never see your address. Off when this build has no relay.
+ */
+export function relayField(): HTMLDivElement {
+  const f = el(`
+    <div class="field">
+      <label>Multiplayer</label>
+      <label class="check"><input type="checkbox" data-a="relay"> Hide my IP from other players (relay only)</label>
+      <p class="hint"></p>
+    </div>`);
+  const box = f.querySelector('[data-a=relay]') as HTMLInputElement;
+  const hint = f.querySelector('.hint') as HTMLParagraphElement;
+  box.checked = relayOnly();
+  box.disabled = !TURN_URL;
+  hint.textContent = TURN_URL
+    ? 'Everything goes through a relay server instead of straight between players: a little more delay. Takes effect the next time you join a room.'
+    : 'This version of the game has no relay, so players connect directly.';
+  box.addEventListener('change', () => setRelayOnly(box.checked));
+  return f;
+}
+
+/** The map's choices, as the skirmish screen and the multiplayer lobby (#162) show them. */
+export interface MapChoice {
+  size: MapSize;
+  terrain: TerrainLevel;
+  caves: CaveLevel;
+  layout: SetupPrefs['layout'];
+  events: EventLevel;
+}
+
+/**
+ * Map size, terrain, ground, layout and events as segmented buttons.
+ * `onChange` gets each pick; `render` shows a choice (and, with `readOnly`,
+ * nothing can be picked: a guest's view of the host's lobby).
+ */
+export function mapFields(onChange: (patch: Partial<MapChoice>) => void): { el: HTMLDivElement; render: (m: MapChoice, readOnly?: boolean, fixed?: Partial<MapChoice>) => void } {
+  const f = el(`
+    <div class="mapfields">
+      <div class="field two">
+        <div>
+          <label>Map size</label>
+          <div class="seg" data-a="size">
+            <button data-v="small">Small</button><button data-v="medium">Medium</button><button data-v="large">Large</button>
+          </div>
+        </div>
+        <div>
+          <label>Terrain</label>
+          <div class="seg" data-a="terrain">
+            ${TERRAIN_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Ground <small>open, a ring of caves around the center, or one big cave system</small></label>
+        <div class="seg" data-a="caves">
+          ${CAVE_LEVELS.map((t) => `<button data-v="${t}">${CAVE_LABEL[t]}</button>`).join('')}
+        </div>
+      </div>
+      <div class="field">
+        <label>Map <small>how the nests are spread</small></label>
+        <div class="seg wrap" data-a="layout">
+          ${(['random', ...MAP_LAYOUTS] as const).map((t) => `<button data-v="${t}">${LAYOUT_LABEL[t]}</button>`).join('')}
+        </div>
+      </div>
+      <div class="field">
+        <label>Events <small>wild swarms, drops, the Colossus</small></label>
+        <div class="seg" data-a="events">
+          ${EVENT_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
+        </div>
+      </div>
+    </div>`) as HTMLDivElement;
+  const keys = ['size', 'terrain', 'caves', 'layout', 'events'] as const;
+  for (const k of keys) {
+    f.querySelector(`[data-a=${k}]`)!.addEventListener('click', (e) => {
+      const v = (e.target as HTMLElement).dataset.v;
+      const b = (e.target as HTMLElement).closest('button');
+      if (v && !b?.disabled) onChange({ [k]: v } as Partial<MapChoice>);
+    });
+  }
+  /** `fixed`: fields the match type sets (#222: a fortress has open ground), shown but not pickable */
+  const render = (m: MapChoice, readOnly = false, fixed: Partial<MapChoice> = {}) => {
+    for (const k of keys) {
+      const v = fixed[k] ?? m[k];
+      f.querySelectorAll<HTMLButtonElement>(`[data-a=${k}] button`).forEach((b) => {
+        b.classList.toggle('on', b.dataset.v === v);
+        b.disabled = (readOnly || fixed[k] !== undefined) && b.dataset.v !== v;
+      });
+    }
+  };
+  return { el: f, render };
+}
+
 export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) => void, onBack: () => void): HTMLDivElement {
   const prefs = loadPrefs();
   let seedText = randomSeed();
@@ -530,6 +624,18 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
           <div class="swatches"></div>
         </div>
         <div class="field">
+          <label>Match type <small class="mode-blurb"></small></label>
+          <div class="seg wrap" data-a="matchmode">
+            ${MATCH_MODES.map((t) => `<button data-v="${t}">${MATCH_MODE_LABEL[t]}</button>`).join('')}
+          </div>
+        </div>
+        <div class="field waves">
+          <label>Waves <small>how big and how often; harder holds longer</small></label>
+          <div class="seg" data-a="waves">
+            ${WAVE_NAMES.map((t, i) => `<button data-v="${i}">${t}</button>`).join('')}
+          </div>
+        </div>
+        <div class="field opponents">
           <label>Opponents <small>bots</small></label>
           <div class="bots"></div>
           <div class="row">
@@ -537,44 +643,12 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
             <label class="check"><input type="checkbox" data-a="teams"> Teams (you are team A)</label>
           </div>
         </div>
-        <div class="field two">
-          <div>
-            <label>Map size</label>
-            <div class="seg" data-a="size">
-              <button data-v="small">Small</button><button data-v="medium">Medium</button><button data-v="large">Large</button>
-            </div>
-          </div>
-          <div>
-            <label>Terrain</label>
-            <div class="seg" data-a="terrain">
-              ${TERRAIN_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
-            </div>
-          </div>
-        </div>
+        <div class="mapfields"></div>
         <div class="field">
-          <label>Ground <small>open, a ring of caves around the center, or one big cave system</small></label>
-          <div class="seg" data-a="caves">
-            ${CAVE_LEVELS.map((t) => `<button data-v="${t}">${CAVE_LABEL[t]}</button>`).join('')}
-          </div>
+          <label>Map seed</label>
+          <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
         </div>
-        <div class="field">
-          <label>Map <small>how the nests are spread</small></label>
-          <div class="seg wrap" data-a="layout">
-            ${(['random', ...MAP_LAYOUTS] as const).map((t) => `<button data-v="${t}">${LAYOUT_LABEL[t]}</button>`).join('')}
-          </div>
-        </div>
-        <div class="field two">
-          <div>
-            <label>Events <small>wild swarms, drops, the Colossus</small></label>
-            <div class="seg" data-a="events">
-              ${EVENT_LEVELS.map((t) => `<button data-v="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}
-            </div>
-          </div>
-          <div>
-            <label>Map seed</label>
-            <div class="row"><input class="seed" spellcheck="false"><button class="small icon" data-a="dice" title="Random seed">⟳</button></div>
-          </div>
-        </div>
+        <p class="problem" hidden></p>
         <div class="row end">
           <button data-a="back">Back</button>
           <button class="primary" data-a="start">Start match</button>
@@ -582,6 +656,11 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
       </div>
     </div>`);
 
+  const fields = mapFields((patch) => {
+    Object.assign(prefs, patch);
+    render();
+  });
+  m.querySelector('.mapfields')!.replaceWith(fields.el);
   const swatches = m.querySelector('.swatches') as HTMLDivElement;
   const bots = m.querySelector('.bots') as HTMLDivElement;
   const seedInput = m.querySelector('.seed') as HTMLInputElement;
@@ -604,6 +683,7 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     prefs.layout = 'random';
     prefs.events = 'normal';
     prefs.teams = false;
+    prefs.mode = 'conquest';
     teamsBox.checked = false;
     prefs.bots = scenario.bots.map((personality, i) => ({ faction: free[i], difficulty, personality, team: i + 1 }));
     seedInput.value = scenario.seed;
@@ -641,17 +721,44 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
           <select data-a="diff">${DIFFICULTY_NAMES.map((d, k) => `<option value="${k}"${k === b.difficulty ? ' selected' : ''}>${d}</option>`).join('')}</select>
           <select data-a="pers">${(['random', ...PERSONALITIES] as const).map((p) => `<option value="${p}"${p === b.personality ? ' selected' : ''}>${PERSONA_LABEL[p]}</option>`).join('')}</select>
           <select data-a="team" ${prefs.teams ? '' : 'hidden'}>${[0, 1, 2, 3, 4, 5].map((t) => `<option value="${t}"${t === b.team ? ' selected' : ''}>Team ${'ABCDEF'[t]}${t === 0 ? ' (ally)' : ''}</option>`).join('')}</select>
+          ${prefs.mode === 'stronghold' ? `<button class="small icon crown${i === prefs.holder ? ' on' : ''}" data-a="holder" title="${i === prefs.holder ? 'Holds the stronghold' : 'Hold the stronghold'}">♛</button>` : ''}
           <button class="small icon" data-a="del" title="Remove" ${prefs.bots.length <= 1 ? 'disabled' : ''}>✕</button>
         </div>`,
       )
       .join('');
     (m.querySelector('[data-a=add]') as HTMLButtonElement).disabled = prefs.bots.length >= 5;
-    m.querySelectorAll<HTMLButtonElement>('[data-a=size] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.size));
-    m.querySelectorAll<HTMLButtonElement>('[data-a=terrain] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.terrain));
-    m.querySelectorAll<HTMLButtonElement>('[data-a=caves] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.caves));
-    m.querySelectorAll<HTMLButtonElement>('[data-a=layout] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.layout));
-    m.querySelectorAll<HTMLButtonElement>('[data-a=events] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.events));
+    // The match type (#222): Hold the line has no bots; fortresses have no cave rock (it could seal the gates).
+    if (prefs.holder >= prefs.bots.length) prefs.holder = 0;
+    m.querySelectorAll<HTMLButtonElement>('[data-a=matchmode] button').forEach((b) => b.classList.toggle('on', b.dataset.v === prefs.mode));
+    m.querySelectorAll<HTMLButtonElement>('[data-a=waves] button').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === prefs.waves));
+    (m.querySelector('.mode-blurb') as HTMLElement).textContent = MATCH_MODE_BLURB[prefs.mode];
+    (m.querySelector('.waves') as HTMLElement).hidden = prefs.mode !== 'hold';
+    (m.querySelector('.opponents') as HTMLElement).hidden = prefs.mode === 'hold';
+    const fort = prefs.mode === 'hold' || prefs.mode === 'stronghold';
+    // Hold the line's waves come from the swarm spawns: events can be anything but off (Calm, if they were)
+    if (prefs.mode === 'hold' && prefs.events === 'off') prefs.events = 'calm';
+    fields.render(prefs, false, fort ? { caves: 'off' } : {});
+    const noEvents = fields.el.querySelector<HTMLButtonElement>('[data-a=events] button[data-v=off]')!;
+    if (prefs.mode === 'hold') noEvents.disabled = true;
+    const problem = prefsProblem(prefs);
+    const p = m.querySelector('.problem') as HTMLElement;
+    p.hidden = !problem;
+    p.textContent = problem ? `${problem}: change the teams, or pick another match type.` : '';
+    (m.querySelector('[data-a=start]') as HTMLButtonElement).disabled = !!problem;
   };
+
+  m.querySelector('[data-a=matchmode]')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).dataset.v as MatchMode | undefined;
+    if (!v) return;
+    prefs.mode = v;
+    render();
+  });
+  m.querySelector('[data-a=waves]')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).dataset.v;
+    if (v === undefined) return;
+    prefs.waves = Number(v);
+    render();
+  });
 
   swatches.addEventListener('click', (e) => {
     const c = Number((e.target as HTMLElement).dataset.c);
@@ -669,7 +776,12 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     if (!row) return;
     const b = prefs.bots[Number(row.dataset.i)];
     if (t.dataset.a === 'del' && prefs.bots.length > 1) {
-      prefs.bots.splice(Number(row.dataset.i), 1);
+      const i = Number(row.dataset.i);
+      prefs.bots.splice(i, 1);
+      if (prefs.holder > i) prefs.holder--;
+      render();
+    } else if (t.dataset.a === 'holder') {
+      prefs.holder = Number(row.dataset.i);
       render();
     } else if (t.dataset.a === 'color') {
       const u = used();
@@ -690,7 +802,10 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     const b = prefs.bots[Number(row.dataset.i)];
     if (t.dataset.a === 'diff') b.difficulty = Number(t.value);
     if (t.dataset.a === 'pers') b.personality = t.value as Personality | 'random';
-    if (t.dataset.a === 'team') b.team = Number(t.value);
+    if (t.dataset.a === 'team') {
+      b.team = Number(t.value);
+      render();
+    }
   });
 
   m.querySelector('[data-a=add]')!.addEventListener('click', () => {
@@ -706,50 +821,15 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
     if (prefs.teams) prefs.bots.forEach((b, i) => (b.team = i % 2 === 0 ? 1 : 0));
     render();
   });
-  m.querySelector('[data-a=size]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as MapSize | undefined;
-    if (v) {
-      prefs.size = v;
-      render();
-    }
-  });
-  m.querySelector('[data-a=terrain]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as TerrainLevel | undefined;
-    if (v) {
-      prefs.terrain = v;
-      render();
-    }
-  });
-  m.querySelector('[data-a=caves]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as CaveLevel | undefined;
-    if (v) {
-      prefs.caves = v;
-      render();
-    }
-  });
-  m.querySelector('[data-a=layout]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as SetupPrefs['layout'] | undefined;
-    if (v) {
-      prefs.layout = v;
-      render();
-    }
-  });
-  m.querySelector('[data-a=events]')!.addEventListener('click', (e) => {
-    const v = (e.target as HTMLElement).dataset.v as EventLevel | undefined;
-    if (v) {
-      prefs.events = v;
-      render();
-    }
-  });
   m.querySelector('[data-a=dice]')!.addEventListener('click', () => {
     seedText = randomSeed();
     seedInput.value = seedText;
   });
   m.querySelector('[data-a=back]')!.addEventListener('click', onBack);
   m.querySelector('[data-a=start]')!.addEventListener('click', () => {
-    if (prefs.teams && prefs.bots.every((b) => b.team === 0)) {
-      prefs.bots[prefs.bots.length - 1].team = 1;
-    }
+    settleTeams(prefs);
+    // checked as it will start (#222): a match type it can't be stays unstarted, rather than quietly Conquest
+    if (prefsProblem(prefs)) return render();
     savePrefs(prefs);
     const setup = buildSetup(prefs, seedInput.value);
     if (scenario?.domShare) setup.domShare = scenario.domShare;
@@ -760,16 +840,37 @@ export function skirmishSetup(onStart: (setup: MatchSetup, scenario?: string) =>
   return m;
 }
 
-export function pauseMenu(h: { resume: () => void; restart: () => void; quit: () => void; audio: AudioEngine; quitLabel?: string; teams?: string }): HTMLDivElement {
+/**
+ * The pause menu. In a networked match (#162) there's no restart, the title
+ * says whether the match is actually stopped, and `note` (a `.note` line the
+ * caller may update) says for how long; `players` lists who's in it.
+ */
+export function pauseMenu(h: {
+  resume: () => void;
+  restart?: () => void;
+  quit: () => void;
+  audio: AudioEngine;
+  quitLabel?: string;
+  teams?: string;
+  title?: string;
+  note?: string;
+  resumeLabel?: string;
+  players?: string;
+  /** more buttons after Restart (a room host's End match, #183) */
+  more?: { label: string; on: () => void }[];
+}): HTMLDivElement {
   const m = el(`
     <div class="screen modal dim">
       <div class="card">
-        <h2>Paused</h2>
+        <h2>${h.title ?? 'Paused'}</h2>
+        <p class="note hint"${h.note ? '' : ' hidden'}>${h.note ?? ''}</p>
         <div class="menu-buttons">
-          <button class="primary" data-a="resume">Resume</button>
-          <button data-a="restart">Restart match</button>
+          <button class="primary" data-a="resume">${h.resumeLabel ?? 'Resume'}</button>
+          ${h.restart ? '<button data-a="restart">Restart match</button>' : ''}
+          ${(h.more ?? []).map((b, i) => `<button data-more="${i}">${b.label}</button>`).join('')}
           <button data-a="quit">${h.quitLabel ?? 'Quit to menu'}</button>
         </div>
+        ${h.players ? `<h3>Players</h3>${h.players}` : ''}
         ${h.teams ? `<h3>Teams</h3>${h.teams}` : ''}
         <div class="fields"></div>
         <h3>Controls</h3>
@@ -781,7 +882,8 @@ export function pauseMenu(h: { resume: () => void; restart: () => void; quit: ()
   m.querySelector('.fields')!.replaceWith(settingsFields(h.audio, showControls));
   showControls();
   m.querySelector('[data-a=resume]')!.addEventListener('click', h.resume);
-  m.querySelector('[data-a=restart]')!.addEventListener('click', h.restart);
+  if (h.restart) m.querySelector('[data-a=restart]')!.addEventListener('click', h.restart);
+  (h.more ?? []).forEach((b, i) => m.querySelector(`[data-more="${i}"]`)!.addEventListener('click', b.on));
   m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
   return m;
 }
@@ -791,12 +893,15 @@ export function endScreen(
   human: number,
   victory: boolean,
   h: { rematch: () => void; newMap: () => void; quit: () => void },
+  /** a networked match (#162): players' character names, and its own buttons in place of rematch / new map / menu */
+  net?: { names: Record<number, string>; buttons: { label: string; primary?: boolean; on: () => void }[]; note?: string },
 ): HTMLDivElement {
+  const nameOf = (id: number) => net?.names[id] ?? FACTION_NAMES[id];
   const rows = w.factions
     .filter((f) => f.active && f.id !== NEUTRAL)
     .map(
       (f) => `<tr class="${f.id === human ? 'me' : ''}${f.eliminated ? ' dead' : ''}">
-        <td><i style="background:${FACTION_HEX[f.id]}"></i>${FACTION_NAMES[f.id]}${f.id === human ? ' (you)' : ''}</td>
+        <td><i style="background:${FACTION_HEX[f.id]}"></i>${nameOf(f.id)}${f.id === human ? ' (you)' : ''}</td>
         <td>${f.stats.spawned}</td><td>${f.stats.kills}</td><td>${f.stats.lost}</td><td>${f.stats.captured}</td><td>${f.stats.peak}</td>
         <td>${f.eliminated ? formatTime(f.eliminatedTick) : '—'}</td></tr>`,
     )
@@ -818,16 +923,32 @@ export function endScreen(
         </div>
       </div>
     </div>`);
-  m.querySelector('[data-a=rematch]')!.addEventListener('click', h.rematch);
-  m.querySelector('[data-a=newmap]')!.addEventListener('click', h.newMap);
-  m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
+  if (net) {
+    const row = m.querySelector('.row.end')!;
+    row.innerHTML = net.note ? `<span class="hint">${net.note}</span>` : '';
+    for (const b of net.buttons) {
+      const btn = document.createElement('button');
+      btn.textContent = b.label;
+      if (b.primary) btn.className = 'primary';
+      btn.addEventListener('click', b.on);
+      row.appendChild(btn);
+    }
+  } else {
+    m.querySelector('[data-a=rematch]')!.addEventListener('click', h.rematch);
+    m.querySelector('[data-a=newmap]')!.addEventListener('click', h.newMap);
+    m.querySelector('[data-a=quit]')!.addEventListener('click', h.quit);
+  }
   requestAnimationFrame(() => drawChart(m.querySelector('.chart') as HTMLCanvasElement, w));
   return m;
 }
 
 /** "You won by domination", "Magenta won by elimination", ... */
 function how(w: World, human: number): string {
-  if (w.winReason === 'fallen') return 'The line broke: <b>your capital fell</b>';
+  if (w.winReason === 'fallen') {
+    const ds = w.siege?.defenders ?? [];
+    if (ds.length <= 1) return 'The line broke: <b>your capital fell</b>';
+    return `The line broke: <b>${ds.every((d) => d.lostAt >= 0) ? 'every capital fell' : 'a capital fell'}</b>`;
+  }
   if (w.winnerTeam < 0 || !w.winReason) return w.factions[human]?.eliminated ? 'You were eliminated' : 'Match over';
   const mine = w.winnerTeam === w.teamOf[human];
   const face = w.factions.find((f) => f.active && f.id !== NEUTRAL && f.team === w.winnerTeam && !f.eliminated) ?? w.factions.find((f) => f.team === w.winnerTeam);

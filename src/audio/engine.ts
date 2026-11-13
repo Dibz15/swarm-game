@@ -528,6 +528,24 @@ export class AudioEngine {
     this.tone(this.ui, 180, 0.16, 'square', 0.035, { slide: 0.8 });
   }
 
+  /** Someone came into the room (#184): two soft rising notes. */
+  joined(): void {
+    if (!this.ctx || !this.throttle('joined', 200)) return;
+    [7, 12].forEach((st, i) => this.tone(this.ui, this.note(st), 0.22, 'triangle', 0.04, { delay: i * 0.09 }));
+  }
+
+  /** Someone left the room (#184): the same two notes, falling. */
+  left(): void {
+    if (!this.ctx || !this.throttle('left', 200)) return;
+    [7, 0].forEach((st, i) => this.tone(this.ui, this.note(st), 0.22, 'triangle', 0.03, { delay: i * 0.09 }));
+  }
+
+  /** Start's countdown (#184): a tick for 3, 2, 1, and a higher one at go. */
+  countTick(n: number): void {
+    if (!this.ctx) return;
+    this.tone(this.ui, this.note(n > 0 ? 12 : 24), n > 0 ? 0.12 : 0.3, 'sine', 0.05);
+  }
+
   // ---- world events ----------------------------------------------------------
 
   death(x: number, y: number, faction: number): void {

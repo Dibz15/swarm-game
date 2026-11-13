@@ -1,0 +1,483 @@
+import { describe, expect, it } from 'vitest';
+import { HostLobby, type StartInfo } from '../src/net/lobby';
+import { epochFor, rankOf, type NetMatch } from '../src/net/match';
+import { rebuildState } from '../src/net/sequencer';
+import { encodeMsg, msgKind } from '../src/net/codec';
+import { nudgeWorld, type DesyncReport } from '../src/net/desync';
+import { LOBBY_KINDS } from '../src/net/transport';
+import { DT } from '../src/sim/constants';
+import { play, prefs, ROOM_KEY } from './rig';
+
+/** Every hash each peer reports from now on, by tick, and the longest wait each saw between new turns. */
+function watch(matches: Map<string, NetMatch>, clock: { now: number }) {
+  const hashes = new Map<string, Map<number, number>>();
+  const gap = new Map<string, number>();
+  for (const [id, m] of matches) {
+    const mine = new Map<number, number>();
+    hashes.set(id, mine);
+    m.session.onHash = (t, h) => mine.set(t, h);
+    let last = clock.now, worst = 0;
+    let tick = m.session.world.tick;
+    gap.set(id, 0);
+    m.session.beforeStep = (t) => {
+      if (t <= tick) return;
+      tick = t;
+      worst = Math.max(worst, clock.now - last);
+      last = clock.now;
+      gap.set(id, worst);
+    };
+  }
+  /** among these peers: ticks all reported, and those where they disagreed */
+  const agree = (ids: string[]) => {
+    const maps = ids.map((id) => hashes.get(id)!);
+    const common = [...maps[0].keys()].filter((t) => maps.every((x) => x.has(t)));
+    return { common: common.length, bad: common.filter((t) => new Set(maps.map((x) => x.get(t))).size > 1) };
+  };
+  return { agree, gap };
+}
+
+/** Orders a seat gave that never ran, after everything in flight has had time to land. */
+function unrun(m: NetMatch): number {
+  const s = m.session;
+  const mine = s.log.filter((e) => e.cmd.p === s.localSeat).length;
+  return s.issued - mine - s.queued;
+}
+
+describe('who takes over (#166)', () => {
+  it('ranks desktop before phone, then seat; epochs put the round first and the best rank highest', () => {
+    const peers = [
+      { seat: 3, team: 3, peer: 'c', mobile: false },
+      { seat: 1, team: 1, peer: 'a', mobile: true },
+      { seat: 2, team: 2, peer: 'b', mobile: false },
+    ];
+    expect(rankOf(peers)).toEqual(['b', 'c', 'a']);
+    expect(epochFor(1, 0)).toBeGreaterThan(epochFor(1, 1));
+    expect(epochFor(2, 5)).toBeGreaterThan(epochFor(1, 0));
+    expect(epochFor(1, 0)).toBeGreaterThan(0);
+  });
+
+  it('a state rebuilt from the turn log matches the live sequencer’s', () => {
+    const { matches, run, orders } = play();
+    run(20_000);
+    orders(false);
+    run(3000); // nothing pending: every order taken is in a closed turn
+    const seq = matches.get('H')!.seq!;
+    const live = seq.exportState();
+    const seats = live.seats.map((r) => ({ seat: r.seat, team: r.team, peer: r.peer }));
+    const built = rebuildState({ epoch: live.epoch, next: live.next, seats, history: seq.closedTurns() });
+    expect(built.next).toBe(live.next);
+    expect(live.pending).toEqual([]);
+    for (const r of live.seats) {
+      const b = built.seats.find((x) => x.seat === r.seat)!;
+      expect(b.highSeq).toBe(r.highSeq);
+      expect(new Set(b.seen)).toEqual(new Set(r.seen.filter((s) => s > r.highSeq - 512)));
+      expect(b.state).toBe(r.state);
+      expect(b.peer).toBe(r.peer);
+    }
+    expect(built.pause).toEqual(live.pause);
+  });
+});
+
+describe('hosting moves (#166)', () => {
+  it('graceful: the host leaves, the next player carries on from its state, and nobody waits', () => {
+    const { matches, run, clock, leave } = play();
+    run(20_000);
+    const { agree, gap } = watch(matches, clock);
+    const seatA = matches.get('A')!.session.localSeat;
+    const leaders: number[] = [];
+    matches.get('B')!.events.onLeader = (seat) => leaders.push(seat);
+    const h = matches.get('H')!;
+    expect(h.handOff()).toBe(true);
+    run(150); // what leaveMatch does: H runs on until it goes
+    matches.delete('H');
+    h.close();
+    leave('H');
+    run(15_000);
+    expect(matches.get('A')!.runner).toBe(true);
+    expect(leaders).toEqual([seatA]);
+    // a turn every tick, as if nothing happened
+    expect(gap.get('B')!).toBeLessThan(250);
+    expect(gap.get('A')!).toBeLessThan(250);
+    const { common, bad } = agree(['A', 'B']);
+    expect(common).toBeGreaterThan(10);
+    expect(bad).toEqual([]);
+    for (const m of matches.values()) expect(m.session.paused).toBe(false);
+  });
+
+  it('ungraceful: the host vanishes, the players notice within seconds, elect one, and lose no orders', () => {
+    const { matches, run, clock, kill, orders } = play();
+    run(20_000);
+    const { agree, gap } = watch(matches, clock);
+    const lost: string[] = [];
+    for (const id of ['A', 'B']) matches.get(id)!.session.onReject = (_s, why) => why === 'lost' && lost.push(id);
+    const epoch0 = matches.get('A')!.session.currentEpoch;
+    kill('H');
+    run(15_000);
+    orders(false);
+    run(5000);
+    expect(matches.get('A')!.runner).toBe(true);
+    expect(matches.get('B')!.session.currentEpoch).toBeGreaterThan(epoch0);
+    expect(gap.get('B')!).toBeLessThan(2500);
+    const { common, bad } = agree(['A', 'B']);
+    expect(common).toBeGreaterThan(10);
+    expect(bad).toEqual([]);
+    expect(lost).toEqual([]);
+    for (const id of ['A', 'B']) expect(unrun(matches.get(id)!)).toBe(0);
+  });
+
+  it('a partition: the cut-off side elects, the host on its own steps down when it hears, and resyncs once', () => {
+    const { matches, run, clock, silence, heal } = play({ guests: ['A', 'B', 'C'], bot: false });
+    run(15_000);
+    let resyncs = 0;
+    matches.get('H')!.session.onAdopt = () => resyncs++;
+    silence('H', 'A');
+    silence('H', 'B');
+    run(10_000);
+    // A and B miss the host, C still hears it: a majority of the rest, so A leads, and C goes with it
+    expect(matches.get('A')!.runner).toBe(true);
+    expect(matches.get('C')!.session.leader).toBe(matches.get('A')!.session.leader);
+    heal('H', 'A');
+    heal('H', 'B');
+    run(10_000);
+    expect(matches.get('H')!.runner).toBe(false);
+    expect(resyncs).toBe(1);
+    // from here on (the stretch H played alone was replaced by the resync), all four agree
+    const { agree } = watch(matches, clock);
+    run(10_000);
+    const { common, bad } = agree(['H', 'A', 'B', 'C']);
+    expect(common).toBeGreaterThan(5);
+    expect(bad).toEqual([]);
+  });
+
+  it('chained: the host vanishes, then the new one leaves too; the third carries on', () => {
+    const { matches, run, kill, leave } = play();
+    run(10_000);
+    kill('H');
+    run(8000);
+    expect(matches.get('A')!.runner).toBe(true);
+    const a = matches.get('A')!;
+    expect(a.handOff()).toBe(true);
+    run(150);
+    matches.delete('A');
+    a.close();
+    leave('A');
+    run(8000);
+    const b = matches.get('B')!;
+    expect(b.runner).toBe(true);
+    expect(Math.floor(b.session.currentEpoch / 8)).toBe(2);
+    const t = b.session.world.tick;
+    run(3000);
+    expect(b.session.world.tick).toBeGreaterThan(t + 2 / DT);
+  });
+
+  it('two players: when the host leaves, the one left hosts itself and plays on against the other’s Easy bot', () => {
+    const { matches, run, quit } = play({ guests: ['A'], botSecs: 30 });
+    run(10_000);
+    const seatH = matches.get('H')!.session.localSeat;
+    const seen: [number, string][] = [];
+    matches.get('A')!.events.onSeat = (seat, state) => seen.push([seat, state]);
+    expect(matches.get('H')!.handOff()).toBe(true);
+    run(150);
+    quit('H');
+    run(40_000);
+    expect(matches.get('A')!.runner).toBe(true);
+    expect(seen).toEqual([
+      [seatH, 'away'],
+      [seatH, 'bot'],
+    ]);
+  });
+
+  it('two players: when the host vanishes instead, the one left can’t tell it from its own connection dying, and waits (#191)', () => {
+    const { matches, run, kill } = play({ guests: ['A'], botSecs: 30 });
+    run(10_000);
+    const seen: [number, string][] = [];
+    matches.get('A')!.events.onSeat = (seat, state) => seen.push([seat, state]);
+    kill('H');
+    run(40_000);
+    expect(matches.get('A')!.runner).toBe(false);
+    expect(matches.get('A')!.lonely).toBe(true);
+    expect(seen).toEqual([]);
+  });
+
+  it('a phone takes over last: with A on a phone, B hosts next', () => {
+    const { matches, run, kill } = play({ mobile: ['A'] });
+    run(10_000);
+    kill('H');
+    run(8000);
+    expect(matches.get('B')!.runner).toBe(true);
+    expect(matches.get('A')!.runner).toBe(false);
+    expect(matches.get('A')!.leaderSeat).toBe(matches.get('B')!.session.localSeat);
+  });
+
+  it('the room moves with hosting: the new host ends the match, everyone is back in its lobby, and it starts the next one', () => {
+    const rm = play();
+    const { matches, run, gs, leave } = rm;
+    run(10_000);
+    const host = matches.get('H')!;
+    expect(host.handOff()).toBe(true);
+    run(150);
+    matches.delete('H');
+    host.close();
+    leave('H');
+    run(3000);
+    const [a, b] = gs;
+    expect(matches.get('A')!.runner).toBe(true);
+    // what main.ts does on `onLeader`: A runs the room from its last state, B follows A's lobby
+    a.lobby.close();
+    // the old lobby is gone from the router: its link to the old host says nothing on A's screen
+    let linkNews = 0;
+    a.lobby.onHostLink = () => linkNews++;
+    a.r.transport.onLink?.('H', 'lost');
+    expect(linkNews).toBe(0);
+    const room = new HostLobby(a.r.view(LOBBY_KINDS), {
+      build: 'test',
+      char: 0,
+      prefs: prefs(),
+      seed: a.lobby.state!.seed,
+      clock: () => rm.clock.now,
+      roomKey: ROOM_KEY,
+      takeOver: { state: a.lobby.state!, connected: matches.get('A')!.livePeers(), setup: matches.get('A')!.session.setup },
+    });
+    b.lobby.follow('A');
+    room.announce();
+    expect(b.lobby.state!.host).toBe('A');
+    // End match: back to the lobby; the old host's seat opens up
+    room.backToLobby();
+    expect(b.lobby.state!.phase).toBe('lobby');
+    expect(room.state.rows.some((r) => r.k === 'human' && r.peer === 'H')).toBe(false);
+    room.setMap({ size: 'medium' });
+    const starts: StartInfo[] = [];
+    b.lobby.onStart = (s) => starts.push(s);
+    const setup = rm.startNow({ lobby: room })!;
+    expect(setup.size).toBe('medium');
+    expect(starts.length).toBe(1);
+    expect(starts[0].host).toBe('A');
+  });
+});
+
+describe('election edge cases (#166 review)', () => {
+  /** a private field, read for the test's sake */
+  const peek = <T,>(m: NetMatch, k: string) => (m as unknown as Record<string, T>)[k];
+
+  it('a candidate keeps its claim over a lower-ranked player’s lead that crossed it', () => {
+    const { matches, run, kill, inject } = play({ guests: ['A', 'B', 'C'], bot: false });
+    run(10_000);
+    kill('H');
+    // step until A is collecting turns as a candidate
+    for (let i = 0; i < 400 && !peek(matches.get('A')!, 'candidate'); i++) run(16);
+    const cand = peek<{ epoch: number } | null>(matches.get('A')!, 'candidate');
+    expect(cand).not.toBeNull();
+    // B's lead, from a claim of its own one rank down, arrives now
+    const ranks = [...matches.values()].map((m) => ({ seat: m.session.localSeat, team: 0, peer: [...matches].find(([, x]) => x === m)![0], mobile: false }));
+    const lowB = epochFor(1, rankOf(ranks).indexOf('B'));
+    expect(lowB).toBeLessThan(cand!.epoch);
+    inject('B', 'A', encodeMsg({ k: 'lead', epoch: lowB, next: matches.get('B')!.session.heldTick + 1 }));
+    run(4000);
+    expect(matches.get('A')!.runner).toBe(true);
+    const t = matches.get('C')!.session.world.tick;
+    run(3000);
+    expect(matches.get('C')!.session.world.tick).toBeGreaterThan(t + 2 / DT);
+  });
+
+  it('a player still waiting for its snapshot votes for a new host, but isn’t chosen; then gets its world from the new one', () => {
+    const { matches, run, kill, quit, rejoin, clock } = play({ botSecs: 30 });
+    run(8000);
+    quit('A');
+    run(2000);
+    rejoin('A', 'A2');
+    kill('H'); // before A2's snapshot came: it's syncing, and stays so until someone hosts
+    expect(matches.get('A2')!.session.syncing).toBe(true);
+    run(12_000);
+    expect(matches.get('B')!.runner).toBe(true);
+    expect(matches.get('A2')!.runner).toBe(false);
+    expect(matches.get('A2')!.session.syncing).toBe(false);
+    const { agree } = watch(matches, clock);
+    run(8000);
+    const { common, bad } = agree(['B', 'A2']);
+    expect(common).toBeGreaterThan(5);
+    expect(bad).toEqual([]);
+  });
+
+  it('hosting is never handed to a player without a world', () => {
+    const { matches, run, inject } = play();
+    run(5000);
+    const h = matches.get('H')!;
+    const seatB = matches.get('B')!.session.localSeat;
+    expect(h.successorSeat()).toBe(matches.get('A')!.session.localSeat);
+    // A says it's waiting for a snapshot: B is next
+    inject('A', 'H', encodeMsg({ k: 'beat', epoch: 0, ok: true, hidden: false, syncing: true, t: 0, echo: -1, held: 0 }));
+    expect(h.successorSeat()).toBe(seatB);
+  });
+
+  it('after handing off, the old host still answers its successor’s claim with its turns', () => {
+    const { matches, run, inject, routerOf, silence, heal } = play();
+    run(5000);
+    const h = matches.get('H')!;
+    // A misses a second of turns, and its last ack (forged here, stale in life) says it has them all
+    silence('H', 'A');
+    run(1000);
+    heal('H', 'A');
+    const closed = h.seq!.closed;
+    inject('A', 'H', encodeMsg({ k: 'ack', tick: closed, seq: 0, rtt: 0, buffer: 2 }));
+    expect(matches.get('A')!.session.heldTick).toBeLessThan(closed - 10);
+    // count the turns H sends A from here
+    const r = routerOf('A');
+    const prev = r.transport.onMessage!;
+    let fromH = 0;
+    r.transport.onMessage = (peer, bytes) => {
+      if (peer === 'H' && bytes[0] === encodeMsg({ k: 'turns', epoch: 0, first: 1, list: [{ entries: [] }] })[0]) fromH++;
+      prev(peer, bytes);
+    };
+    // the handoff sends nothing (A "has" it all), so A must claim; H answers with what A lacks
+    expect(h.handOff()).toBe(true);
+    expect(fromH).toBeGreaterThan(0);
+    expect(matches.get('A')!.runner).toBe(false); // still collecting
+    matches.delete('H');
+    run(1000);
+    expect(matches.get('A')!.runner).toBe(true);
+    expect(matches.get('A')!.session.heldTick).toBeGreaterThanOrEqual(closed);
+  });
+
+  it('a host that still beats but no longer sends turns is replaced', () => {
+    const { matches, run, inject, clock } = play({ guests: ['A', 'B', 'C'], bot: false });
+    run(8000);
+    // a forged claim makes H step down and wait for a lead that never comes; H keeps beating
+    inject('C', 'H', encodeMsg({ k: 'claim', epoch: 200, held: matches.get('H')!.session.heldTick }));
+    expect(matches.get('H')!.runner).toBe(false);
+    // the deposed host waits on the claimant, never on itself
+    expect(matches.get('H')!.leaderSeat).toBe(matches.get('C')!.session.localSeat);
+    run(8000);
+    const hosts = [...matches].filter(([, m]) => m.host).map(([id]) => id);
+    expect(hosts.length).toBe(1);
+    const { agree } = watch(matches, clock);
+    run(6000);
+    const ids = [...matches.keys()];
+    const { common, bad } = agree(ids);
+    expect(common).toBeGreaterThan(3);
+    expect(bad).toEqual([]);
+  });
+});
+
+describe('election edge cases (#166, second review)', () => {
+  const peek = <T,>(o: object, k: string) => (o as unknown as Record<string, T>)[k];
+
+  it('a host slow to start (still building its world) is not taken for gone', () => {
+    const { matches, run } = play({ guests: ['A'] });
+    run(4000, ['H']); // H's page hasn't started its match yet: not a word from it
+    expect(matches.get('A')!.runner).toBe(false);
+    run(4000);
+    expect(matches.get('H')!.runner).toBe(true);
+    expect(matches.get('A')!.runner).toBe(false);
+    expect(matches.get('A')!.session.world.tick).toBeGreaterThan(2 / DT);
+  });
+
+  it('two players, graceful: the leaving host never claims back in its last moments', () => {
+    const { matches, run, leave, routerOf } = play({ guests: ['A'] });
+    run(20_000); // well past the start: the host is past its first-word grace
+    const t = routerOf('H').transport;
+    const send = t.send.bind(t);
+    let claims = 0;
+    t.send = (peer, bytes) => {
+      if (msgKind(bytes) === 'claim') claims++;
+      send(peer, bytes);
+    };
+    // A's answer to the handoff (its lead) is still on its way back when H goes: H hears nothing from A
+    const hear = t.onMessage!;
+    t.onMessage = (peer, bytes) => peer !== 'A' && hear(peer, bytes);
+    const h = matches.get('H')!;
+    expect(h.handOff()).toBe(true);
+    run(150);
+    expect(claims).toBe(0);
+    matches.delete('H');
+    h.close();
+    leave('H');
+    run(5000);
+    expect(matches.get('A')!.runner).toBe(true);
+    expect(matches.get('A')!.session.paused).toBe(false);
+  });
+
+  it('hosting passes during a desync halt: the new host looks at everyone’s worlds again, and can resync', () => {
+    const { matches, run, clock, leave } = play({ guests: ['A', 'B', 'C'], bot: false });
+    const seatC = matches.get('C')!.session.localSeat;
+    matches.get('C')!.session.beforeStep = (t, w) => void (t === 301 && nudgeWorld(w));
+    run(30_000);
+    for (const m of matches.values()) expect(m.session.halted).toBeGreaterThan(0);
+    const a = matches.get('A')!;
+    let report: DesyncReport | null = null;
+    a.events.onDesyncReport = (r) => (report = r);
+    const h = matches.get('H')!;
+    expect(h.handOff()).toBe(true);
+    run(150);
+    matches.delete('H');
+    h.close();
+    leave('H');
+    run(6000);
+    expect(a.runner).toBe(true);
+    expect(report).not.toBeNull();
+    expect(report!.odd).toEqual([seatC]);
+    expect(report!.first).toMatch(/energy/);
+    expect(a.resync()).toBe(true);
+    const { agree } = watch(matches, clock);
+    run(15_000);
+    for (const m of matches.values()) expect(m.session.paused).toBe(false);
+    const { common, bad } = agree(['A', 'B', 'C']);
+    expect(common).toBeGreaterThan(3);
+    expect(bad).toEqual([]);
+  });
+
+  it('a player that ran past the fork forwards none of the turns it stepped there', () => {
+    const { matches, run } = play();
+    run(5000);
+    const b = matches.get('B')!.session;
+    const next = b.world.tick - 20;
+    b.follow('A', b.currentEpoch + 9, next);
+    const log = b.closedTurns();
+    expect(log.first + log.turns.length).toBe(next);
+  });
+
+  it('a handoff that reaches a player still waiting for its snapshot lapses: it never hosts', () => {
+    const { matches, run, quit, rejoin, inject } = play({ botSecs: 30 });
+    run(8000);
+    quit('A');
+    run(2000);
+    rejoin('A', 'A2');
+    const a2 = matches.get('A2')!;
+    expect(a2.session.syncing).toBe(true);
+    const h = matches.get('H')!;
+    inject('H', 'A2', encodeMsg({ k: 'handoff', epoch: epochFor(1, 0), state: JSON.stringify(h.seq!.exportState()) }));
+    run(1000);
+    expect(a2.runner).toBe(false);
+    expect(h.runner).toBe(true);
+    run(5000);
+    expect(a2.session.syncing).toBe(false);
+  });
+
+  it('an order given during a long pause stays on record after it runs, for a fork to send again', () => {
+    const { matches, run, clock } = play();
+    run(10_000);
+    const h = matches.get('H')!;
+    const b = matches.get('B')!.session;
+    const again = b.log.filter((e) => e.cmd.p === b.localSeat).at(-1)!.cmd;
+    h.session.setPaused(true);
+    run(5000);
+    const seq = b.issue(again); // the world is stopped: it waits for the resume
+    run(40_000);
+    h.session.setPaused(false);
+    run(5000);
+    const landed = peek<Map<number, { at: number; issuedAt: number }>>(b, 'landed');
+    // issued 45 s ago, but it ran only just now
+    expect(clock.now - landed.get(seq)!.issuedAt).toBeGreaterThan(30_000);
+  });
+
+  it('a pause the vanished host was in the middle of keeps only what was left of its allowance', () => {
+    const { matches, run, kill } = play();
+    run(5000);
+    matches.get('H')!.session.setPaused(true);
+    run(100_000); // 20 s of the 120 s left
+    expect(matches.get('A')!.session.paused).toBe(true);
+    kill('H');
+    run(28_000);
+    expect(matches.get('A')!.runner).toBe(true);
+    expect(matches.get('A')!.session.paused).toBe(false);
+  });
+});

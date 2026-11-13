@@ -2,7 +2,9 @@
 // of matches, so a change meant to keep results identical can be checked
 // against the code before it (run on both, diff the output).
 //   npx vite-node scripts/hashtrace.ts > after.txt
+//   npx vite-node scripts/hashtrace.ts 60 --full   (fullHash: every bit of state, as clients compare it)
 import { worldHash } from '../src/sim/hash';
+import { fullHash } from '../src/sim/snapshot';
 import { createWorld, type MatchSetup } from '../src/sim/setup';
 import { step } from '../src/sim/step';
 import { Kind, TICK_HZ } from '../src/sim/constants';
@@ -48,7 +50,11 @@ for (const [n, terrain] of [[1500, 'none'], [3000, 'standard'], [2000, 'heavy']]
   CASES.push([name, { ...bots(99, 2), size: 'large', terrain, events: 'calm' }]);
 }
 
-const secs = Number(process.argv[2] ?? 240);
+const args = process.argv.slice(2);
+const secs = Number(args.find((a) => !a.startsWith('--')) ?? 240);
+if (!(secs > 0)) throw new Error(`hashtrace: bad length ${secs}`);
+// worldHash rounds positions and skips RNG, bot and timer state; fullHash is the whole world, bit for bit
+const hash = args.includes('--full') ? fullHash : worldHash;
 for (const [name, setup] of CASES) {
   const w = createWorld(setup);
   if (BLOBS[name]) blobs(w, BLOBS[name]);
@@ -57,7 +63,7 @@ for (const [name, setup] of CASES) {
     step(w, []);
     w.fx = [];
     w.deaths = [];
-    if (t % TICK_HZ === 0) out.push(worldHash(w).toString(16));
+    if (t % TICK_HZ === 0) out.push(hash(w).toString(16));
   }
   console.log(`${name}: tick ${w.tick} units ${w.count} ${out.join(' ')}`);
 }

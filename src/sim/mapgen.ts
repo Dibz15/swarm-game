@@ -133,8 +133,8 @@ export interface MapParams {
   typeWeights?: readonly number[];
   /** how nests are spread (default: picked by the seed) */
   layout?: MapLayout | 'random';
-  /** this player's capital is walled in: a warlord's stronghold (#100), or you, holding the line (#67) */
-  fortress?: number;
+  /** these players' capitals are walled in: a warlord's stronghold (#100), or the defenders holding the line (#67, #228) */
+  fortress?: number | readonly number[];
   /** the map's large-scale form (default: picked by the seed, to suit its terrain and caves) */
   form?: MapForm | 'random';
   /** what fills an open form (default: picked by the seed); cave forms ignore it, and noise replaces a cave belt */
@@ -629,7 +629,16 @@ export function generateMap(p: MapParams): MapSpec {
   const spec: MapSpec = { width: w, height: h, nests, terrain, events, layout, aspect: w / h, density, form, topology: cp?.topology, fill };
   // A fortress goes up last, on its own stream: the rest is the same map.
   // Every wild-swarm spawn must reach it too (Hold the line's waves come from them).
-  if (p.fortress !== undefined) spec.fortress = fortify(spec, p.fortress, p.size, new Rng(p.seed ^ 0x51f0a7), events.swarmSpawns) ?? undefined;
+  // Co-op Hold the line (#228) walls in every defender, each on a stream of its own.
+  const forts = p.fortress === undefined ? [] : typeof p.fortress === 'number' ? [p.fortress] : p.fortress;
+  // Earlier fortresses' walls are kept when a later one clears its ground.
+  const built = new Set<object>();
+  forts.forEach((f, i) => {
+    const before = new Set<object>(spec.terrain.walls);
+    const info = fortify(spec, f, p.size, new Rng((p.seed ^ 0x51f0a7) + i * 7919), events.swarmSpawns, built) ?? undefined;
+    for (const c of spec.terrain.walls) if (!before.has(c)) built.add(c);
+    if (i === 0) spec.fortress = info;
+  });
   if (p.keys) markKeys(spec, P, p.keys);
   return spec;
 }

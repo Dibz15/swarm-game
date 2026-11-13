@@ -1,5 +1,7 @@
 import { FACTION_NAMES } from '../content/factions';
 import { hex, type GameView } from '../game/gameView';
+
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 import { isMobile, LAYOUT_EVENT } from './mobile';
 import { MISSIONS } from '../game/tutorial';
 import { ALLY_MARK, sideOf, teamLayout, teamName, teamsLine, teamsList, verb, type TeamGroup, type TeamLayout } from './teams';
@@ -28,7 +30,7 @@ const TIPS = [
   'Click one of your nests, then right-click somewhere to set its rally point.',
   'Select a nest and press U to feed it dots and level it up.',
   'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
-  'Hold 70% of the nests (60% on large maps) for 30 seconds to win by domination.',
+  'Hold 70% of the nests (60% on large maps; more in a team match, most for the bigger team) for 30 seconds to win by domination. The mark on the nest bar shows your line.',
   'Your count at the top is army / supply cap. Every nest you hold raises the cap; at the cap your nests stop producing.',
   'Ctrl+5–9 saves a control group, 5–9 recalls it. C centers the camera on your selection, 0 fits the map.',
   'Each nest type you hold unlocks a power: Forge → Fortify (R), Spire → Barrage (F), Den → Blink (G), Bastion → Lockdown (T).',
@@ -60,6 +62,10 @@ const ENEMY_TIPS = [
   'Enemy Raiders: guard your nests',
 ];
 
+/** An order delay this long shows amber, and this long red (#161; raised in #198): the HUD's and the pause menu's. */
+export const DELAY_WARN_MS = 200;
+export const DELAY_BAD_MS = 350;
+
 export type HudAction =
   | 'all' | 'surge' | 'nova' | 'upgrade' | 'clear' | 'nearest' | 'pause' | 'mute'
   | 'fortify' | 'barrage' | 'blink' | 'lockdown' | 'skip' | 'go' | 'next';
@@ -70,6 +76,9 @@ export function formatTime(ticks: number): string {
 }
 
 /** DOM heads-up display. Refreshed ~10x/s so it never costs layout every frame. */
+/** How long GO shows (#235), ticks. */
+const GO_TICKS = Math.round(1.2 * TICK_HZ);
+
 export class Hud {
   readonly el: HTMLDivElement;
   private bar: HTMLDivElement;
@@ -79,6 +88,10 @@ export class Hud {
   private chipKey = '';
   /** the start banner and the strip's popover (#74), and the match they were made for */
   private teamBanner: HTMLDivElement;
+  /** "you are here" on your home nest at the start (#235) */
+  private youTag: HTMLDivElement;
+  /** the opening's end (#235): everyone can move */
+  private goBanner: HTMLDivElement;
   private teamPop: HTMLDivElement;
   private teamsGame: GameView | null = null;
   /** the match's teams, fixed at its start, and each faction's group (#74) */
@@ -87,11 +100,18 @@ export class Hud {
   /** the tick the popover last refreshed */
   private popTick = 0;
   private clock: HTMLSpanElement;
+  /** networked: how long orders take (#161) */
+  private ping: HTMLSpanElement;
   private sel: HTMLDivElement;
   private energyFill: HTMLDivElement;
   private energyText: HTMLSpanElement;
   private btn: Record<string, HTMLButtonElement> = {};
   private toasts: HTMLDivElement;
+  /** a line that stays up (#183): you're out, rejoining, a bot is playing for you… */
+  private bannerEl: HTMLDivElement;
+  private bannerKey = '';
+  /** a faction's name as players know it: their character's in a room, else the colour's */
+  names: (faction: number) => string = (f) => FACTION_NAMES[f];
   private dom: HTMLDivElement;
   private heartBar: HTMLDivElement;
   private warlordChip: HTMLDivElement;
@@ -150,7 +170,10 @@ export class Hud {
         <div class="team-pop"></div>
       </div>
       <div class="team-banner" title="Tap to hide"></div>
+      <div class="you-tag">YOU</div>
+      <div class="go-banner">GO</div>
       <div class="hud-tr">
+        <span class="ping" hidden title="How long your orders take to land, round trip included"></span>
         <span class="clock">0:00</span>
         <button class="icon" data-a="mute" title="Mute (M)">♪</button>
         <button class="icon" data-a="pause" title="Pause (Esc)">❚❚</button>
@@ -161,6 +184,7 @@ export class Hud {
       <div class="heartbar"><div class="heart-name">The Bloom's heart</div><div class="heart-hp"><i></i></div><div class="heart-ward"></div></div>
       <div class="dom"><div class="dom-time"></div><div class="dom-text"></div><div class="dom-bar"><i></i></div></div>
       <div class="toasts"></div>
+      <div class="hud-banner" hidden><span></span><div class="banner-btns"></div></div>
       <div class="nestcard"></div>
       <div class="aimhint"><span></span><button class="cancel">Cancel</button></div>
       <div class="tip"><span></span><button class="x" title="Hide tips">✕</button></div>
@@ -227,6 +251,8 @@ export class Hud {
     this.bar = q('.strength');
     this.chips = q('.chips');
     this.teamBanner = q('.team-banner');
+    this.youTag = q('.you-tag');
+    this.goBanner = q('.go-banner');
     this.teamPop = q('.team-pop');
     // Who's on your team, at any time: tap the strip (#74).
     this.chips.addEventListener('click', (e) => {
@@ -245,10 +271,12 @@ export class Hud {
       this.teamBanner.classList.remove('on');
     });
     this.clock = q('.clock');
+    this.ping = q('.ping');
     this.sel = q('.selinfo');
     this.energyFill = q('.energy .fill');
     this.energyText = q('.energy span');
     this.toasts = q('.toasts');
+    this.bannerEl = q('.hud-banner');
     this.dom = q('.dom');
     this.heartBar = q('.heartbar');
     this.warlordChip = q('.warlord-chip');
@@ -306,6 +334,24 @@ export class Hud {
 
   setMuted(m: boolean): void {
     this.btn.mute.classList.toggle('off', m);
+  }
+
+  /** Show a line that stays until replaced or cleared (null), with optional buttons. */
+  banner(text: string | null, buttons: { label: string; on: () => void; primary?: boolean }[] = []): void {
+    const key = text === null ? '' : `${text}|${buttons.map((b) => b.label).join('|')}`;
+    if (key === this.bannerKey) return;
+    this.bannerKey = key;
+    this.bannerEl.hidden = text === null;
+    (this.bannerEl.firstElementChild as HTMLElement).textContent = text ?? '';
+    const row = this.bannerEl.lastElementChild as HTMLElement;
+    row.innerHTML = '';
+    for (const b of buttons) {
+      const btn = document.createElement('button');
+      btn.className = `small${b.primary ? ' primary' : ''}`;
+      btn.textContent = b.label;
+      btn.addEventListener('click', b.on);
+      row.append(btn);
+    }
   }
 
   toast(msg: string, color = '#cfd6ff'): void {
@@ -492,8 +538,15 @@ export class Hud {
     const text = `Hold ${formatTime(left)}`;
     if (clock.textContent !== text) clock.textContent = text;
     const lost = this.siege.children[2] as HTMLElement;
-    lost.style.display = sg.lostAt >= 0 ? 'block' : 'none';
-    if (sg.lostAt >= 0) lost.textContent = `Retake your capital: ${formatTime(Math.max(0, SIEGE.retake - (w.tick - sg.lostAt)))}`;
+    // The fallen capital to retake first: yours, else the one closest to gone (co-op, #228).
+    let fallen: (typeof sg.defenders)[number] | undefined;
+    for (const d of sg.defenders) if (d.lostAt >= 0 && (!fallen || (d.f === g.human) > (fallen.f === g.human) || ((d.f === g.human) === (fallen.f === g.human) && d.lostAt < fallen.lostAt))) fallen = d;
+    lost.style.display = fallen ? 'block' : 'none';
+    if (fallen) {
+      const left = SIEGE.retake - (w.tick - fallen.lostAt);
+      const whose = fallen.f === g.human ? 'your capital' : "an ally's capital";
+      lost.textContent = left > 0 ? `Retake ${whose}: ${formatTime(left)}` : `Retake ${whose} before the clock runs out`;
+    }
     // The Bloom's nests in the field: what taking them would save you.
     const held = sg.bloomNests.filter((id) => w.nests[id].owner === NEUTRAL).length;
     const bloom = this.siege.children[3] as HTMLElement;
@@ -531,6 +584,41 @@ export class Hud {
     }`;
   }
 
+  /**
+   * Every frame, not at the 10 Hz of the rest: a power you just used shows
+   * as pending at once, until it lands (#161).
+   */
+  syncPending(g: GameView): void {
+    if (!g.session.net) return;
+    for (const k of ['surge', 'nova', 'fortify', 'barrage', 'blink', 'lockdown', 'upgrade'] as const) this.btn[k].classList.toggle('pending', g.pending.has(k));
+  }
+
+  /**
+   * You are here (#235): YOU on your home nest for the first seconds (by its
+   * edge arrow while it's off screen). Every frame, after the camera moves,
+   * so it keeps up with the map.
+   */
+  placeYou(g: GameView): void {
+    // GO, as the opening ends (#235): not for a match joined after it
+    const w = g.world;
+    const go = w.opening > 0 && w.tick >= w.opening && w.tick < w.opening + GO_TICKS;
+    if (go !== this.goBanner.classList.contains('on')) {
+      this.goBanner.style.setProperty('--c', hex(g.human >= 0 ? g.human : 6));
+      this.goBanner.classList.toggle('on', go);
+    }
+    const you = g.youAt;
+    const t = this.youTag;
+    t.classList.toggle('on', !!you);
+    if (!you) return;
+    const c = hex(g.human);
+    if (t.style.getPropertyValue('--c') !== c) t.style.setProperty('--c', c);
+    t.classList.toggle('below', you.place === 'below');
+    t.classList.toggle('edge', you.place === 'edge');
+    const shift = you.place === 'above' ? '-50%, -100%' : you.place === 'below' ? '-50%, 0' : '-50%, -50%';
+    t.style.transform = `translate(${you.tx}px, ${you.ty}px) translate(${shift})`;
+    t.style.opacity = String(you.level);
+  }
+
   update(g: GameView, dt: number): void {
     this.game = g;
     this.updateSiege(g);
@@ -546,7 +634,13 @@ export class Hud {
 
     const w = g.world;
     const mobile = isMobile();
-    this.clock.textContent = formatTime(w.tick);
+    // the match's time starts at GO (#235)
+    this.clock.textContent = formatTime(Math.max(0, w.tick - w.opening));
+    // Out and watching (#183): nothing to command, so no bar of orders
+    if (this.bottom.hidden !== g.spectating) {
+      this.bottom.hidden = g.spectating;
+      this.counters.hidden = g.spectating;
+    }
     // Floating panels sit above the bottom bar, whose height depends on what's in it.
     this.el.style.setProperty('--hudb', `${this.bottom.offsetHeight}px`);
     this.updateCoach(g, mobile);
@@ -598,6 +692,7 @@ export class Hud {
       seg.style.flexGrow = String(w.unitCount[f.id] / total + 0.0001);
       const chip = this.chipEls[k];
       chip.classList.toggle('dead', f.eliminated);
+      chip.classList.toggle('lit', f.id === g.human && !!g.youAt);
       if (f.id === g.human) {
         // Your own chip shows supply: army / cap, red while production is blocked.
         const sp = g.supply();
@@ -608,19 +703,21 @@ export class Hud {
       const side = layout.team ? this.groupOf.get(f.id) : undefined;
       chip.title =
         f.id === g.human
-          ? `${FACTION_NAMES[f.id]} (you). Army / supply cap: nests stop producing at the cap. Take or upgrade nests to raise it.`
+          ? `${this.names(f.id)} (you). Army / supply cap: nests stop producing at the cap. Take or upgrade nests to raise it.`
           : side
-            ? `${FACTION_NAMES[f.id]}: ${side.mine ? 'your ally' : 'enemy'} (team ${side.letter}). Tap the strip for every team.`
-            : FACTION_NAMES[f.id];
+            ? `${this.names(f.id)}: ${side.mine ? 'your ally' : 'enemy'} (team ${side.letter}). Tap the strip for every team.`
+            : this.names(f.id);
     });
 
     // Nest share: one segment per faction, unheld nests left empty.
     if (this.nestShare.children.length !== active.length) {
       this.nestShare.innerHTML = active.map((f) => `<i style="background:${hex(f.id)}"></i>`).join('');
     }
-    this.domMark.style.left = `${w.domShare * 100}%`;
+    // Your team's line (#213: in a team match each team has its own).
+    const domShare = w.domShareOf(g.human >= 0 ? w.teamOf[g.human] : -1);
+    this.domMark.style.left = `${domShare * 100}%`;
     // No domination win in this match (a share past 1, #146): no marker.
-    this.domMark.style.display = w.domShare > 1 ? 'none' : '';
+    this.domMark.style.display = domShare > 1 ? 'none' : '';
     active.forEach((f, k) => {
       (this.nestShare.children[k] as HTMLElement).style.width = `${(100 * nestsOf(f.id)) / Math.max(1, w.nests.length)}%`;
     });
@@ -673,9 +770,18 @@ export class Hud {
       ((this.dom.children[2] as HTMLElement).children[0] as HTMLElement).style.width = `${100 * ds.frac}%`;
     }
 
-    // Energy and buttons.
+    // Networked (#161): how long orders take, amber and red as in the pause menu's table (#198)
+    if (g.session.net) {
+      const ms = Math.round(g.session.expectedDelayMs());
+      this.ping.hidden = false;
+      this.ping.textContent = `${ms} ms`;
+      this.ping.classList.toggle('warn', ms >= DELAY_WARN_MS && ms < DELAY_BAD_MS);
+      this.ping.classList.toggle('bad', ms >= DELAY_BAD_MS);
+    }
+
+    // Energy and buttons. Energy that orders on their way will spend (#161) already shows as spent.
     const me = w.factions[g.human];
-    const e = me ? me.energy : 0;
+    const e = me ? Math.max(0, me.energy - g.pending.cost()) : 0;
     this.energyFill.style.width = `${e}%`;
     let crystals = 0;
     for (const c of w.crystals) if (c.holder === g.human) crystals++;
@@ -755,6 +861,14 @@ export class Hud {
     // for the selected nest, only while no dots are selected with it.
     let hn = w.nests[g.hoverNest];
     if (!hn && mobile && nUnits === 0) for (const id of g.selection.nests) hn = hn ?? w.nests[id];
+    // A spectator taps to see whose things are whose (#183).
+    const ins = g.spectating ? g.inspect : null;
+    if (!hn && ins && 'nest' in ins) hn = w.nests[ins.nest];
+    if (!hn && ins && 'owner' in ins) {
+      this.nestCard.innerHTML = `<b style="color:${hex(ins.owner)}">${esc(this.names(ins.owner))}</b><br><small>${ins.count} dots here · ${w.unitCount[ins.owner]} in all · ⬡${w.nests.filter((n) => n.owner === ins.owner).length}</small>`;
+      this.nestCard.style.display = 'block';
+      return;
+    }
     if (hn && mobile) {
       const next = hn.owner === g.human && hn.level < MAX_LEVEL ? `<br><small>Upgrade: ${UPGRADE_COST[hn.level]} dots → ${LEVEL_PERKS[hn.level + 1]}</small>` : '';
       const s = layout.team ? sideOf(w, g.human, hn.owner) : null;
@@ -771,10 +885,10 @@ export class Hud {
             : s === 'you'
               ? 'Yours'
               : !layout.team
-                ? FACTION_NAMES[hn.owner]
+                ? this.names(hn.owner)
                 : s === 'ally'
-                  ? `${ALLY_MARK} Ally: ${FACTION_NAMES[hn.owner]}`
-                  : `Enemy: ${FACTION_NAMES[hn.owner]}`;
+                  ? `${ALLY_MARK} Ally: ${this.names(hn.owner)}`
+                  : `Enemy: ${this.names(hn.owner)}`;
       const next = hn.level < MAX_LEVEL ? `<br>Next: <b>Lv${hn.level + 1}</b> for ${UPGRADE_COST[hn.level]} dots (U): ${LEVEL_PERKS[hn.level + 1]}` : '';
       const has = hn.level > 1 ? `<br>Lv${hn.level}: ${LEVEL_PERKS.slice(2, hn.level + 1).join('; ')}` : '';
       this.nestCard.innerHTML = `<b style="color:${hn.owner >= 0 ? hex(hn.owner) : '#8a90a6'}">${hn.capital ? 'Capital ' : ''}${NEST_NAMES[hn.type]}</b> Lv${hn.level}/${MAX_LEVEL} — ${owner}<br><small>${NEST_BLURB[hn.type]}${hn.capital ? ' Has a built-in turret and armors its defenders.' : ''}${has}${hn.owner === g.human ? next : ''}</small>`;

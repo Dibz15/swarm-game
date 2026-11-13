@@ -199,8 +199,7 @@ function pierceLine(w: World, i: number, t: number, base: number): void {
 }
 
 const callScratch: number[] = [];
-/** Swarm-call rings drawn this tick: a big clash shows a few, not one per death. */
-let callFxTick = -1, callFx = 0;
+/** Swarm-call rings drawn per tick (counted on the world): a big clash shows a few, not one per death. */
 const CALL_FX_PER_TICK = 3;
 
 /** Swarm-call (#60): a dying Swarmer rouses the Swarmers around it. */
@@ -208,8 +207,8 @@ function swarmCall(w: World, i: number): void {
   const owner = w.owner[i];
   queryRadius(w, w.x[i], w.y[i], STRAINS.call.radius, callScratch);
   for (const j of callScratch) if (j !== i && w.owner[j] === owner && w.kind[j] === Kind.Dot) w.called[j] = w.tick + STRAINS.call.ticks;
-  if (callFxTick !== w.tick) (callFxTick = w.tick), (callFx = 0);
-  if (callFx++ < CALL_FX_PER_TICK) pushFx(w, 'swarmCall', w.x[i], w.y[i], owner, STRAINS.call.radius);
+  if (w.callFxTick !== w.tick) (w.callFxTick = w.tick), (w.callFx = 0);
+  if (w.callFx++ < CALL_FX_PER_TICK) pushFx(w, 'swarmCall', w.x[i], w.y[i], owner, STRAINS.call.radius);
 }
 
 /** Share of a hit unit i actually takes: home armour, Surge, Fortify and Phalanx (not the heart's ward). */

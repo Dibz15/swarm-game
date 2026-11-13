@@ -6,7 +6,7 @@ import { updateHeart } from './heart';
 import { updateSiege } from './siege';
 import { Rng } from './rng';
 import { queryRadius } from './spatial';
-import { pushFx, removeUnit, spawnUnit, WILD_COLOSSUS, WILD_SWARM, type Colossus, type Swarm, type World } from './world';
+import { pushFx, removeUnit, spawnUnit, WILD_COLOSSUS, WILD_SWARM, type Colossus, type Drop, type Swarm, type World } from './world';
 
 /**
  * Living-map events: wild swarms, supply drops, the Colossus and garrison
@@ -141,12 +141,12 @@ export function steerSwarm(w: World, sw: Swarm): void {
   cy /= n;
 
   // Candidates: player nests plus a stride sample of player units. A siege
-  // wave (#67) only hunts its quarry, and goes for the nearest of its nests.
+  // wave (#67) only hunts its quarry (a team, #228), and goes for the nearest of its nests.
   candX.length = candY.length = 0;
   if (sw.hunt !== undefined) {
     let bd = Infinity;
     for (const nest of w.nests) {
-      if (nest.owner !== sw.hunt) continue;
+      if (nest.owner < 0 || nest.owner === NEUTRAL || w.teamOf[nest.owner] !== sw.hunt) continue;
       // The capital is the prize; raiders pick off the outer nests first.
       const d = (nest.x - cx) ** 2 + (nest.y - cy) ** 2 + (nest.capital === !!sw.raid ? 1e8 : 0);
       if (d < bd) (bd = d), (sw.tx = nest.x), (sw.ty = nest.y);
@@ -279,37 +279,11 @@ const counts = new Int32Array(NUM_FACTIONS);
 
 function updateDrops(w: World): void {
   const ev = w.events!;
-  const STEP = 6;
   ev.drops = ev.drops.filter((d) => {
     if (w.tick >= d.expires) return false;
-    if (w.tick < d.lands || w.tick % STEP !== 0) return true;
-    // Who's on it? Raiders count triple, as on nests; wild units only block.
-    counts.fill(0);
-    queryRadius(w, d.x, d.y, EVENTS.dropRadius, scratch);
-    let team = -1, lead = -1, mixed = false, total = 0;
-    for (const s of scratch) {
-      if (w.ghost[s]) continue;
-      const o = w.owner[s];
-      if (team >= 0 && w.teamOf[o] !== team) mixed = true;
-      if (team < 0) team = w.teamOf[o];
-      counts[o] += w.kind[s] === Kind.Swift ? TRAITS.raidCapture : 1;
-      if (lead < 0 || counts[o] > counts[lead]) lead = o;
-      total += w.kind[s] === Kind.Swift ? TRAITS.raidCapture : 1;
-    }
-    if (mixed || lead < 0 || lead === NEUTRAL) return true;
-    const rate = (EVENTS.dropBase + EVENTS.dropPerUnit * Math.min(total, 20)) * DT * STEP * Math.max(1, w.factions[lead].mods.dropFavour);
-    if (d.holder >= 0 && w.teamOf[d.holder] !== w.teamOf[lead]) {
-      // Someone else's progress drains first, twice as fast.
-      d.progress -= rate * 2;
-      if (d.progress <= 0) {
-        d.progress = 0;
-        d.holder = lead;
-      }
-      return true;
-    }
-    d.holder = lead;
-    d.progress += rate;
-    if (d.progress < 1) return true;
+    if (w.tick < d.lands || w.tick % DROP_STEP !== 0) return true;
+    const lead = captureDrop(w, d);
+    if (lead < 0) return true;
     const f = w.factions[lead];
     // The biggest army only gets the energy: drops are a comeback tool.
     const upgraded = lead === armyLeader(w) ? 0 : grantUpgrade(w, lead);
@@ -317,6 +291,43 @@ function updateDrops(w: World): void {
     pushFx(w, 'dropTaken', d.x, d.y, lead, EVENTS.dropRadius, upgraded ? upgraded : -1);
     return false;
   });
+}
+
+/** Drops are checked every this-many ticks. */
+export const DROP_STEP = 6;
+
+/**
+ * One capture step on a landed drop (supply drops, and co-op boon drops,
+ * #228): the only team on it fills `progress`; someone else's drains first,
+ * twice as fast. Returns the faction that just completed it, or -1.
+ */
+export function captureDrop(w: World, d: Drop): number {
+  // Who's on it? Raiders count triple, as on nests; wild units only block.
+  counts.fill(0);
+  queryRadius(w, d.x, d.y, EVENTS.dropRadius, scratch);
+  let team = -1, lead = -1, mixed = false, total = 0;
+  for (const s of scratch) {
+    if (w.ghost[s]) continue;
+    const o = w.owner[s];
+    if (team >= 0 && w.teamOf[o] !== team) mixed = true;
+    if (team < 0) team = w.teamOf[o];
+    counts[o] += w.kind[s] === Kind.Swift ? TRAITS.raidCapture : 1;
+    if (lead < 0 || counts[o] > counts[lead]) lead = o;
+    total += w.kind[s] === Kind.Swift ? TRAITS.raidCapture : 1;
+  }
+  if (mixed || lead < 0 || lead === NEUTRAL) return -1;
+  const rate = (EVENTS.dropBase + EVENTS.dropPerUnit * Math.min(total, 20)) * DT * DROP_STEP * Math.max(1, w.factions[lead].mods.dropFavour);
+  if (d.holder >= 0 && w.teamOf[d.holder] !== w.teamOf[lead]) {
+    d.progress -= rate * 2;
+    if (d.progress <= 0) {
+      d.progress = 0;
+      d.holder = lead;
+    }
+    return -1;
+  }
+  d.holder = lead;
+  d.progress += rate;
+  return d.progress < 1 ? -1 : lead;
 }
 
 /** Level up a faction's lowest nest that can still grow. Returns its id + 1, or 0. */

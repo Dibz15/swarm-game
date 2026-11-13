@@ -29,7 +29,23 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+      # Clients must agree bit for bit: the sim has to hash the same under
+      # JavaScriptCore (iOS Safari, via Bun) as under V8 (Node) (#160).
+      # fullHash, as clients compare it: worldHash rounds and skips state.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Same world hashes under Bun and Node
+        run: |
+          npx vite-node scripts/hashtrace.ts 60 --full > hash-node.txt
+          bun scripts/hashtrace.ts 60 --full > hash-bun.txt
+          diff hash-node.txt hash-bun.txt
+
       - run: npm run build
+        env:
+          # The TURN credentials Worker (#163); unset: players connect directly only.
+          VITE_TURN_URL: ${{ vars.VITE_TURN_URL }}
 
       # Hand the built site to the deploy jobs.
       - uses: actions/upload-artifact@v4

@@ -22,6 +22,7 @@
 import { barrageLaunch, feedNeed, hasPower, surgeCost, type Command } from '../sim/commands';
 import { LEVEL, MAX_LEVEL, NEUTRAL, NestType, POWER, TICK_HZ, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, bastionTurret } from '../sim/constants';
 import { heartSlot, standingNests } from '../sim/heart';
+import { POWER_LOCK } from '../sim/mods';
 import { queryRadius } from '../sim/spatial';
 import { inArmy, type Nest, type World } from '../sim/world';
 
@@ -123,7 +124,7 @@ export interface ProxyOptions {
   knobs?: Partial<ProxyKnobs>;
   /** skill 0..1 (default 1); explicit knobs override it */
   skill?: number;
-  /** Nova is locked (campaign: a client-side lock the sim doesn't know about) */
+  /** Nova is locked (on top of a lock in the faction's mods, which the proxy always honours) */
   novaLocked?: boolean;
   /** blob size at which it goes for a stronghold's citadel (default CITADEL_BLOB; low = a rush) */
   citadelBlob?: number;
@@ -147,6 +148,14 @@ export class Proxy {
   private pushFrom = 0;
   private readonly novaLocked: boolean;
   private readonly citadelBlob: number;
+  /**
+   * The tick think() last saw. Its periodic decisions fire when a multiple
+   * of their period has passed since then, so a caller that steps several
+   * ticks between calls (a net client catching up) doesn't skip them, and
+   * one that calls twice on a tick doesn't decide twice. Called once per
+   * tick, that is exactly `tick % period === 0`.
+   */
+  private seen: number | null = null;
 
   /** Hostile units within r of (x, y); neutral garrisons (which never move) don't count. */
   private near(w: World, x: number, y: number, r: number): number {
@@ -213,6 +222,10 @@ export class Proxy {
 
   think(w: World): Command[] {
     const out: Command[] = [];
+    const t = w.tick;
+    const prev = this.seen !== null && this.seen <= t ? this.seen : t - 1;
+    this.seen = t;
+    const due = (period: number) => Math.floor(t / period) > Math.floor(prev / period);
     const me = this.f;
     if (w.factions[me].eliminated) return out;
 
@@ -233,8 +246,8 @@ export class Proxy {
     cx /= army.length;
     cy /= army.length;
 
-    if (w.tick % TICK_HZ === 0) this.powers(w, army, out);
-    if (w.tick % Math.max(1, Math.round(this.k.every * TICK_HZ)) !== 0) return out;
+    if (due(TICK_HZ)) this.powers(w, army, out);
+    if (!due(Math.max(1, Math.round(this.k.every * TICK_HZ)))) return out;
 
     const mine = w.nests.filter((n) => n.owner === me);
     const enemyNests = w.nests.filter((n) => this.hostile(w, n.owner));
@@ -287,9 +300,10 @@ export class Proxy {
       by /= blob.length;
       // Hold the line (#67): the capital is everything. While anything hostile
       // is near it, or once it has fallen, the whole blob goes home for it.
-      const sg = w.siege;
-      if (sg && sg.human === me) {
-        const cap = w.nests[sg.capital];
+      // In co-op (#228), each defender minds its own capital.
+      const defender = w.siege?.defenders.find((d) => d.f === me);
+      if (defender) {
+        const cap = w.nests[defender.capital];
         if (cap.owner !== me || this.near(w, cap.x, cap.y, SIEGE_ALARM) > 0) {
           if (this.goal !== cap.id || w.tick - this.lastOrder >= this.k.refresh * TICK_HZ) {
             out.push({ t: 'move', p: me, units: blob.map((s) => w.uid[s]), x: cap.x, y: cap.y, nest: cap.id });
@@ -336,7 +350,6 @@ export class Proxy {
       const pushing = this.mode === 'counter' && this.pushFrom > 0;
       const bled = pushing && mySize < this.pushFrom * this.k.bleed;
       if (bled) this.pushFrom = 0;
-      const need = Math.ceil(w.nests.length * w.domShare);
       const held = new Map<number, number>();
       for (const n of w.nests) if (n.owner >= 0) held.set(w.teamOf[n.owner], (held.get(w.teamOf[n.owner]) ?? 0) + 1);
       // A rival nearing the domination share is everyone's problem: like the
@@ -351,6 +364,7 @@ export class Proxy {
           if (w.domTicks[team] > 0) leaders.add(team), (racing = true);
           continue;
         }
+        const need = w.domNeed(team);
         if (k < need - this.k.domWatch) continue;
         leaders.add(team);
         if (k >= need) racing = true;
@@ -504,7 +518,8 @@ export class Proxy {
       out.push(c);
       this.lastPower[c.t] = w.tick;
     };
-    if (!this.novaLocked && most >= 20 && own.length >= 15 && e >= POWER.novaCost && this.ready(w, 'nova')) cast({ t: 'nova', p: me, units: own });
+    const novaLocked = this.novaLocked || (w.factions[me].mods.lockedPowers & POWER_LOCK.nova) !== 0;
+    if (!novaLocked && most >= 20 && own.length >= 15 && e >= POWER.novaCost && this.ready(w, 'nova')) cast({ t: 'nova', p: me, units: own });
     else if (ne >= 12 && e >= POWER.barrageCost && this.ready(w, 'barrage') && hasPower(w, me, 'barrage') && barrageLaunch(w, me, ex / ne, ey / ne)) cast({ t: 'barrage', p: me, x: ex / ne, y: ey / ne });
     else if (this.mode === 'punish' && own.length >= 10 && e >= POWER.fortifyCost && this.ready(w, 'fortify') && hasPower(w, me, 'fortify')) cast({ t: 'fortify', p: me, units: own });
     else if (own.length >= (flush ? 3 : 6) && e >= surgeCost(w, me) && (flush || this.ready(w, 'surge'))) cast({ t: 'surge', p: me, units: own });

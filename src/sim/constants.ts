@@ -2,6 +2,12 @@
 
 export const TICK_HZ = 30;
 export const DT = 1 / TICK_HZ;
+/**
+ * A skirmish or room match's opening (#235): this many ticks where the world
+ * waits (no orders, no bots, no spawning) while everyone sees the map and
+ * their home, then GO. Part of the setup, so every peer starts together.
+ */
+export const OPENING_TICKS = 3 * TICK_HZ;
 export const MAX_UNITS = 8192;
 /** 6 playable colors + 1 neutral faction. Faction id == color index. */
 export const NUM_FACTIONS = 7;
@@ -277,6 +283,15 @@ export type NestPower = keyof typeof POWER_NEST;
 export const DOMINATION = {
   /** share of all nests a team must hold, by map size; large maps need less so endgames don't drag */
   share: { small: 0.7, medium: 0.7, large: 0.6 } as Record<string, number>,
+  /**
+   * Team matches (#213): a team starts with its players' slice of the map, so it
+   * must hold that slice plus this share of the rest. 2v2 needs 80%; in a 3v2,
+   * the three need 84% and the two 76%. A lone player among teams lands near
+   * the FFA share. Above 0.5 so that beating one of two rivals is never enough;
+   * the same on every size, since in bot probes (scripts/team-dom-probe.ts) it
+   * fires once the losers have lost ~85-90% of their land, on medium and large.
+   */
+  take: 0.6,
   ticks: 30 * TICK_HZ,
 };
 

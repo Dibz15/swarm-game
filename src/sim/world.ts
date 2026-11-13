@@ -104,7 +104,11 @@ export type FxType =
   | 'capitalRetaken'
   | 'boonOffer'
   | 'boonTaken'
-  | 'swarmCall';
+  /** co-op (#228): a boon drops for faction `f`; `prev` is its index in the boon list */
+  | 'boonDrop'
+  | 'swarmCall'
+  /** the command at index `r` of this tick's list did nothing; `nest` is its reason (an index into REJECTS) */
+  | 'cmdFail';
 
 export interface SurgeState {
   /** ticks: the warning, then the first wave; waves after it come `every` apart */
@@ -185,7 +189,7 @@ export interface Swarm {
   uids: number[];
   tx: number;
   ty: number;
-  /** a siege wave (#67): it hunts this faction, whatever else is near: its capital, or (raiders) its nearest other nest */
+  /** a siege wave (#67): it hunts this team (#228), whatever else is near: its nearest capital, or (raiders) its nearest other nest */
   hunt?: number;
   raid?: boolean;
 }
@@ -240,11 +244,11 @@ export interface SiegeState {
   waves: Wave[];
   /** the next wave to come (index) */
   next: number;
-  /** the defender and its capital nest */
-  human: number;
-  capital: number;
-  /** tick the capital fell, or -1 */
-  lostAt: number;
+  /**
+   * The defenders (#228: one in solo, up to four in a room, all on one team):
+   * each faction, its capital nest, and the tick that capital fell (or -1).
+   */
+  defenders: Defender[];
   spawns: [number, number][];
   /** the field's nests (neutral at the start): each one the Bloom still holds makes the waves bigger */
   bloomNests: number[];
@@ -254,6 +258,22 @@ export interface SiegeState {
   offerAt: number;
   /** boons taken so far */
   boons: BoonId[];
+  /** co-op (#228): boons dropped on the field instead of offered; whoever captures one gets it */
+  drops: BoonDrop[];
+}
+
+/** A defender of the line (#228). */
+export interface Defender {
+  f: number;
+  capital: number;
+  lostAt: number;
+  /** co-op: where this defender's boons drop, outside its walls (null in solo, or if there's no room) */
+  drop: [number, number] | null;
+}
+
+/** A boon dropped on the field in co-op (#228): captured like a supply drop. */
+export interface BoonDrop extends Drop {
+  id: BoonId;
 }
 
 /** Holding the line (#67): what you can pick between waves. */
@@ -386,6 +406,10 @@ export class World {
   siege: SiegeState | null = null;
   bots: Bot[] = [];
 
+  /** Swarm-call rings drawn this tick (combat.ts): per world, so restored or parallel worlds don't share it */
+  callFxTick = -1;
+  callFx = 0;
+
   /** attacker/target pairs this tick; attacker < 0 means nest -(a+1) */
   readonly beams = new Int32Array(MAX_UNITS * 2 + 512);
   beamCount = 0;
@@ -399,10 +423,17 @@ export class World {
 
   /** share of nests a team must hold for DOMINATION.ticks to win */
   domShare = 0.7;
+  /**
+   * Team matches (#213): each team's own share, from its starting slice of the
+   * map; 0 (FFA, or a share the setup fixed) means `domShare`.
+   */
+  readonly domShares = new Float64Array(NEUTRAL_TEAM + 1);
   over = false;
   winnerTeam = -1;
   /** no elimination or domination win (tutorial missions without an opponent) */
   endless = false;
+  /** the opening (#235): through this tick the world waits, then the match starts */
+  opening = 0;
   /** how the match ended */
   winReason: '' | 'elimination' | 'domination' | 'heart' | 'citadel' | 'held' | 'fallen' = '';
   /** consecutive ticks each team has held the domination share; with key nests, the team past KEYS.threat (its score) */
@@ -436,6 +467,16 @@ export class World {
       this.teamOf[f] = f === NEUTRAL ? NEUTRAL_TEAM : f;
       this.history.push([]);
     }
+  }
+
+  /** the share of nests `team` must hold to dominate */
+  domShareOf(team: number): number {
+    return (team >= 0 && this.domShares[team]) || this.domShare;
+  }
+
+  /** how many nests `team` must hold to dominate */
+  domNeed(team: number): number {
+    return Math.ceil(this.nests.length * this.domShareOf(team));
   }
 
   setTeam(f: number, team: number): void {

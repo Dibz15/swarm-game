@@ -1,5 +1,7 @@
 import { Kind, LEVEL, MAX_LEVEL, NEUTRAL, PACTS, POWER, POWER_NEST, UNIT_STATS, UPGRADE_COST, UPGRADE_PICK_RADIUS, TICK_HZ, VARIANTS, type NestPower } from './constants';
 import { clamp } from './mathx';
+import { POWER_LOCK } from './mods';
+import { sanitizeCommand } from './sanitize';
 import { takeBoon } from './siege';
 import { queryRadius } from './spatial';
 import { inArmy, pushFx, removeUnit, spawnUnit, UNIT_FEEDING, type Nest, type World } from './world';
@@ -26,7 +28,8 @@ export type Command =
 
 /** True if p holds (fully controls) a nest that grants this power. */
 export function hasPower(w: World, p: number, power: NestPower): boolean {
-  if (w.factions[p].mods.noPowers) return false;
+  const mods = w.factions[p].mods;
+  if (mods.noPowers || mods.lockedPowers & POWER_LOCK[power]) return false;
   const type = POWER_NEST[power];
   if (!(w.factions[p].nestTypes & (1 << type))) return false;
   for (const n of w.nests) if (n.owner === p && n.type === type && n.control >= 1) return true;
@@ -203,18 +206,31 @@ function pay(w: World, p: number, cost: number, group: number[] | null, keep: nu
   return group ? rest : [];
 }
 
-const POWERS = new Set<Command['t']>(['surge', 'nova', 'fortify', 'barrage', 'blink', 'lockdown']);
+/**
+ * Why a command did nothing (#161): the sender's client clears its pending
+ * marker and says so. `upgrade` already has its own effect (upgradeFail).
+ */
+export type Reject = 'invalid' | 'locked' | 'units' | 'cost' | 'power' | 'target' | 'needless' | 'upgrade';
+export const REJECTS: readonly Reject[] = ['invalid', 'locked', 'units', 'cost', 'power', 'target', 'needless', 'upgrade'];
 
-export function applyCommand(w: World, c: Command): void {
+const isPower = (t: Command['t']): t is keyof typeof POWER_LOCK => t in POWER_LOCK;
+
+/**
+ * Apply one command. It may come from a remote peer, so it is sanitized first
+ * (#154) and dropped if malformed; then it is checked against what p may do.
+ */
+export function applyCommand(w: World, cmd: Command): Reject | null {
+  const c = sanitizeCommand(w, cmd);
+  if (!c) return 'invalid';
   const f = w.factions[c.p];
-  if (!f || !f.active || f.eliminated || w.over) return;
-  // Feral (#60): no powers at all.
-  if (f.mods.noPowers && POWERS.has(c.t)) return;
+  if (!f || !f.active || f.eliminated || w.over) return 'invalid';
+  // Feral (#60): no powers at all; and powers the match locks (the campaign's Nova before it's unlocked).
+  if (isPower(c.t) && (f.mods.noPowers || f.mods.lockedPowers & POWER_LOCK[c.t])) return 'locked';
 
   switch (c.t) {
     case 'move': {
       const slots = resolve(w, c.p, c.units);
-      if (slots.length === 0) return;
+      if (slots.length === 0) return 'units';
       let x = c.x, y = c.y, nestR = 0;
       const nest = w.nests[c.nest];
       if (nest) {
@@ -231,7 +247,7 @@ export function applyCommand(w: World, c: Command): void {
         w.oy[s] = y;
         w.arrive[s] = ar;
       }
-      return;
+      return null;
     }
 
     case 'rally': {
@@ -240,15 +256,15 @@ export function applyCommand(w: World, c: Command): void {
         if (!n || n.owner !== c.p) continue;
         [n.rallyX, n.rallyY] = w.terrain.freePoint(clamp(c.x, 4, w.width - 4), clamp(c.y, 4, w.height - 4));
       }
-      return;
+      return null;
     }
 
     case 'upgrade': {
       const n = w.nests[c.nest];
       // Feeding repairs a damaged nest's control first, then levels it up.
-      if (!n || n.owner !== c.p) return;
+      if (!n || n.owner !== c.p) return 'target';
       const need = feedNeed(n);
-      if (need <= 0) return;
+      if (need <= 0) return 'needless';
       queryRadius(w, n.x, n.y, UPGRADE_PICK_RADIUS, scratch);
       const cand: number[] = [];
       for (const s of scratch) {
@@ -256,7 +272,7 @@ export function applyCommand(w: World, c: Command): void {
       }
       if (cand.length < need) {
         pushFx(w, 'upgradeFail', n.x, n.y, c.p, need - cand.length, n.id);
-        return;
+        return 'upgrade';
       }
       const d2 = (s: number) => (w.x[s] - n.x) ** 2 + (w.y[s] - n.y) ** 2;
       cand.sort((a, b) => d2(a) - d2(b) || a - b);
@@ -266,32 +282,32 @@ export function applyCommand(w: World, c: Command): void {
         w.feedNest[s] = n.id;
         n.feedIncoming++;
       }
-      return;
+      return null;
     }
 
     case 'surge': {
       const slots = pay(w, c.p, surgeCost(w, c.p), resolve(w, c.p, c.units), 1);
-      if (!slots) return;
+      if (!slots) return 'cost';
       const until = w.tick + Math.round(POWER.surgeTicks * f.mods.surgeTicks);
       for (const s of slots) w.surge[s] = until;
       const [cx, cy] = centroid(w, slots);
       pushFx(w, 'surge', cx, cy, c.p, groupArrive(slots.length) + 20);
-      return;
+      return null;
     }
 
     case 'boon':
       takeBoon(w, c.p, c.k);
-      return;
+      return null;
     case 'summon': {
       const ev = w.events;
-      if (!w.endless || !ev?.spec.params.swarm) return;
+      if (!w.endless || !ev?.spec.params.swarm) return 'invalid';
       const at = w.tick + Math.max(1, Math.round(c.secs * TICK_HZ));
       if (ev.nextSwarm < 0 || ev.nextSwarm > at) ev.nextSwarm = at;
-      return;
+      return null;
     }
     case 'nova': {
       const slots = pay(w, c.p, POWER.novaCost, resolve(w, c.p, c.units), 4);
-      if (!slots) return;
+      if (!slots) return 'cost';
       const [cx, cy] = centroid(w, slots);
       const R = novaRadius(slots.length, f.mods.novaRadius);
 
@@ -313,25 +329,26 @@ export function applyCommand(w: World, c: Command): void {
         w.vy[j] += (dy / d) * knock;
       }
       pushFx(w, 'nova', cx, cy, c.p, R);
-      return;
+      return null;
     }
 
     case 'fortify': {
-      if (!hasPower(w, c.p, 'fortify')) return;
+      if (!hasPower(w, c.p, 'fortify')) return 'power';
       const slots = pay(w, c.p, POWER.fortifyCost, resolve(w, c.p, c.units), 1);
-      if (!slots) return;
+      if (!slots) return 'cost';
       const until = w.tick + Math.round(POWER.fortifyTicks * powerBoost(w, c.p, 'fortify'));
       for (const s of slots) w.fortify[s] = until;
       const [cx, cy] = centroid(w, slots);
       pushFx(w, 'fortify', cx, cy, c.p, groupArrive(slots.length) + 14);
-      return;
+      return null;
     }
 
     case 'barrage': {
-      if (!hasPower(w, c.p, 'barrage')) return;
+      if (!hasPower(w, c.p, 'barrage')) return 'power';
       const x = clamp(c.x, 0, w.width), y = clamp(c.y, 0, w.height);
       const from = barrageLaunch(w, c.p, x, y);
-      if (!from || !pay(w, c.p, POWER.barrageCost, null, 1, from.x, from.y)) return;
+      if (!from) return 'target';
+      if (!pay(w, c.p, POWER.barrageCost, null, 1, from.x, from.y)) return 'cost';
       const r = POWER.barrageRadius * powerBoost(w, c.p, 'barrage');
       const impact = w.tick + barrageFlight(x - from.x, y - from.y);
       if (f.mods.cluster) {
@@ -342,13 +359,13 @@ export function applyCommand(w: World, c: Command): void {
         });
       } else w.barrages.push({ x, y, owner: c.p, impact, r, x0: from.x, y0: from.y, t0: w.tick });
       pushFx(w, 'barrage', x, y, c.p, f.mods.cluster ? VARIANTS.cluster.reach : r);
-      return;
+      return null;
     }
 
     case 'blink': {
-      if (!hasPower(w, c.p, 'blink')) return;
+      if (!hasPower(w, c.p, 'blink')) return 'power';
       const slots = pay(w, c.p, POWER.blinkCost, resolve(w, c.p, c.units), 1);
-      if (!slots) return;
+      if (!slots) return 'cost';
       const [cx, cy] = centroid(w, slots);
       let dx = c.x - cx, dy = c.y - cy;
       const d = Math.sqrt(dx * dx + dy * dy);
@@ -373,18 +390,19 @@ export function applyCommand(w: World, c: Command): void {
         w.arrive[s] = ar;
       }
       pushFx(w, 'blink', cx + dx, cy + dy, c.p, ar + 10, -1, -1, cx, cy);
-      return;
+      return null;
     }
 
     case 'lockdown': {
-      if (!hasPower(w, c.p, 'lockdown')) return;
+      if (!hasPower(w, c.p, 'lockdown')) return 'power';
       const n = w.nests[c.nest];
-      if (!n || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, c.p) || siphonWait(w, c.p) > 0) return;
-      if (!pay(w, c.p, POWER.lockdownCost, null, 1, n.x, n.y)) return;
+      if (!n || n.owner < 0 || n.owner === NEUTRAL || !w.hostile(n.owner, c.p) || siphonWait(w, c.p) > 0) return 'target';
+      if (!pay(w, c.p, POWER.lockdownCost, null, 1, n.x, n.y)) return 'cost';
       n.lockedUntil = w.tick + Math.round(POWER.lockdownTicks * powerBoost(w, c.p, 'lockdown') * f.mods.lockdownTicks);
       n.lockedBy = c.p;
       pushFx(w, 'lockdown', n.x, n.y, c.p, n.r, n.id, n.owner);
-      return;
+      return null;
     }
   }
+  return null;
 }
