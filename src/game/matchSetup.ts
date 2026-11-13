@@ -7,7 +7,7 @@
 import { DIFFICULTY, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
 import { hashString } from '../sim/rng';
-import type { MatchSetup } from '../sim/setup';
+import { MAX_DEFENDERS, type MatchSetup } from '../sim/setup';
 import { siegeAt, type SiegeSetup } from '../sim/siege';
 
 export interface BotRow {
@@ -211,7 +211,8 @@ export function modeProblem(s: MatchSetup, mode: MatchMode, holder: number): str
     if (s.players.some((p) => p.human && p.team === h.team)) return 'The stronghold’s side is bots only';
     if (!s.players.some((p) => p.team !== h.team)) return 'Someone has to attack the stronghold';
   }
-  if (mode === 'hold' && s.players.filter((p) => p.human).length !== 1) return 'Hold the line is for one player';
+  if (mode === 'hold' && !s.players.some((p) => p.human)) return 'Someone has to hold the line';
+  if (mode === 'hold' && s.players.filter((p) => p.human).length > MAX_DEFENDERS) return `Hold the line takes at most ${MAX_DEFENDERS} players`;
   return null;
 }
 
@@ -236,9 +237,12 @@ export function applyMode(s: MatchSetup, mode: MatchMode, o: { holder?: number; 
       // No cave rock in a fortress: it could seal the gates.
       return { ...s, caves: 'off', players, domShare: STRONGHOLD_SHARE, stronghold: { player: holder, scale: 1 + STRONGHOLD_PER_SIDE * (attackers - 1) } };
     }
-    case 'hold':
+    case 'hold': {
+      // The humans against the Bloom, together (#228): no bots, one team.
+      const players = s.players.filter((p) => p.human).map((p) => ({ ...p, team: 0 }));
       // The waves come from the map's swarm spawns: events can't be off.
-      return { ...s, caves: 'off', events: s.events === 'off' ? 'calm' : s.events, siege: skirmishSiege(o.waves ?? 1) };
+      return { ...s, players, caves: 'off', events: s.events === 'off' ? 'calm' : s.events, siege: skirmishSiege(o.waves ?? 1) };
+    }
   }
 }
 

@@ -40,6 +40,18 @@ const SETUPS: [string, MatchSetup][] = [
     },
   ],
   [
+    // co-op (#228): boon drops on the field, several defenders
+    'co-op siege',
+    {
+      seed: 6, size: 'medium', terrain: 'standard', events: 'calm',
+      siege: { seconds: 200, first: 5, every: 12, size: 8, grow: 1.12, depth: 1 },
+      players: [
+        { faction: 0, team: 0, human: true },
+        { faction: 1, team: 0, human: true },
+      ],
+    },
+  ],
+  [
     'stronghold',
     {
       seed: 3, size: 'medium', terrain: 'standard', stronghold: { player: 1 },

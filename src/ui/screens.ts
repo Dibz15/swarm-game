@@ -944,7 +944,11 @@ export function endScreen(
 
 /** "You won by domination", "Magenta won by elimination", ... */
 function how(w: World, human: number): string {
-  if (w.winReason === 'fallen') return 'The line broke: <b>your capital fell</b>';
+  if (w.winReason === 'fallen') {
+    const ds = w.siege?.defenders ?? [];
+    if (ds.length <= 1) return 'The line broke: <b>your capital fell</b>';
+    return `The line broke: <b>${ds.every((d) => d.lostAt >= 0) ? 'every capital fell' : 'a capital fell'}</b>`;
+  }
   if (w.winnerTeam < 0 || !w.winReason) return w.factions[human]?.eliminated ? 'You were eliminated' : 'Match over';
   const mine = w.winnerTeam === w.teamOf[human];
   const face = w.factions.find((f) => f.active && f.id !== NEUTRAL && f.team === w.winnerTeam && !f.eliminated) ?? w.factions.find((f) => f.team === w.winnerTeam);

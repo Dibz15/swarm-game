@@ -1,8 +1,8 @@
 import { playerCharacter } from '../game/character';
-import { applyMode, MATCH_MODES, modeProblem, personalityPicker, randomMap, randomSeed, seedOf, type MatchMode, type SetupPrefs } from '../game/matchSetup';
+import { applyMode, MATCH_MODES, modeProblem, personalityPicker, randomMap, randomSeed, seedOf, WAVE_NAMES, type MatchMode, type SetupPrefs } from '../game/matchSetup';
 import { PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
-import type { MatchSetup } from '../sim/setup';
+import { MAX_DEFENDERS, type MatchSetup } from '../sim/setup';
 import { decodeMsg, encodeMsg } from './codec';
 import type { MatchPeer } from './match';
 import { MAX_LOBBY, MAX_SEATS, PROTOCOL_VERSION, type Msg } from './protocol';
@@ -61,15 +61,17 @@ export interface LobbyState {
    * by peer id; absent: Auto, the best-placed player by measured links.
    */
   runner?: string;
-  /** the match type (#222); a room plays Conquest, Domination or Stronghold */
+  /** the match type (#222); Hold the line is co-op (#228) */
   mode: RoomMode;
   /** Stronghold: the seat (a bot's) that holds the citadel; absent: the first bot */
   holder?: number;
+  /** Hold the line: the waves' level (an index into WAVE_NAMES); absent: Normal */
+  waves?: number;
 }
 
-/** The match types a room offers (#222): Hold the line is one player's, for now. */
-export type RoomMode = Exclude<MatchMode, 'hold'>;
-export const ROOM_MODES: readonly RoomMode[] = MATCH_MODES.filter((m): m is RoomMode => m !== 'hold');
+/** The match types a room offers (#222): all of them, Hold the line in co-op (#228). */
+export type RoomMode = MatchMode;
+export const ROOM_MODES: readonly RoomMode[] = MATCH_MODES;
 
 /** The seat holding a room's stronghold: the chosen bot's, or the first bot's; -1 if no bot sits. */
 export function holderSeat(s: LobbyState): number {
@@ -110,6 +112,10 @@ function holderIndex(s: LobbyState): number {
 
 /** Why the room can't start as its match type (#222), or null. */
 export function roomProblem(s: LobbyState): string | null {
+  if (s.mode === 'hold') {
+    if (s.rows.some((r) => r.k === 'bot')) return 'Hold the line has no bots: remove them';
+    return humans(s) > MAX_DEFENDERS ? `Hold the line takes at most ${MAX_DEFENDERS} players` : null;
+  }
   if (s.mode !== 'stronghold') return null;
   const holder = holderIndex(s);
   if (holder < 0) return 'Add a bot to hold the stronghold';
@@ -126,7 +132,7 @@ export function buildNetSetup(s: LobbyState): MatchSetup {
     if (r.k === 'human') players.push({ faction: i, team, human: true });
     else if (r.k === 'bot') players.push({ faction: i, team, human: false, bot: { difficulty: r.difficulty, personality: pick(r.personality) } });
   });
-  return applyMode({ seed, ...s.map, players }, s.mode, { holder: holderIndex(s) });
+  return applyMode({ seed, ...s.map, players }, s.mode, { holder: holderIndex(s), waves: s.waves });
 }
 
 /** A lobby state from JSON, or null if it isn't one (it came over the wire). */
@@ -156,9 +162,10 @@ export function parseLobby(json: string): LobbyState | null {
       // a state from before match types (#222: a saved room or match) has none: Conquest
       (o.mode === undefined || ROOM_MODES.includes(o.mode)) &&
       (o.holder === undefined || (Number.isInteger(o.holder) && o.holder >= 0 && o.holder < MAX_SEATS)) &&
+      (o.waves === undefined || (Number.isInteger(o.waves) && o.waves >= 0 && o.waves < WAVE_NAMES.length)) &&
       uniqueSeals(o.rows);
     if (!ok) return null;
-    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs, ...(o.runner ? { runner: o.runner } : {}), mode: o.mode ?? 'conquest', ...(o.holder !== undefined ? { holder: o.holder } : {}) };
+    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs, ...(o.runner ? { runner: o.runner } : {}), mode: o.mode ?? 'conquest', ...(o.holder !== undefined ? { holder: o.holder } : {}), ...(o.waves !== undefined ? { waves: o.waves } : {}) };
   } catch {
     return null;
   }
@@ -351,8 +358,9 @@ export class HostLobby {
       seed: o.seed.slice(0, MAX_SEED_TEXT),
       rows,
       botSecs: 60,
-      // a room has no Hold the line (#222): the skirmish screen's last choice may be one
-      mode: (ROOM_MODES as readonly string[]).includes(p.mode) ? (p.mode as RoomMode) : 'conquest',
+      mode: ROOM_MODES.includes(p.mode) ? p.mode : 'conquest',
+      // prefs come from storage unchecked: a bad level would make every guest refuse the room
+      ...(Number.isInteger(p.waves) && p.waves >= 0 && p.waves < WAVE_NAMES.length ? { waves: p.waves } : {}),
     };
     if (o.takeOver) {
       // the room as it was, run from here now; its rows carry everyone's seals, so a reload still gets back in (#192)
@@ -420,6 +428,11 @@ export class HostLobby {
   /** Stronghold: this bot's seat holds the citadel (#222) */
   setHolder(seat: number): void {
     if (this.state.rows[seat]?.k === 'bot' && this.state.holder !== seat) this.edit(() => (this.state.holder = seat));
+  }
+
+  /** Hold the line: the waves' level (#228) */
+  setWaves(level: number): void {
+    if (Number.isInteger(level) && level >= 0 && level < WAVE_NAMES.length && this.state.waves !== level) this.edit(() => (this.state.waves = level));
   }
 
   /** how long a dropped player's seat idles before an Easy bot takes it (#164) */

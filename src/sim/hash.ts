@@ -43,7 +43,11 @@ export function worldHash(w: World): number {
   mix(w.citadel);
   if (w.siege) {
     mix(w.siege.next);
-    mix(w.siege.lostAt);
+    for (const d of w.siege.defenders) mix(d.lostAt);
+    for (const d of w.siege.drops) {
+      mix(Math.round(d.progress * 1000));
+      mix(d.holder);
+    }
     mix(w.siege.boons.length);
     mix(w.siege.offer ? w.siege.offer.until : -1);
   }

@@ -300,9 +300,10 @@ export class Proxy {
       by /= blob.length;
       // Hold the line (#67): the capital is everything. While anything hostile
       // is near it, or once it has fallen, the whole blob goes home for it.
-      const sg = w.siege;
-      if (sg && sg.human === me) {
-        const cap = w.nests[sg.capital];
+      // In co-op (#228), each defender minds its own capital.
+      const defender = w.siege?.defenders.find((d) => d.f === me);
+      if (defender) {
+        const cap = w.nests[defender.capital];
         if (cap.owner !== me || this.near(w, cap.x, cap.y, SIEGE_ALARM) > 0) {
           if (this.goal !== cap.id || w.tick - this.lastOrder >= this.k.refresh * TICK_HZ) {
             out.push({ t: 'move', p: me, units: blob.map((s) => w.uid[s]), x: cap.x, y: cap.y, nest: cap.id });

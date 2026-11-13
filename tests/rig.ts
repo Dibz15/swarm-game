@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { COUNTDOWN_MS, GuestLobby, HostLobby, matchPeers, seatOf, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
+import { COUNTDOWN_MS, GuestLobby, HostLobby, matchPeers, seatOf, type HostGo, type LobbyState, type RoomMode, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { LOBBY_KINDS, LoopbackHub, MATCH_KINDS, Router, type LinkState, type Transport } from '../src/net/transport';
 import { Proxy } from '../src/proxy/proxy';
@@ -163,7 +163,7 @@ export type Guest = ReturnType<ReturnType<typeof room>['guest']>;
  * host + guests (two by default, and a bot) through the lobby into running
  * NetMatches, all on one fake clock. `mobile`: which of them play on phones.
  */
-export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: string[]; bot?: boolean; runner?: string } = {}) {
+export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: string[]; bot?: boolean; runner?: string; mode?: RoomMode; waves?: number } = {}) {
   const rm = room();
   const mobile = new Set(o.mobile ?? []);
   const bots = o.bot === false ? [] : [{ faction: 5, difficulty: 1, personality: 'expander' as const, team: 1 }];
@@ -171,6 +171,8 @@ export function play(o: { botSecs?: 30 | 60 | 120; guests?: string[]; mobile?: s
   // the room opens empty (#184): the host seats its bots by hand
   for (const b of bots) h.lobby.setRow(b.faction, { k: 'bot', team: b.team, difficulty: b.difficulty, personality: b.personality });
   if (o.botSecs) h.lobby.setBotSecs(o.botSecs);
+  if (o.mode) h.lobby.setMode(o.mode);
+  if (o.waves !== undefined) h.lobby.setWaves(o.waves);
   const gs = (o.guests ?? ['A', 'B']).map((id) => rm.guest(id, { mobile: mobile.has(id) }));
   if (o.runner) h.lobby.setRunner(o.runner);
   let go: HostGo | null = null;
