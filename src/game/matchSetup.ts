@@ -7,7 +7,7 @@
 import { DIFFICULTY, PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
 import { hashString } from '../sim/rng';
-import type { MatchSetup } from '../sim/setup';
+import { MAX_DEFENDERS, type MatchSetup } from '../sim/setup';
 import { siegeAt, type SiegeSetup } from '../sim/siege';
 
 export interface BotRow {
@@ -212,6 +212,7 @@ export function modeProblem(s: MatchSetup, mode: MatchMode, holder: number): str
     if (!s.players.some((p) => p.team !== h.team)) return 'Someone has to attack the stronghold';
   }
   if (mode === 'hold' && !s.players.some((p) => p.human)) return 'Someone has to hold the line';
+  if (mode === 'hold' && s.players.filter((p) => p.human).length > MAX_DEFENDERS) return `Hold the line takes at most ${MAX_DEFENDERS} players`;
   return null;
 }
 

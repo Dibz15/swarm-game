@@ -75,7 +75,7 @@ interface Plan {
  * wave spawns) that must be able to walk to it. Its own seeded stream: the
  * rest of the map is untouched.
  */
-export function fortify(spec: MapSpec, player: number, size: MapSize, rng: Rng, reach: [number, number][] = []): FortressInfo | null {
+export function fortify(spec: MapSpec, player: number, size: MapSize, rng: Rng, reach: [number, number][] = [], keep: ReadonlySet<object> = new Set()): FortressInfo | null {
   const citadel = spec.nests.find((n) => n.player === player && n.capital !== false);
   if (!citadel) return null;
   const { width: W, height: H } = spec;
@@ -97,7 +97,8 @@ export function fortify(spec: MapSpec, player: number, size: MapSize, rng: Rng, 
   // Clear the ground: terrain on or inside the walls, and neutral nests in the way.
   const near = (x: number, y: number, pad: number) => (x - citadel.x) ** 2 + (y - citadel.y) ** 2 < (R + pad) ** 2;
   const t = spec.terrain;
-  t.walls = t.walls.filter((c) => capsuleDist(c, citadel.x, citadel.y) > R * 1.25 + 30);
+  // (Another defender's walls stay up, co-op #228: `keep`.)
+  t.walls = t.walls.filter((c) => keep.has(c) || capsuleDist(c, citadel.x, citadel.y) > R * 1.25 + 30);
   t.fields = t.fields.filter((c) => capsuleDist(c, citadel.x, citadel.y) > R * 1.25 + 30);
   t.crystals = t.crystals.filter((c) => !near(c.x, c.y, c.r + 30));
   // Cave or noise rock too (#98): carve the fortress ground out of it.

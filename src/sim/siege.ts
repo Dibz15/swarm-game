@@ -102,7 +102,8 @@ export function initSiege(w: World, s: SiegeSetup, humans: readonly number[]): v
   // More defenders, bigger and faster waves: the line is still a fight (#228). PROVISIONAL (#231).
   const k = caps.length - 1;
   const ss = k ? { ...s, size: Math.round(s.size * (1 + SIEGE.coopSize * k)), every: s.every / (1 + SIEGE.coopPace * k) } : s;
-  const defenders: Defender[] = caps.map(({ f, cap }) => ({ f, capital: cap!.id, lostAt: -1, drop: k ? dropSpot(w, cap!.x, cap!.y, spawns) : null }));
+  const others = (c: (typeof caps)[number]) => caps.filter((o) => o !== c).map(({ cap }) => [cap!.x, cap!.y] as [number, number]);
+  const defenders: Defender[] = caps.map((c) => ({ f: c.f, capital: c.cap!.id, lostAt: -1, drop: k ? dropSpot(w, c.cap!.x, c.cap!.y, spawns, others(c)) : null }));
   w.siege = {
     until: w.tick + Math.round(s.seconds * TICK_HZ),
     waves: rollWaves(new Rng(w.seed ^ 0x5e1e9e), ss, spawns, w.tick),
@@ -118,10 +119,10 @@ export function initSiege(w: World, s: SiegeSetup, humans: readonly number[]): v
 }
 
 /**
- * Where a defender's boons drop (co-op, #228): open ground outside its walls,
- * toward the Bloom's nearest spawn, that its capital can walk to.
+ * Where a defender's boons drop (co-op, #228): open ground outside its walls
+ * (and every ally's), toward the Bloom's nearest spawn, that its capital can walk to.
  */
-function dropSpot(w: World, cx: number, cy: number, spawns: [number, number][]): [number, number] | null {
+function dropSpot(w: World, cx: number, cy: number, spawns: [number, number][], allies: [number, number][]): [number, number] | null {
   let tx = w.width / 2, ty = w.height / 2, bd = Infinity;
   for (const [x, y] of spawns) {
     const d = (x - cx) ** 2 + (y - cy) ** 2;
@@ -136,6 +137,8 @@ function dropSpot(w: World, cx: number, cy: number, spawns: [number, number][]):
       const x = cx + (ux * c - uy * sn) * r, y = cy + (ux * sn + uy * c) * r;
       if (x < 40 || y < 40 || x > w.width - 40 || y > w.height - 40) continue;
       if (w.terrain.clearance(x, y) < EVENTS.dropRadius) continue;
+      // never inside a teammate's walls
+      if (allies.some(([ax, ay]) => (ax - x) ** 2 + (ay - y) ** 2 < r0 * r0)) continue;
       if (Number.isFinite(w.terrain.pathDist(x, y, cx, cy, 0))) return [x, y];
     }
   return null;
@@ -189,20 +192,23 @@ export function updateSiege(w: World): void {
   }
   // Boons: offered a little after every other wave; the first is taken if you don't choose.
   // In co-op they drop on the field instead (#228).
-  if (sg.offerAt >= 0 && w.tick >= sg.offerAt && sg.defenders.length > 1) {
+  if (sg.offerAt >= 0 && w.tick >= sg.offerAt) {
     sg.offerAt = -1;
-    dropBoons(w, sg);
-  } else if (sg.offerAt >= 0 && w.tick >= sg.offerAt) {
-    sg.offerAt = -1;
-    const rng = new Rng((w.seed ^ 0xb0b0) + sg.boons.length * 7919);
-    const pool = [...BOON_IDS];
-    const ids: BoonId[] = [];
-    while (ids.length < 3) ids.push(pool.splice(rng.int(pool.length), 1)[0]);
-    sg.offer = { ids, until: w.tick + SIEGE.boonOpen };
-    pushFx(w, 'boonOffer', 0, 0, sg.defenders[0].f);
+    if (sg.defenders.length > 1) dropBoons(w, sg);
+    else offerBoons(w, sg);
   }
   if (sg.offer && w.tick >= sg.offer.until) takeBoon(w, sg.defenders[0].f, 0);
   if (sg.drops.length) updateBoonDrops(w, sg);
+}
+
+/** Solo: three boons on the table, the first taken if you don't choose. */
+function offerBoons(w: World, sg: SiegeState): void {
+  const rng = new Rng((w.seed ^ 0xb0b0) + sg.boons.length * 7919);
+  const pool = [...BOON_IDS];
+  const ids: BoonId[] = [];
+  while (ids.length < 3) ids.push(pool.splice(rng.int(pool.length), 1)[0]);
+  sg.offer = { ids, until: w.tick + SIEGE.boonOpen };
+  pushFx(w, 'boonOffer', 0, 0, sg.defenders[0].f);
 }
 
 /** Co-op (#228): a boon drops outside each defender's walls, each a seeded pick. */

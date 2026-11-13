@@ -67,6 +67,8 @@ export interface MatchSetup {
 
 /** Most human seats a match can hold: one per player color (#156). */
 export const MAX_HUMANS = NEUTRAL;
+/** Hold the line in co-op (#228): at most this many defenders. */
+export const MAX_DEFENDERS = 4;
 
 /**
  * Reject setups the sim can't run (#156). Several human seats are fine in
@@ -78,6 +80,7 @@ export function validateSetup(setup: MatchSetup): void {
   if (humans > MAX_HUMANS) throw new Error(`MatchSetup: ${humans} human seats, at most ${MAX_HUMANS}`);
   // Hold the line in co-op (#228): every human defends, on one team.
   if (setup.siege && new Set(setup.players.filter((p) => p.human).map((p) => p.team)).size > 1) throw new Error('MatchSetup: a siege (Hold the line) has its humans on one team');
+  if (setup.siege && humans > MAX_DEFENDERS) throw new Error(`MatchSetup: a siege (Hold the line) takes at most ${MAX_DEFENDERS} defenders, not ${humans}`);
   // A human's side taking the citadel wins (#222): the holder's side is bots only, or it would win at the start.
   const holder = setup.stronghold ? setup.players[setup.stronghold.player] : undefined;
   if (setup.stronghold && (!holder || setup.players.some((p) => p.human && p.team === holder.team))) throw new Error('MatchSetup: a stronghold is held by a side of bots');

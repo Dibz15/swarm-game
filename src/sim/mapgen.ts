@@ -631,8 +631,12 @@ export function generateMap(p: MapParams): MapSpec {
   // Every wild-swarm spawn must reach it too (Hold the line's waves come from them).
   // Co-op Hold the line (#228) walls in every defender, each on a stream of its own.
   const forts = p.fortress === undefined ? [] : typeof p.fortress === 'number' ? [p.fortress] : p.fortress;
+  // Earlier fortresses' walls are kept when a later one clears its ground.
+  const built = new Set<object>();
   forts.forEach((f, i) => {
-    const info = fortify(spec, f, p.size, new Rng((p.seed ^ 0x51f0a7) + i * 7919), events.swarmSpawns) ?? undefined;
+    const before = new Set<object>(spec.terrain.walls);
+    const info = fortify(spec, f, p.size, new Rng((p.seed ^ 0x51f0a7) + i * 7919), events.swarmSpawns, built) ?? undefined;
+    for (const c of spec.terrain.walls) if (!before.has(c)) built.add(c);
     if (i === 0) spec.fortress = info;
   });
   if (p.keys) markKeys(spec, P, p.keys);

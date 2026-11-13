@@ -161,6 +161,17 @@ describe('lobby (#162)', () => {
     expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'siege' }))).toBeNull();
   });
 
+  it('a waves level from stored prefs that is out of range never reaches the room (#228)', () => {
+    const { host, guest } = room();
+    const h = host({ prefs: prefs({ mode: 'hold', waves: 7 }) });
+    const a = guest('A');
+    expect(h.lobby.state.mode).toBe('hold');
+    expect(h.lobby.state.waves).toBeUndefined();
+    expect(a.lobby.state?.mode).toBe('hold');
+    h.lobby.setWaves(2);
+    expect(a.lobby.state?.waves).toBe(2);
+  });
+
   it('a room saved before match types (#222) reads as Conquest', () => {
     const { host } = room();
     const { mode: _, ...old } = host().lobby.state;

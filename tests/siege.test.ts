@@ -290,6 +290,28 @@ describe('co-op Hold the line (#228)', () => {
     const split = coop(2);
     split.players[1].team = 1;
     expect(() => createWorld(split)).toThrow(/siege/);
+    expect(() => createWorld(coop(5))).toThrow(/at most 4/);
+  });
+
+  it('on a crowded map, a later fortress keeps the earlier ones standing, and no boon drops inside an ally\'s walls', () => {
+    for (let seed = 0; seed < 8; seed++) {
+      const forts = [0, 1, 2, 3];
+      const one = generateMap({ seed, size: 'small', players: 6, terrain: 'standard', events: 'calm', fortress: [0] });
+      const all = generateMap({ seed, size: 'small', players: 6, terrain: 'standard', events: 'calm', fortress: forts });
+      // every wall the first fortress built is still there
+      const keys = new Set(all.terrain.walls.map((c) => `${c.x1},${c.y1},${c.x2},${c.y2}`));
+      const open = generateMap({ seed, size: 'small', players: 6, terrain: 'standard', events: 'calm' });
+      const base = new Set(open.terrain.walls.map((c) => `${c.x1},${c.y1},${c.x2},${c.y2}`));
+      for (const c of one.terrain.walls) if (!base.has(`${c.x1},${c.y1},${c.x2},${c.y2}`)) expect(keys.has(`${c.x1},${c.y1},${c.x2},${c.y2}`)).toBe(true);
+    }
+    for (let seed = 0; seed < 6; seed++) {
+      const w = createWorld(coop(4, seed, SIEGE_SETUP, 'small'));
+      const caps = w.siege!.defenders.map((d) => w.nests[d.capital]);
+      for (const d of w.siege!.defenders) {
+        if (!d.drop) continue;
+        for (const c of caps) if (c.id !== d.capital) expect(Math.hypot(c.x - d.drop[0], c.y - d.drop[1])).toBeGreaterThanOrEqual(SIEGE.dropOut[0]);
+      }
+    }
   });
 
   it('walls in every defender, and every spawn and capital can walk to each', () => {

@@ -5,7 +5,7 @@ import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
 import type { Particles, Rings } from '../render/particles';
 import type { Renderer } from '../render/renderer';
-import { DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
+import { BOON_RGB, DROP_RGB as DROP_MARK, FERAL, drawWorld } from '../render/scene';
 import { BLOOM_GLOW, BLOOM_RGB, bloomNestMask, growthTarget, type BloomView } from '../render/bloom';
 import { isAlly, possessive, teamName, verb } from '../ui/teams';
 import type { AudioEngine } from '../audio/engine';
@@ -776,8 +776,8 @@ export class GameView {
         case 'boonDrop': {
           // Co-op (#228): a boon drops outside a defender's walls; capture it to take it.
           const id = (Object.keys(BOONS) as (keyof typeof BOONS)[])[e.prev];
-          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.8, c: [196, 150, 255], thick: 3 });
-          if (id) toast(`A boon drops${e.f === this.human ? ' outside your walls' : ` near ${FACTION_NAMES[e.f]}`}: ${BOONS[id].name}. Capture it!`, '#c496ff');
+          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.8, c: BOON_RGB, thick: 3 });
+          if (id) toast(`A boon drops${e.f === this.human ? ' outside your walls' : ` near ${FACTION_NAMES[e.f]}`}: ${BOONS[id].name}. Capture it!`, `rgb(${BOON_RGB.join(',')})`);
           sfx.boonOffer();
           break;
         }

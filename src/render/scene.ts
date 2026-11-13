@@ -378,7 +378,8 @@ function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
   }
 }
 
-const BOON_RGB: RGB = [196, 150, 255];
+/** co-op boon drops (#228) */
+export const BOON_RGB: RGB = [196, 150, 255];
 
 /** A drop: a falling beacon while `telegraph` runs, then its capture ring. */
 function drawDrop(r: Renderer, w: World, o: SceneOpts, d: Drop, telegraph: number, c: RGB): void {

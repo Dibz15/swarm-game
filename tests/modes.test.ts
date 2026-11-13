@@ -189,6 +189,8 @@ describe('match types in a room (#222)', () => {
     expect(createWorld(s).siege!.defenders).toHaveLength(2);
     expect(buildNetSetup({ ...humansOnly, waves: undefined }).siege).toEqual(skirmishSiege(1));
     expect(roomProblem(room({ mode: 'hold' }))).toMatch(/no bots/);
+    const crowd = room({ mode: 'hold', rows: Array.from({ length: MAX_SEATS }, (_, i) => ({ k: 'human' as const, team: i, peer: `P${i}`, char: i, mobile: false })) });
+    expect(roomProblem(crowd)).toMatch(/at most 4/);
   });
 
   it("a stronghold is held by a bot's seat: the first bot's if the chosen seat isn't one; without a bot the room plays Conquest", () => {

@@ -2,7 +2,7 @@ import { playerCharacter } from '../game/character';
 import { applyMode, MATCH_MODES, modeProblem, personalityPicker, randomMap, randomSeed, seedOf, WAVE_NAMES, type MatchMode, type SetupPrefs } from '../game/matchSetup';
 import { PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
-import type { MatchSetup } from '../sim/setup';
+import { MAX_DEFENDERS, type MatchSetup } from '../sim/setup';
 import { decodeMsg, encodeMsg } from './codec';
 import type { MatchPeer } from './match';
 import { MAX_LOBBY, MAX_SEATS, PROTOCOL_VERSION, type Msg } from './protocol';
@@ -112,7 +112,10 @@ function holderIndex(s: LobbyState): number {
 
 /** Why the room can't start as its match type (#222), or null. */
 export function roomProblem(s: LobbyState): string | null {
-  if (s.mode === 'hold') return s.rows.some((r) => r.k === 'bot') ? 'Hold the line has no bots: remove them' : null;
+  if (s.mode === 'hold') {
+    if (s.rows.some((r) => r.k === 'bot')) return 'Hold the line has no bots: remove them';
+    return humans(s) > MAX_DEFENDERS ? `Hold the line takes at most ${MAX_DEFENDERS} players` : null;
+  }
   if (s.mode !== 'stronghold') return null;
   const holder = holderIndex(s);
   if (holder < 0) return 'Add a bot to hold the stronghold';
@@ -356,7 +359,8 @@ export class HostLobby {
       rows,
       botSecs: 60,
       mode: ROOM_MODES.includes(p.mode) ? p.mode : 'conquest',
-      waves: p.waves,
+      // prefs come from storage unchecked: a bad level would make every guest refuse the room
+      ...(Number.isInteger(p.waves) && p.waves >= 0 && p.waves < WAVE_NAMES.length ? { waves: p.waves } : {}),
     };
     if (o.takeOver) {
       // the room as it was, run from here now; its rows carry everyone's seals, so a reload still gets back in (#192)

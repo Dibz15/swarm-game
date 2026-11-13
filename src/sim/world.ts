@@ -104,7 +104,7 @@ export type FxType =
   | 'capitalRetaken'
   | 'boonOffer'
   | 'boonTaken'
-  /** co-op (#228): a boon drops for faction `f`; `r` is its index in the boon list */
+  /** co-op (#228): a boon drops for faction `f`; `prev` is its index in the boon list */
   | 'boonDrop'
   | 'swarmCall'
   /** the command at index `r` of this tick's list did nothing; `nest` is its reason (an index into REJECTS) */
