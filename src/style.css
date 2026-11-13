@@ -429,6 +429,7 @@ button.crown.on { background: rgba(255, 209, 102, 0.16); }
   content: ''; position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%);
   border: 5px solid transparent; border-bottom: 0; border-top-color: var(--c);
 }
+.you-tag.below::after { bottom: auto; top: -5px; border: 5px solid transparent; border-top: 0; border-bottom-color: var(--c); }
 .chip.me.lit { animation: chip-lit 0.8s ease-in-out infinite alternate; }
 @keyframes chip-lit { to { text-shadow: 0 0 10px var(--c); transform: scale(1.12); } }
 @media (prefers-reduced-motion: reduce) { .chip.me.lit { animation: none; text-shadow: 0 0 10px var(--c); } }

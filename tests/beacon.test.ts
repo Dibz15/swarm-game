@@ -5,7 +5,7 @@ describe('Beacon (#235)', () => {
   it('is off until armed', () => {
     const b = new Beacon();
     b.update(0, true);
-    expect(b.level(0)).toBe(0);
+    expect(b.level()).toBe(0);
     expect(b.pulse(0)).toBe(false);
   });
 
@@ -15,13 +15,13 @@ describe('Beacon (#235)', () => {
     // held by a briefing: not started, time doesn't count
     b.update(10, false);
     b.update(30, false);
-    expect(b.level(30)).toBe(0);
+    expect(b.level()).toBe(0);
     b.update(40, true);
-    expect(b.level(40)).toBe(1);
+    expect(b.level()).toBe(1);
     b.update(40 + BEACON_SECS - 0.5, true);
-    expect(b.level(40 + BEACON_SECS - 0.5)).toBeCloseTo(0.5);
+    expect(b.level()).toBeCloseTo(0.5);
     b.update(40 + BEACON_SECS, true);
-    expect(b.level(40 + BEACON_SECS)).toBe(0);
+    expect(b.level()).toBe(0);
   });
 
   it('pulses once per period while on', () => {
@@ -33,11 +33,35 @@ describe('Beacon (#235)', () => {
     expect(b.pulse(BEACON_PULSE)).toBe(true);
   });
 
+  it("doesn't count or pulse while paused after it started", () => {
+    const b = new Beacon();
+    b.arm();
+    b.update(0, true);
+    b.update(1, true);
+    b.update(2, false);
+    expect(b.pulse(2)).toBe(false);
+    b.update(20, false);
+    b.update(21, true);
+    expect(b.level()).toBe(1);
+    b.update(21 + BEACON_SECS - 1, true);
+    expect(b.level()).toBe(0);
+  });
+
+  it('can be armed again after clearing', () => {
+    const b = new Beacon();
+    b.arm();
+    b.update(0, true);
+    b.clear();
+    b.arm();
+    b.update(5, true);
+    expect(b.level()).toBe(1);
+  });
+
   it('clears early', () => {
     const b = new Beacon();
     b.arm();
     b.update(0, true);
     b.clear();
-    expect(b.level(1)).toBe(0);
+    expect(b.level()).toBe(0);
   });
 });

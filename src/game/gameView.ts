@@ -325,9 +325,7 @@ export class GameView {
    */
   markHome(): void {
     if (this.human < 0) return;
-    const w = this.world;
-    const mine = w.nests.filter((n) => n.owner === this.human);
-    const home = mine.find((n) => n.capital) ?? mine[0];
+    const home = this.homeNest();
     if (!home) return;
     this.beaconNest = home.id;
     this.beacon.arm();
@@ -338,7 +336,7 @@ export class GameView {
    * screen (CSS px, with its radius there), and how strongly to show it (0..1).
    */
   get youAt(): { x: number; y: number; sx: number; sy: number; sr: number; level: number } | null {
-    const level = this.beacon.level(this.now);
+    const level = this.beacon.level();
     const n = this.world.nests[this.beaconNest];
     if (level <= 0 || !n) return null;
     const { camera, renderer } = this.s;
@@ -350,7 +348,7 @@ export class GameView {
   private updateBeacon(time: number): void {
     const n = this.world.nests[this.beaconNest];
     if (n && (n.owner !== this.human || this.result || this.spectating)) this.beacon.clear();
-    this.beacon.update(time, !this.session.held && !this.session.paused);
+    this.beacon.update(time, !this.session.held && !this.session.paused && !this.session.syncing);
     if (n && this.beacon.pulse(time)) {
       this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.3, r1: n.r * 3, dur: 0.9, c: FACTION_RGB[this.human] ?? WHITE, thick: 3 });
     }
@@ -1418,10 +1416,16 @@ export class GameView {
     return { enemy: false, counts };
   }
 
+  /** Your home nest: your capital, or else your first nest. */
+  private homeNest(): Nest | undefined {
+    const mine = this.world.nests.filter((n) => n.owner === this.human);
+    return mine.find((n) => n.capital) ?? mine[0];
+  }
+
   homePoint(): [number, number] {
     const w = this.world;
-    const mine = w.nests.filter((n) => n.owner === this.human);
-    if (mine.length) return [mine[0].x, mine[0].y];
+    const home = this.homeNest();
+    if (home) return [home.x, home.y];
     let x = 0, y = 0, c = 0;
     for (let i = 0; i < w.n; i++) {
       if (w.alive[i] && w.owner[i] === this.human) {

@@ -637,11 +637,13 @@ export class Hud {
     this.youTag.classList.toggle('on', seen);
     if (you && seen) {
       const t = this.youTag;
-      t.style.setProperty('--c', hex(g.human));
-      // just above the nest (below it, if that's off the top)
+      const c = hex(g.human);
+      if (t.style.getPropertyValue('--c') !== c) t.style.setProperty('--c', c);
+      // just above the nest (below it, pointing up, if that's off the top)
       const above = you.sy - you.sr - 8;
-      const y = above > 24 ? above : you.sy + you.sr + 30;
-      t.style.transform = `translate(${you.sx}px, ${y}px) translate(-50%, -100%)`;
+      const below = above <= 24;
+      t.classList.toggle('below', below);
+      t.style.transform = below ? `translate(${you.sx}px, ${you.sy + you.sr + 8}px) translate(-50%, 0)` : `translate(${you.sx}px, ${above}px) translate(-50%, -100%)`;
       t.style.opacity = String(you.level);
     }
     // Refresh the open list twice a second (by ticks elapsed, so a frame that steps several can't skip it).
