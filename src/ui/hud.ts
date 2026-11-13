@@ -527,8 +527,15 @@ export class Hud {
     const text = `Hold ${formatTime(left)}`;
     if (clock.textContent !== text) clock.textContent = text;
     const lost = this.siege.children[2] as HTMLElement;
-    lost.style.display = sg.lostAt >= 0 ? 'block' : 'none';
-    if (sg.lostAt >= 0) lost.textContent = `Retake your capital: ${formatTime(Math.max(0, SIEGE.retake - (w.tick - sg.lostAt)))}`;
+    // The fallen capital to retake first: yours, else the one closest to gone (co-op, #228).
+    let fallen: (typeof sg.defenders)[number] | undefined;
+    for (const d of sg.defenders) if (d.lostAt >= 0 && (!fallen || (d.f === g.human) > (fallen.f === g.human) || ((d.f === g.human) === (fallen.f === g.human) && d.lostAt < fallen.lostAt))) fallen = d;
+    lost.style.display = fallen ? 'block' : 'none';
+    if (fallen) {
+      const left = SIEGE.retake - (w.tick - fallen.lostAt);
+      const whose = fallen.f === g.human ? 'your capital' : "an ally's capital";
+      lost.textContent = left > 0 ? `Retake ${whose}: ${formatTime(left)}` : `Retake ${whose} before the clock runs out`;
+    }
     // The Bloom's nests in the field: what taking them would save you.
     const held = sg.bloomNests.filter((id) => w.nests[id].owner === NEUTRAL).length;
     const bloom = this.siege.children[3] as HTMLElement;

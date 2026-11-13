@@ -104,6 +104,8 @@ export type FxType =
   | 'capitalRetaken'
   | 'boonOffer'
   | 'boonTaken'
+  /** co-op (#228): a boon drops for faction `f`; `r` is its index in the boon list */
+  | 'boonDrop'
   | 'swarmCall'
   /** the command at index `r` of this tick's list did nothing; `nest` is its reason (an index into REJECTS) */
   | 'cmdFail';
@@ -187,7 +189,7 @@ export interface Swarm {
   uids: number[];
   tx: number;
   ty: number;
-  /** a siege wave (#67): it hunts this faction, whatever else is near: its capital, or (raiders) its nearest other nest */
+  /** a siege wave (#67): it hunts this team (#228), whatever else is near: its nearest capital, or (raiders) its nearest other nest */
   hunt?: number;
   raid?: boolean;
 }
@@ -242,11 +244,11 @@ export interface SiegeState {
   waves: Wave[];
   /** the next wave to come (index) */
   next: number;
-  /** the defender and its capital nest */
-  human: number;
-  capital: number;
-  /** tick the capital fell, or -1 */
-  lostAt: number;
+  /**
+   * The defenders (#228: one in solo, up to four in a room, all on one team):
+   * each faction, its capital nest, and the tick that capital fell (or -1).
+   */
+  defenders: Defender[];
   spawns: [number, number][];
   /** the field's nests (neutral at the start): each one the Bloom still holds makes the waves bigger */
   bloomNests: number[];
@@ -256,6 +258,22 @@ export interface SiegeState {
   offerAt: number;
   /** boons taken so far */
   boons: BoonId[];
+  /** co-op (#228): boons dropped on the field instead of offered; whoever captures one gets it */
+  drops: BoonDrop[];
+}
+
+/** A defender of the line (#228). */
+export interface Defender {
+  f: number;
+  capital: number;
+  lostAt: number;
+  /** co-op: where this defender's boons drop, outside its walls (null in solo, or if there's no room) */
+  drop: [number, number] | null;
+}
+
+/** A boon dropped on the field in co-op (#228): captured like a supply drop. */
+export interface BoonDrop extends Drop {
+  id: BoonId;
 }
 
 /** Holding the line (#67): what you can pick between waves. */

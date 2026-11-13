@@ -1,8 +1,8 @@
-import { ENERGY, Kind, MAX_LEVEL, NEUTRAL, TICK_HZ } from './constants';
-import { releaseSwarm, steerSwarm } from './events';
+import { ENERGY, EVENTS, Kind, MAX_LEVEL, NEUTRAL, TICK_HZ } from './constants';
+import { captureDrop, DROP_STEP, releaseSwarm, steerSwarm } from './events';
 import { TAU, dcos, dpow, dsin } from './mathx';
 import { Rng } from './rng';
-import { pushFx, spawnUnit, WILD_COLOSSUS, type BoonId, type SiegeState, type Wave, type WaveKind, type World } from './world';
+import { pushFx, spawnUnit, WILD_COLOSSUS, type BoonId, type Defender, type SiegeState, type Wave, type WaveKind, type World } from './world';
 
 /**
  * Hold the line (#67): you're dug in behind your own walls and must still
@@ -13,6 +13,13 @@ import { pushFx, spawnUnit, WILD_COLOSSUS, type BoonId, type SiegeState, type Wa
  * sallying out to take them thins the waves.
  * Every other wave, you pick a boon. Lose the capital and you have
  * SIEGE.retake to win it back. Everything random is seeded. PROVISIONAL (#68).
+ *
+ * Co-op (#228): two to four defenders on one team, each walled in at its own
+ * capital. The waves are bigger and come faster, and hunt whichever defender
+ * is nearest. Boons drop on the field outside each fortress instead of being
+ * offered: whoever captures one gets it. The line holds only if every capital
+ * is held at the clock; it breaks when every capital has stayed fallen past
+ * SIEGE.retake, or the clock runs out with one still fallen.
  */
 export interface SiegeSetup {
   /** how long to hold */
@@ -49,6 +56,14 @@ export const SIEGE = {
   boonEvery: 2,
   boonDelay: 10 * TICK_HZ,
   boonOpen: 10 * TICK_HZ,
+  /** co-op (#228): each defender past the first makes the waves this much bigger, and this much more often */
+  coopSize: 0.6,
+  coopPace: 0.15,
+  /** co-op boon drops: telegraph, then how long they stay to be captured */
+  dropTelegraph: 4 * TICK_HZ,
+  dropOpen: 20 * TICK_HZ,
+  /** how far out from a capital a boon drops (past the widest wall) */
+  dropOut: [300, 420] as [number, number],
 };
 
 /** Boons between waves: what each does (scaled to the siege) and how it reads. */
@@ -71,31 +86,59 @@ export const WAVE_KINDS: Record<WaveKind, { from: number; mix: readonly number[]
 };
 const KINDS = Object.keys(WAVE_KINDS) as WaveKind[];
 
-/** Start the siege: the defender's capital, the far spawns, and the whole wave schedule. */
-export function initSiege(w: World, s: SiegeSetup, human: number): void {
+/** Start the siege: the defenders' capitals, the far spawns, and the whole wave schedule. */
+export function initSiege(w: World, s: SiegeSetup, humans: readonly number[]): void {
   const ev = w.events;
-  const capital = w.nests.find((n) => n.capital && n.owner === human);
-  if (!ev || !capital) return;
-  // Waves emerge from the Bloom's nests; once those are all taken, from the far half of the map's swarm spawns.
+  const caps = humans.map((f) => ({ f, cap: w.nests.find((n) => n.capital && n.owner === f) })).filter((d) => d.cap);
+  if (!ev || !caps.length) return;
+  // Waves emerge from the Bloom's nests; once those are all taken, from the
+  // map's swarm spawns furthest from every defender (the far half).
   const spawns = [...ev.spec.swarmSpawns]
-    .map((p) => ({ p, d: (p[0] - capital.x) ** 2 + (p[1] - capital.y) ** 2 }))
+    .map((p) => ({ p, d: Math.min(...caps.map(({ cap }) => (p[0] - cap!.x) ** 2 + (p[1] - cap!.y) ** 2)) }))
     .sort((a, b) => b.d - a.d)
     .slice(0, Math.max(2, Math.ceil(ev.spec.swarmSpawns.length / 2)))
     .map((o) => o.p);
   if (!spawns.length) return;
+  // More defenders, bigger and faster waves: the line is still a fight (#228). PROVISIONAL (#231).
+  const k = caps.length - 1;
+  const ss = k ? { ...s, size: Math.round(s.size * (1 + SIEGE.coopSize * k)), every: s.every / (1 + SIEGE.coopPace * k) } : s;
+  const defenders: Defender[] = caps.map(({ f, cap }) => ({ f, capital: cap!.id, lostAt: -1, drop: k ? dropSpot(w, cap!.x, cap!.y, spawns) : null }));
   w.siege = {
     until: w.tick + Math.round(s.seconds * TICK_HZ),
-    waves: rollWaves(new Rng(w.seed ^ 0x5e1e9e), s, spawns, w.tick),
+    waves: rollWaves(new Rng(w.seed ^ 0x5e1e9e), ss, spawns, w.tick),
     next: 0,
-    human,
-    capital: capital.id,
-    lostAt: -1,
+    defenders,
     spawns,
     bloomNests: w.nests.filter((n) => n.owner === NEUTRAL).map((n) => n.id),
     offer: null,
     offerAt: -1,
     boons: [],
+    drops: [],
   };
+}
+
+/**
+ * Where a defender's boons drop (co-op, #228): open ground outside its walls,
+ * toward the Bloom's nearest spawn, that its capital can walk to.
+ */
+function dropSpot(w: World, cx: number, cy: number, spawns: [number, number][]): [number, number] | null {
+  let tx = w.width / 2, ty = w.height / 2, bd = Infinity;
+  for (const [x, y] of spawns) {
+    const d = (x - cx) ** 2 + (y - cy) ** 2;
+    if (d < bd) (bd = d), (tx = x), (ty = y);
+  }
+  const dl = Math.sqrt((tx - cx) ** 2 + (ty - cy) ** 2) || 1;
+  const ux = (tx - cx) / dl, uy = (ty - cy) / dl;
+  const [r0, r1] = SIEGE.dropOut;
+  for (let r = r0; r <= r1; r += 20)
+    for (const b of [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9]) {
+      const c = dcos(b), sn = dsin(b);
+      const x = cx + (ux * c - uy * sn) * r, y = cy + (ux * sn + uy * c) * r;
+      if (x < 40 || y < 40 || x > w.width - 40 || y > w.height - 40) continue;
+      if (w.terrain.clearance(x, y) < EVENTS.dropRadius) continue;
+      if (Number.isFinite(w.terrain.pathDist(x, y, cx, cy, 0))) return [x, y];
+    }
+  return null;
 }
 
 /** How much bigger the waves are for the field nests the Bloom still holds. */
@@ -145,27 +188,64 @@ export function updateSiege(w: World): void {
     if (sg.next % SIEGE.boonEvery === 0 && sg.offerAt < 0 && !sg.offer) sg.offerAt = w.tick + SIEGE.boonDelay;
   }
   // Boons: offered a little after every other wave; the first is taken if you don't choose.
-  if (sg.offerAt >= 0 && w.tick >= sg.offerAt) {
+  // In co-op they drop on the field instead (#228).
+  if (sg.offerAt >= 0 && w.tick >= sg.offerAt && sg.defenders.length > 1) {
+    sg.offerAt = -1;
+    dropBoons(w, sg);
+  } else if (sg.offerAt >= 0 && w.tick >= sg.offerAt) {
     sg.offerAt = -1;
     const rng = new Rng((w.seed ^ 0xb0b0) + sg.boons.length * 7919);
     const pool = [...BOON_IDS];
     const ids: BoonId[] = [];
     while (ids.length < 3) ids.push(pool.splice(rng.int(pool.length), 1)[0]);
     sg.offer = { ids, until: w.tick + SIEGE.boonOpen };
-    pushFx(w, 'boonOffer', 0, 0, sg.human);
+    pushFx(w, 'boonOffer', 0, 0, sg.defenders[0].f);
   }
-  if (sg.offer && w.tick >= sg.offer.until) takeBoon(w, sg.human, 0);
+  if (sg.offer && w.tick >= sg.offer.until) takeBoon(w, sg.defenders[0].f, 0);
+  if (sg.drops.length) updateBoonDrops(w, sg);
+}
+
+/** Co-op (#228): a boon drops outside each defender's walls, each a seeded pick. */
+function dropBoons(w: World, sg: SiegeState): void {
+  const rng = new Rng((w.seed ^ 0xd2091) + sg.next * 7919);
+  sg.defenders.forEach((d) => {
+    if (!d.drop || w.factions[d.f].eliminated) return;
+    const [x, y] = d.drop;
+    const id = BOON_IDS[rng.int(BOON_IDS.length)];
+    const lands = w.tick + SIEGE.dropTelegraph;
+    sg.drops.push({ id, x, y, lands, expires: lands + SIEGE.dropOpen, progress: 0, holder: -1 });
+    pushFx(w, 'boonDrop', x, y, d.f, EVENTS.dropRadius, -1, BOON_IDS.indexOf(id));
+  });
+}
+
+/** Boon drops fill like supply drops; whoever completes one gets the boon. */
+function updateBoonDrops(w: World, sg: SiegeState): void {
+  sg.drops = sg.drops.filter((d) => {
+    if (w.tick >= d.expires) return false;
+    if (w.tick < d.lands || w.tick % DROP_STEP !== 0) return true;
+    const f = captureDrop(w, d);
+    if (f < 0) return true;
+    sg.boons.push(d.id);
+    applyBoon(w, f, d.id);
+    return false;
+  });
 }
 
 /** Take boon `k` of the offer on the table (a command, so it's in lockstep). */
 export function takeBoon(w: World, p: number, k: number): void {
   const sg = w.siege;
-  if (!sg || !sg.offer || p !== sg.human) return;
+  if (!sg || !sg.offer || sg.defenders.length !== 1 || p !== sg.defenders[0].f) return;
   const id = sg.offer.ids[k] ?? sg.offer.ids[0];
   sg.offer = null;
   sg.boons.push(id);
+  applyBoon(w, p, id);
+}
+
+/** Boon `id` for faction `p`, around its own capital (or the first defender's, if `p` isn't one). */
+function applyBoon(w: World, p: number, id: BoonId): void {
+  const sg = w.siege!;
   const f = w.factions[p];
-  const cap = w.nests[sg.capital];
+  const cap = w.nests[(sg.defenders.find((d) => d.f === p) ?? sg.defenders[0]).capital];
   if (id === 'reinforce') {
     // About the size of the next wave's half, mostly Swarmers with Shields among them.
     const next = sg.waves[Math.min(sg.next, sg.waves.length - 1)];
@@ -189,15 +269,19 @@ function release(w: World, sg: SiegeState, wave: Wave): void {
   const per = Math.ceil(size / from.length);
   from.forEach(([x, y], side) => {
     const sw = releaseSwarm(w, x, y, per, 'bloomSwarm', info.mix);
-    sw.hunt = sg.human;
+    sw.hunt = w.teamOf[sg.defenders[0].f];
     sw.raid = wave.kind === 'raiders';
     steerSwarm(w, sw);
     pushFx(w, 'siegeWave', x, y, NEUTRAL, 40, -1, sg.next - 1, side);
   });
   if (wave.kind === 'colossus') {
-    // A Colossus walks straight for your capital, and stays there.
+    // A Colossus walks straight for the nearest capital, and stays there.
     const [x, y] = from[0];
-    const cap = w.nests[sg.capital];
+    let cap = w.nests[sg.defenders[0].capital];
+    for (const d of sg.defenders) {
+      const n = w.nests[d.capital];
+      if ((n.x - x) ** 2 + (n.y - y) ** 2 < (cap.x - x) ** 2 + (cap.y - y) ** 2) cap = n;
+    }
     const s = spawnUnit(w, NEUTRAL, Kind.Colossus, x, y, cap.x, cap.y, 30);
     if (s >= 0) {
       w.wild[s] = WILD_COLOSSUS;
@@ -229,29 +313,39 @@ function sources(w: World, sg: SiegeState, wave: Wave): [number, number][] {
 }
 
 /**
- * The siege's say in victory (from checkVictory): the line breaks if the
- * capital stays lost for SIEGE.retake; it holds if the capital is yours at the
- * end. Returns true when the siege decided the check (nothing else may end it).
+ * The siege's say in victory (from checkVictory). Each capital that stays lost
+ * for SIEGE.retake is gone for good unless retaken; the line breaks when every
+ * one is (or every defender is wiped out). It holds if every capital is the
+ * defenders' at the end; in co-op, one still fallen then breaks it (#228).
+ * Returns true when the siege decided the check (nothing else may end it).
  */
 export function siegeVictory(w: World): boolean {
   const sg = w.siege!;
-  const cap = w.nests[sg.capital];
-  const human = w.factions[sg.human];
-  const held = cap.owner === sg.human;
-  if (!held && sg.lostAt < 0) {
-    sg.lostAt = w.tick;
-    pushFx(w, 'capitalLost', cap.x, cap.y, sg.human, cap.r);
-  } else if (held && sg.lostAt >= 0) {
-    sg.lostAt = -1;
-    pushFx(w, 'capitalRetaken', cap.x, cap.y, sg.human, cap.r);
+  const team = w.teamOf[sg.defenders[0].f];
+  let allHeld = true, allGone = true, allDead = true;
+  for (const d of sg.defenders) {
+    const cap = w.nests[d.capital];
+    // A teammate retaking it counts (#228).
+    const held = cap.owner >= 0 && cap.owner !== NEUTRAL && w.teamOf[cap.owner] === team;
+    if (!held && d.lostAt < 0) {
+      d.lostAt = w.tick;
+      pushFx(w, 'capitalLost', cap.x, cap.y, d.f, cap.r);
+    } else if (held && d.lostAt >= 0) {
+      d.lostAt = -1;
+      pushFx(w, 'capitalRetaken', cap.x, cap.y, cap.owner, cap.r);
+    }
+    if (!held) allHeld = false;
+    if (!(d.lostAt >= 0 && w.tick - d.lostAt >= SIEGE.retake)) allGone = false;
+    if (!w.factions[d.f].eliminated) allDead = false;
   }
-  if (human.eliminated || (sg.lostAt >= 0 && w.tick - sg.lostAt >= SIEGE.retake)) {
+  const end = w.tick >= sg.until;
+  if (allDead || allGone || (end && !allHeld && sg.defenders.length > 1)) {
     w.over = true;
     w.winnerTeam = -1;
     w.winReason = 'fallen';
-  } else if (w.tick >= sg.until && held) {
+  } else if (end && allHeld) {
     w.over = true;
-    w.winnerTeam = w.teamOf[sg.human];
+    w.winnerTeam = team;
     w.winReason = 'held';
   }
   return true;

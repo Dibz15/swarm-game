@@ -1,5 +1,5 @@
 import type { TraitId } from '../campaign/warlords';
-import { BOONS, WAVE_KINDS, waveSize } from '../sim/siege';
+import { BOONS, SIEGE, WAVE_KINDS, waveSize } from '../sim/siege';
 import { FACTION_NAMES, FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { Selection } from '../input/selection';
 import type { Camera } from '../render/camera';
@@ -752,23 +752,35 @@ export class GameView {
           break;
         }
         case 'capitalLost':
-          sfx.capitalAlarm();
           rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.6, c: [255, 93, 115], thick: 3 });
-          toast('Your capital has fallen: retake it within 20 seconds!', '#ff5d73');
+          // Co-op (#228): your own capital sounds the alarm; an ally's is a call for help.
+          if (e.f === this.human || (w.siege?.defenders.length ?? 1) === 1) {
+            sfx.capitalAlarm();
+            toast(`Your capital has fallen: retake it within ${SIEGE.retake / TICK_HZ} seconds!`, '#ff5d73');
+          } else toast(`${FACTION_NAMES[e.f]}'s capital has fallen: help retake it!`, hex(e.f));
           break;
         case 'boonOffer':
           sfx.boonOffer();
           break;
         case 'boonTaken': {
           const id = (Object.keys(BOONS) as (keyof typeof BOONS)[])[e.prev];
-          if (id) toast(`${BOONS[id].name}: ${BOONS[id].text.toLowerCase()}`, hex(this.human));
-          rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3, dur: 0.6, c: FACTION_RGB[this.human], thick: 3 });
+          const own = e.f === this.human;
+          if (id) toast(`${own ? '' : `${FACTION_NAMES[e.f]}: `}${BOONS[id].name}: ${BOONS[id].text.toLowerCase()}`, hex(e.f));
+          rings.add({ x: e.x, y: e.y, r0: e.r, r1: e.r * 3, dur: 0.6, c: FACTION_RGB[e.f], thick: 3 });
           sfx.levelUp(e.x, e.y, true);
           break;
         }
         case 'capitalRetaken':
-          toast('Capital retaken', hex(this.human));
+          toast('Capital retaken', hex(e.f));
           break;
+        case 'boonDrop': {
+          // Co-op (#228): a boon drops outside a defender's walls; capture it to take it.
+          const id = (Object.keys(BOONS) as (keyof typeof BOONS)[])[e.prev];
+          rings.add({ x: e.x, y: e.y, r0: e.r * 3, r1: e.r, dur: 0.8, c: [196, 150, 255], thick: 3 });
+          if (id) toast(`A boon drops${e.f === this.human ? ' outside your walls' : ` near ${FACTION_NAMES[e.f]}`}: ${BOONS[id].name}. Capture it!`, '#c496ff');
+          sfx.boonOffer();
+          break;
+        }
         case 'heartPulse': {
           rings.add({ x: e.x, y: e.y, r0: 20, r1: e.r, dur: 0.4, c: FERAL, thick: 5 });
           rings.add({ x: e.x, y: e.y, r0: e.r * 0.4, r1: e.r, dur: 0.35, c: FERAL, thick: 0, disc: true });

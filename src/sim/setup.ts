@@ -70,13 +70,14 @@ export const MAX_HUMANS = NEUTRAL;
 
 /**
  * Reject setups the sim can't run (#156). Several human seats are fine in
- * FFA or teams; a Hold the line siege is built around a single human, and a
+ * FFA or teams; a Hold the line siege's humans all defend together, and a
  * stronghold's side is all bots.
  */
 export function validateSetup(setup: MatchSetup): void {
   const humans = setup.players.filter((p) => p.human).length;
   if (humans > MAX_HUMANS) throw new Error(`MatchSetup: ${humans} human seats, at most ${MAX_HUMANS}`);
-  if (setup.siege && humans > 1) throw new Error(`MatchSetup: a siege (Hold the line) takes one human seat, not ${humans}`);
+  // Hold the line in co-op (#228): every human defends, on one team.
+  if (setup.siege && new Set(setup.players.filter((p) => p.human).map((p) => p.team)).size > 1) throw new Error('MatchSetup: a siege (Hold the line) has its humans on one team');
   // A human's side taking the citadel wins (#222): the holder's side is bots only, or it would win at the start.
   const holder = setup.stronghold ? setup.players[setup.stronghold.player] : undefined;
   if (setup.stronghold && (!holder || setup.players.some((p) => p.human && p.team === holder.team))) throw new Error('MatchSetup: a stronghold is held by a side of bots');
@@ -96,8 +97,14 @@ export function mapParamsOf(setup: MatchSetup): MapParams {
     form: setup.form,
     fill: setup.fill,
     keys: setup.keys,
-    fortress: setup.stronghold?.player ?? (setup.siege ? setup.players.findIndex((p) => p.human) : undefined),
+    fortress: setup.stronghold?.player ?? (setup.siege ? siegeSeats(setup) : undefined),
   };
+}
+
+/** A siege's defenders (#228): every human seat (the first seat if there are none, as in campaign probes). */
+function siegeSeats(setup: MatchSetup): number[] {
+  const seats = setup.players.flatMap((p, i) => (p.human ? [i] : []));
+  return seats.length ? seats : [0];
 }
 
 export const START_UNITS = 10;
@@ -207,7 +214,7 @@ export function createWorld(setup: MatchSetup): World {
     w.bloomSurge = { warnAt: at - SURGE.warn * TICK_HZ, next: at, every: SURGE.every * TICK_HZ, size: setup.surge.size, grow: SURGE.grow, swarms: SURGE.swarms, wave: 0 };
   }
   if (setup.heart) initHeart(w, setup.heart.strength, setup.heart.rule, setup.heart.wound);
-  if (setup.siege) initSiege(w, setup.siege, setup.players.find((p) => p.human)?.faction ?? setup.players[0].faction);
+  if (setup.siege) initSiege(w, setup.siege, siegeSeats(setup).map((i) => setup.players[i].faction));
 
   for (const p of setup.players) {
     const fs = w.factions[p.faction].stats;

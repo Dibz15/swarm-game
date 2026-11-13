@@ -12,7 +12,7 @@ import { SIEGE, WAVE_KINDS, rollWaves, waveSize, type SiegeSetup } from '../src/
 import { step } from '../src/sim/step';
 import { Terrain } from '../src/sim/terrain';
 import { Proxy } from '../src/proxy/proxy';
-import { spawnUnit, WILD_SWARM } from '../src/sim/world';
+import { spawnUnit, WILD_SWARM, type World } from '../src/sim/world';
 import { bloomNestMask, growthTarget } from '../src/render/bloom';
 
 const SIEGE_SETUP: SiegeSetup = { seconds: 200, first: 20, every: 30, size: 20, grow: 1.12, depth: 1 };
@@ -70,12 +70,12 @@ describe('holding the line', () => {
   it('walls you in and sends waves of the right kind after your capital', () => {
     const w = createWorld(siege());
     const sg = w.siege!;
-    expect(sg.capital).toBe(w.nests.find((n) => n.capital && n.owner === 0)!.id);
+    expect(sg.defenders[0].capital).toBe(w.nests.find((n) => n.capital && n.owner === 0)!.id);
     const first = sg.waves[0];
     run(w, first.at + 2);
     const sw = w.events!.swarms.find((s) => s.hunt === 0)!;
     expect(sw).toBeDefined();
-    expect([sw.tx, sw.ty]).toEqual([w.nests[sg.capital].x, w.nests[sg.capital].y]);
+    expect([sw.tx, sw.ty]).toEqual([w.nests[sg.defenders[0].capital].x, w.nests[sg.defenders[0].capital].y]);
     const kinds = sw.uids.map((u) => w.kind[w.uidToSlot.get(u)!]);
     expect(kinds.filter((k) => k === Kind.Dot).length).toBeGreaterThan(kinds.filter((k) => k === Kind.Swift).length);
   });
@@ -93,7 +93,7 @@ describe('holding the line', () => {
 
   it('a fallen capital can be retaken within 20 s; left fallen, the line breaks', () => {
     const fall = (w: ReturnType<typeof createWorld>) => {
-      const cap = w.nests[w.siege!.capital];
+      const cap = w.nests[w.siege!.defenders[0].capital];
       cap.owner = -1;
       cap.controller = NEUTRAL;
       cap.control = 0;
@@ -102,11 +102,11 @@ describe('holding the line', () => {
     fall(w);
     run(w, SIEGE.retake - TICK_HZ);
     expect(w.over).toBe(false);
-    const cap = w.nests[w.siege!.capital];
+    const cap = w.nests[w.siege!.defenders[0].capital];
     cap.owner = cap.controller = 0;
     cap.control = 1;
     run(w, 2 * TICK_HZ);
-    expect(w.siege!.lostAt).toBe(-1);
+    expect(w.siege!.defenders[0].lostAt).toBe(-1);
     // This time nobody's left to take it back.
     for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === 0) w.dmg[i] = 1e9;
     resolveDamage(w);
@@ -263,5 +263,159 @@ describe('the Bloom look (#94)', () => {
     expect(growthTarget(w, id, mask)).toBe(0);
     const other = w.nests.findIndex((n) => !mask[n.id]);
     expect(growthTarget(w, other, mask)).toBe(0);
+  });
+});
+
+describe('co-op Hold the line (#228)', () => {
+  /** `n` humans holding the line together, on one team. */
+  function coop(n: number, seed = 4, s: SiegeSetup = SIEGE_SETUP, size: MatchSetup['size'] = 'medium'): MatchSetup {
+    return { seed, size, terrain: 'standard', events: 'calm', siege: s, players: Array.from({ length: n }, (_, f) => ({ faction: f, team: 0, human: true })) };
+  }
+  const fall = (w: World, f: number) => {
+    const cap = w.nests[w.siege!.defenders.find((d) => d.f === f)!.capital];
+    cap.owner = -1;
+    cap.controller = NEUTRAL;
+    cap.control = 0;
+  };
+  const wipe = (w: World, f: number) => {
+    for (let i = 0; i < w.n; i++) if (w.alive[i] && w.owner[i] === f) w.dmg[i] = 1e9;
+    resolveDamage(w);
+  };
+  /** wall capsules with an end within `r` of (x, y) */
+  const wallsNear = (walls: { x1: number; y1: number; x2: number; y2: number }[], x: number, y: number, r: number) =>
+    walls.filter((c) => Math.min((c.x1 - x) ** 2 + (c.y1 - y) ** 2, (c.x2 - x) ** 2 + (c.y2 - y) ** 2) < r * r).length;
+
+  it('defenders share a team; a siege across teams is refused', () => {
+    expect(() => createWorld(coop(2))).not.toThrow();
+    const split = coop(2);
+    split.players[1].team = 1;
+    expect(() => createWorld(split)).toThrow(/siege/);
+  });
+
+  it('walls in every defender, and every spawn and capital can walk to each', () => {
+    for (const size of ['small', 'medium', 'large'] as const)
+      for (const n of [2, 3, 4])
+        for (let seed = 0; seed < 6; seed++) {
+          const open = generateMap({ seed, size, players: n, terrain: 'standard', events: 'calm' });
+          const m = generateMap({ seed, size, players: n, terrain: 'standard', events: 'calm', fortress: Array.from({ length: n }, (_, i) => i) });
+          const t = new Terrain(m.terrain, m.width, m.height);
+          const caps = m.nests.filter((x) => x.player >= 0 && x.capital !== false);
+          expect(caps).toHaveLength(n);
+          for (const cap of caps) {
+            const before = open.nests.find((x) => x.player === cap.player && x.capital !== false)!;
+            expect(wallsNear(m.terrain.walls, cap.x, cap.y, 280), `${size} ${n} seed ${seed} player ${cap.player}`).toBeGreaterThan(wallsNear(open.terrain.walls, before.x, before.y, 280));
+            for (const [x, y] of [...caps.filter((c) => c !== cap).map((c) => [c.x, c.y]), ...m.events.swarmSpawns]) expect(Number.isFinite(t.pathDist(x, y, cap.x, cap.y, 0))).toBe(true);
+          }
+        }
+  });
+
+  it('waves grow and quicken with each defender', () => {
+    for (const n of [2, 4]) {
+      const w = createWorld(coop(n));
+      const sg = w.siege!;
+      expect(sg.defenders.map((d) => d.f)).toEqual(Array.from({ length: n }, (_, f) => f));
+      const k = n - 1;
+      expect(sg.waves[0].size).toBe(Math.round(SIEGE_SETUP.size * (1 + SIEGE.coopSize * k)));
+      const gap = (sg.waves[1].at - sg.waves[0].at) / TICK_HZ;
+      expect(gap).toBeCloseTo(SIEGE_SETUP.every / (1 + SIEGE.coopPace * k), 0);
+      expect(sg.waves.length).toBeGreaterThan(createWorld(siege()).siege!.waves.length);
+    }
+  });
+
+  it('a wave hunts the nearest defender', () => {
+    const w = createWorld(coop(3));
+    const sg = w.siege!;
+    run(w, sg.waves[0].at + 2);
+    const sw = w.events!.swarms.find((s) => s.hunt === 0)!;
+    expect(sw).toBeDefined();
+    let cx = 0, cy = 0;
+    for (const u of sw.uids) (cx += w.x[w.uidToSlot.get(u)!]), (cy += w.y[w.uidToSlot.get(u)!]);
+    cx /= sw.uids.length;
+    cy /= sw.uids.length;
+    const near = [...sg.defenders].map((d) => w.nests[d.capital]).sort((a, b) => (a.x - cx) ** 2 + (a.y - cy) ** 2 - ((b.x - cx) ** 2 + (b.y - cy) ** 2))[0];
+    expect([sw.tx, sw.ty]).toEqual([near.x, near.y]);
+  });
+
+  // a short siege with no waves: only the clock and the capitals decide it
+  const QUIET: SiegeSetup = { ...SIEGE_SETUP, seconds: 40, first: 1000 };
+
+  it('holds when every capital is held at the clock', () => {
+    const w = createWorld(coop(2, 4, QUIET));
+    run(w, 41 * TICK_HZ);
+    expect(w.over).toBe(true);
+    expect(w.winReason).toBe('held');
+    expect(w.winnerTeam).toBe(0);
+  });
+
+  it('breaks when one capital is still fallen at the clock', () => {
+    const w = createWorld(coop(2, 4, QUIET));
+    run(w, 30 * TICK_HZ);
+    wipe(w, 1);
+    fall(w, 1);
+    run(w, 5 * TICK_HZ);
+    expect(w.over).toBe(false);
+    expect(w.siege!.defenders[1].lostAt).toBeGreaterThan(0);
+    run(w, 10 * TICK_HZ);
+    expect(w.over).toBe(true);
+    expect(w.winReason).toBe('fallen');
+    expect(w.winnerTeam).toBe(-1);
+  });
+
+  it('an ally can retake a fallen capital; one gone for good is not the end while another stands', () => {
+    const w = createWorld(coop(2, 4, { ...SIEGE_SETUP, seconds: 300, first: 1000 }));
+    wipe(w, 1);
+    fall(w, 1);
+    run(w, SIEGE.retake + TICK_HZ);
+    expect(w.over).toBe(false);
+    // the ally takes it back
+    const cap = w.nests[w.siege!.defenders[1].capital];
+    cap.owner = cap.controller = 0;
+    cap.control = 1;
+    run(w, TICK_HZ);
+    expect(w.siege!.defenders[1].lostAt).toBe(-1);
+    // both fall, and stay fallen: the line breaks
+    wipe(w, 0);
+    fall(w, 0);
+    fall(w, 1);
+    run(w, SIEGE.retake + TICK_HZ);
+    expect(w.over).toBe(true);
+    expect(w.winReason).toBe('fallen');
+  });
+
+  it('drops a boon outside each defender\'s walls; whoever captures one gets it', () => {
+    const w = createWorld(coop(2, 4, { ...SIEGE_SETUP, first: 5, every: 15, size: 6 }));
+    const sg = w.siege!;
+    expect(sg.defenders.every((d) => d.drop)).toBe(true);
+    run(w, sg.waves[1].at - w.tick + SIEGE.boonDelay + 1);
+    expect(sg.offer).toBeNull();
+    expect(sg.drops).toHaveLength(2);
+    const d = sg.drops.find((x) => x.x === sg.defenders[1].drop![0])!;
+    // defender 1 sends units onto its drop
+    for (let k = 0; k < 15; k++) spawnUnit(w, 1, Kind.Dot, d.x + (k % 5) * 4 - 8, d.y + Math.floor(k / 5) * 4 - 4, d.x, d.y, 10);
+    const energy = w.factions[1].energy;
+    const prod = w.factions[1].prodMult;
+    const levels = w.nests.filter((n) => n.owner === 1).reduce((a, n) => a + n.level, 0);
+    run(w, SIEGE.dropTelegraph + 8 * TICK_HZ);
+    expect(sg.drops.includes(d)).toBe(false);
+    expect(sg.boons).toContain(d.id);
+    const changed = w.factions[1].energy !== energy || w.factions[1].prodMult !== prod || w.nests.filter((n) => n.owner === 1).reduce((a, n) => a + n.level, 0) !== levels || w.unitCount[1] > 15;
+    expect(changed).toBe(true);
+    // the solo boon command does nothing in co-op
+    step(w, [{ t: 'boon', p: 0, k: 0 }]);
+    expect(sg.offer).toBeNull();
+  });
+
+  it('replays identically, with proxies defending', () => {
+    const play = () => {
+      const w = createWorld(coop(3, 11));
+      const ps = [0, 1, 2].map((f) => new Proxy(f, { skill: 1 }));
+      while (w.tick < 150 * TICK_HZ && !w.over) {
+        step(w, ps.flatMap((p) => p.think(w)));
+        w.fx = [];
+        w.deaths = [];
+      }
+      return worldHash(w);
+    };
+    expect(play()).toBe(play());
   });
 });

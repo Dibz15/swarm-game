@@ -78,7 +78,7 @@ function hold(w: World): Step[] {
   return [
     tour(
       `<b>Hold the line.</b> You're dug in behind your own walls. Keep your capital (ringed) until the clock runs out${mins ? `, about ${mins} minute${mins > 1 ? 's' : ''}` : ''}: that's the win.`,
-      { highlight: () => [sg.capital], focus: onNest(sg.capital, 2) },
+      { highlight: () => [sg.defenders[0].capital], focus: onNest(sg.defenders[0].capital, 2) },
     ),
     tour("The Bloom comes in waves. This timeline shows them marching toward now, and the clock at its end is how long you have left to hold.", {
       spotlight: '.siege',
@@ -89,7 +89,7 @@ function hold(w: World): Step[] {
     ),
     tour(
       `Every ${SIEGE.boonEvery === 2 ? 'other wave' : `${SIEGE.boonEvery} waves`}, you pick a boon. If your capital falls, you have ${SIEGE.retake / TICK_HZ} seconds to take it back. Hold on!`,
-      { highlight: () => [sg.capital], focus: onNest(sg.capital, 1.6) },
+      { highlight: () => [sg.defenders[0].capital], focus: onNest(sg.defenders[0].capital, 1.6) },
     ),
   ];
 }

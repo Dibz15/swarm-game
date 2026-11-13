@@ -73,10 +73,14 @@ describe('several human seats (#156)', () => {
     expect(worldHash(w)).toBe(worldHash(play(60)));
   });
 
-  it('a siege takes one human seat only', () => {
-    const s = twoSeats(1, { siege: { seconds: 200, first: 20, every: 30, size: 20, grow: 1.12, depth: 1 } });
+  it('a siege takes its humans on one team (#228)', () => {
+    const siege = { seconds: 200, first: 20, every: 30, size: 20, grow: 1.12, depth: 1 };
+    const s = twoSeats(1, { siege });
     expect(() => createWorld(s)).toThrow(/siege/);
     expect(() => mapParamsOf(s)).toThrow(/siege/);
+    const together = twoSeats(1, { siege, events: 'calm', players: twoSeats().players.map((p) => ({ ...p, team: 0 })) });
+    expect(createWorld(together).siege!.defenders.map((d) => d.f)).toEqual([0, 2]);
+    expect(mapParamsOf(together).fortress).toEqual([0, 2]);
   });
 
   it('the local seat defaults to the first human, and must be a human seat', () => {

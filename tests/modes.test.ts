@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { applyMode, buildSetup, prefsProblem, DOMINATION_SHARE, loadPrefs, modeProblem, quickSetup, skirmishSiege, STRONGHOLD_SHARE, type SetupPrefs } from '../src/game/matchSetup';
-import { buildNetSetup, type LobbyState } from '../src/net/lobby';
+import { buildNetSetup, roomProblem, type LobbyState } from '../src/net/lobby';
 import { MAX_SEATS } from '../src/net/protocol';
 import { TICK_HZ } from '../src/sim/constants';
 import { resolveDamage } from '../src/sim/combat';
@@ -176,6 +176,19 @@ describe('match types in a room (#222)', () => {
     expect(s.stronghold).toMatchObject({ player: 2 });
     expect(s.players[2].bot!.citadel).toBe(true);
     createWorld(s);
+  });
+
+  it('Hold the line is co-op (#228): every human defends, on one team, at the room\'s wave level; bots keep it from starting', () => {
+    const humansOnly = room({ mode: 'hold', waves: 2 });
+    humansOnly.rows[2] = { k: 'open', team: 2 };
+    expect(roomProblem(humansOnly)).toBeNull();
+    const s = buildNetSetup(humansOnly);
+    expect(s.siege).toEqual(skirmishSiege(2));
+    expect(s.players.map((p) => [p.faction, p.team, p.human])).toEqual([[0, 0, true], [1, 0, true]]);
+    expect(s.caves).toBe('off');
+    expect(createWorld(s).siege!.defenders).toHaveLength(2);
+    expect(buildNetSetup({ ...humansOnly, waves: undefined }).siege).toEqual(skirmishSiege(1));
+    expect(roomProblem(room({ mode: 'hold' }))).toMatch(/no bots/);
   });
 
   it("a stronghold is held by a bot's seat: the first bot's if the chosen seat isn't one; without a bot the room plays Conquest", () => {

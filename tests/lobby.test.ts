@@ -155,7 +155,10 @@ describe('lobby (#162)', () => {
     expect(a.lobby.state?.holder).toBe(4);
     expect(buildNetSetup(h.lobby.state).stronghold?.player).toBe(3);
     expect(parseLobby(JSON.stringify(h.lobby.state))).toEqual(h.lobby.state);
-    expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'hold' }))).toBeNull();
+    // Hold the line is co-op in a room now (#228), with its waves' level
+    expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'hold', waves: 2 }))).toEqual({ ...h.lobby.state, mode: 'hold', waves: 2 });
+    expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'hold', waves: 3 }))).toBeNull();
+    expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'siege' }))).toBeNull();
   });
 
   it('a room saved before match types (#222) reads as Conquest', () => {

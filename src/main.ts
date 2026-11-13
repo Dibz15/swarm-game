@@ -539,7 +539,7 @@ class App {
       const sg = w.siege, game = this.game;
       setTimeout(() => {
         if (this.game !== game || w.over) return;
-        const cap = w.nests[sg.capital];
+        const cap = w.nests[sg.defenders[0].capital];
         cap.owner = -1;
         cap.controller = NEUTRAL;
         cap.control = 0;
@@ -951,6 +951,7 @@ class App {
             teams: (on) => hostLobby()?.setTeams(on),
             mode: (mode) => hostLobby()?.setMode(mode),
             holder: (seat) => hostLobby()?.setHolder(seat),
+            waves: (level) => hostLobby()?.setWaves(level),
             botSecs: (secs) => hostLobby()?.setBotSecs(secs),
             seed: (text) => hostLobby()?.setSeed(text),
             row: (seat, row) => hostLobby()?.setRow(seat, row),
@@ -1771,7 +1772,9 @@ class App {
         ? 'Domination: score on the gold-ringed key nests'
         : type === 'stronghold'
           ? `♛ Stronghold: take ${this.seatName(holder)}'s citadel to win`
-          : 'Hold the line: keep your capital until the clock runs out';
+          : (w.siege?.defenders.length ?? 1) > 1
+            ? 'Hold the line together: keep every capital until the clock runs out'
+            : 'Hold the line: keep your capital until the clock runs out';
     this.hud?.toast(text, type === 'stronghold' ? FACTION_HEX[holder] : '#ffd166');
     // seen apart from the campaign's: its briefings name the warlord, and a skirmish's mustn't use them up
     const seen = `skirmish:${type}`;
