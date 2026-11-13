@@ -17,6 +17,7 @@ import { Recorder, type SelectMethod } from './recording';
 import { nearestNestOrders } from './nearest';
 import { LocalSession, type OrderFail, type Session } from './session';
 import { drawPending, PendingOrders } from './pending';
+import { Beacon } from './beacon';
 import type { Command } from '../sim/commands';
 import type { Hint, Lock, MissionRun } from './tutorial';
 
@@ -86,6 +87,9 @@ export class GameView {
   private blinkFlash: { x: number; y: number; r: number; tx: number; ty: number; at: number } | null = null;
   /** the last render time (s), for the flash */
   private now = 0;
+  /** "you are here" on your home nest at the start (#235) */
+  private readonly beacon = new Beacon();
+  private beaconNest = -1;
   /** world position under the cursor, for previews and key casts */
   cursor: [number, number] | null = null;
   /** world units per ~1 css px, for HUD pick radii */
@@ -209,6 +213,7 @@ export class GameView {
     }
     if (!this.result && !this.spectating) this.checkSupply();
     if (!this.result && this.coached) this.updateMission(time);
+    this.updateBeacon(time);
     this.s.sfx.update(dt, w, this.human, this.result ? 'ended' : this.session.paused ? 'paused' : 'play');
     // Domination countdown ticks in the last ten seconds.
     const ds = this.result ? null : dominationStatus(w);
@@ -312,6 +317,43 @@ export class GameView {
     const done = this.onGuideEnd;
     this.onGuideEnd = null;
     done?.();
+  }
+
+  /**
+   * Mark your home nest for the first few seconds (#235): rings in your color,
+   * an edge arrow if it's off screen, and the HUD's YOU tag on it.
+   */
+  markHome(): void {
+    if (this.human < 0) return;
+    const w = this.world;
+    const mine = w.nests.filter((n) => n.owner === this.human);
+    const home = mine.find((n) => n.capital) ?? mine[0];
+    if (!home) return;
+    this.beaconNest = home.id;
+    this.beacon.arm();
+  }
+
+  /**
+   * Your marked home nest while it's shown: world position, where it is on
+   * screen (CSS px, with its radius there), and how strongly to show it (0..1).
+   */
+  get youAt(): { x: number; y: number; sx: number; sy: number; sr: number; level: number } | null {
+    const level = this.beacon.level(this.now);
+    const n = this.world.nests[this.beaconNest];
+    if (level <= 0 || !n) return null;
+    const { camera, renderer } = this.s;
+    const [px, py] = camera.toScreen(n.x, n.y);
+    const d = renderer.dpr;
+    return { x: n.x, y: n.y, sx: px / d, sy: py / d, sr: (n.r * camera.zoom) / d, level };
+  }
+
+  private updateBeacon(time: number): void {
+    const n = this.world.nests[this.beaconNest];
+    if (n && (n.owner !== this.human || this.result || this.spectating)) this.beacon.clear();
+    this.beacon.update(time, !this.session.held && !this.session.paused);
+    if (n && this.beacon.pulse(time)) {
+      this.s.rings.add({ x: n.x, y: n.y, r0: n.r * 1.3, r1: n.r * 3, dur: 0.9, c: FACTION_RGB[this.human] ?? WHITE, thick: 3 });
+    }
   }
 
   /** What the coach is running: the tutorial mission, or a battle briefing. */
@@ -479,6 +521,9 @@ export class GameView {
       const c = w.nests[w.citadel];
       marks.push([c.x, c.y, FACTION_RGB[this.warlord?.faction ?? c.owner] ?? WHITE]);
     }
+    // Your home, at the start (#235).
+    const you = this.youAt;
+    if (you) marks.push([you.x, you.y, FACTION_RGB[this.human] ?? WHITE]);
     for (const d of ev?.drops ?? []) marks.push([d.x, d.y, DROP_MARK]);
     for (const c of ev?.colossi ?? []) {
       const s = w.uidToSlot.get(c.uid);

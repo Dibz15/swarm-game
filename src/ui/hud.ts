@@ -85,6 +85,8 @@ export class Hud {
   private chipKey = '';
   /** the start banner and the strip's popover (#74), and the match they were made for */
   private teamBanner: HTMLDivElement;
+  /** "you are here" on your home nest at the start (#235) */
+  private youTag: HTMLDivElement;
   private teamPop: HTMLDivElement;
   private teamsGame: GameView | null = null;
   /** the match's teams, fixed at its start, and each faction's group (#74) */
@@ -163,6 +165,7 @@ export class Hud {
         <div class="team-pop"></div>
       </div>
       <div class="team-banner" title="Tap to hide"></div>
+      <div class="you-tag">YOU</div>
       <div class="hud-tr">
         <span class="ping" hidden title="How long your orders take to land, round trip included"></span>
         <span class="clock">0:00</span>
@@ -242,6 +245,7 @@ export class Hud {
     this.bar = q('.strength');
     this.chips = q('.chips');
     this.teamBanner = q('.team-banner');
+    this.youTag = q('.you-tag');
     this.teamPop = q('.team-pop');
     // Who's on your team, at any time: tap the strip (#74).
     this.chips.addEventListener('click', (e) => {
@@ -626,6 +630,20 @@ export class Hud {
     }
     const layout = this.layout;
     if (w.tick > 6 * TICK_HZ) this.teamBanner.classList.remove('on');
+    // You are here (#235): YOU on your home nest for the first seconds, your chip lit with it.
+    // Off screen, the edge arrow points home instead.
+    const you = g.youAt;
+    const seen = !!you && you.sx >= 0 && you.sy >= 0 && you.sx <= innerWidth && you.sy <= innerHeight;
+    this.youTag.classList.toggle('on', seen);
+    if (you && seen) {
+      const t = this.youTag;
+      t.style.setProperty('--c', hex(g.human));
+      // just above the nest (below it, if that's off the top)
+      const above = you.sy - you.sr - 8;
+      const y = above > 24 ? above : you.sy + you.sr + 30;
+      t.style.transform = `translate(${you.sx}px, ${y}px) translate(-50%, -100%)`;
+      t.style.opacity = String(you.level);
+    }
     // Refresh the open list twice a second (by ticks elapsed, so a frame that steps several can't skip it).
     if (this.teamPop.classList.contains('on') && w.tick - this.popTick >= 15) {
       this.popTick = w.tick;
@@ -654,6 +672,7 @@ export class Hud {
       seg.style.flexGrow = String(w.unitCount[f.id] / total + 0.0001);
       const chip = this.chipEls[k];
       chip.classList.toggle('dead', f.eliminated);
+      chip.classList.toggle('lit', f.id === g.human && !!you);
       if (f.id === g.human) {
         // Your own chip shows supply: army / cap, red while production is blocked.
         const sp = g.supply();
