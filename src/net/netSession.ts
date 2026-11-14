@@ -158,6 +158,8 @@ export class NetSession implements Session {
   beforeStep: ((tick: number, w: World) => void) | null = null;
   /** a control entry applied (a pause, a resume, a seat going away or to a bot), as the step before `tick` runs */
   onCtrl: ((tick: number, ctrl: Ctrl) => void) | null = null;
+  /** after the end (#233): the last held turn whose host and ranking ctrls we've read */
+  private endRead = -1;
   /** a snapshot became this session's world (#164): the world at `tick`, with the turns after it to come */
   onAdopt: ((tick: number) => void) | null = null;
   /** the host's word on a desync (#165): the first field that differs, as far as it could tell */
@@ -629,7 +631,8 @@ export class NetSession implements Session {
       this.landed.delete(s);
     }
     if (this.world_.over) {
-      // the match is decided: step() no longer advances, so neither do we
+      // the match is decided: step() no longer advances, so neither do we. The turns still say who hosts (#233)
+      this.readAfterEnd();
       this.alpha = 1;
       return 0;
     }
@@ -676,6 +679,21 @@ export class NetSession implements Session {
     if (this.world_.factions[this.localSeat]?.eliminated || this.buffered > this.target + 2) return;
     this.reclaimAt = now;
     this.reclaim();
+  }
+
+  /**
+   * The match is decided, but turns still close (#233): who hosts the room
+   * changes in them, and every page has to hear it, not just the one that
+   * runs the match. Their host and ranking ctrls, in order; the world
+   * stays as it ended, and the turns stay held for `closedTurns`.
+   */
+  private readAfterEnd(): void {
+    // a fork took turns back: the ones that replace them are read again (owner and rank only say how things stand)
+    this.endRead = Math.min(Math.max(this.endRead, this.world_.tick), this.held_);
+    while (this.endRead < this.held_) {
+      const t = ++this.endRead;
+      for (const c of this.turns.get(t)?.ctrl ?? []) if (c.k === 'owner' || c.k === 'rank') this.onCtrl?.(t, c);
+    }
   }
 
   private stepOne(): void {
