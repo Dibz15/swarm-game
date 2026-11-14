@@ -872,6 +872,7 @@ class App {
     if (this.room !== room) return t.close(); // left while it opened
     const router = new mp.Router(t);
     room.router = router;
+    mp.netNote(`== room ${id} as ${mp.short(t.self)}${host ? ' (host)' : ''}${hosted ? ' (reclaimed after a reload)' : ''}, told before: ${loadTold(id).map(mp.short).join(' ') || 'none'}`);
     const clock = () => performance.now();
     if (host) {
       room.lobby = this.wireHostLobby(
@@ -1015,6 +1016,7 @@ class App {
     };
     // in a match, the match itself watches the host (and finds a new one, #166)
     lobby.onNoHost = (why) => {
+      this.mp?.netNote(`!! no host (${why}): ${lobby.debug()}`);
       if (this.match) return;
       // nobody runs the match we saved (#191): ours to pick up
       if (this.room?.save) return this.offerResume();
@@ -1334,6 +1336,7 @@ class App {
   private closeRoom(linger = 0): void {
     const r = this.room;
     if (!r) return;
+    this.mp?.netNote(`== left room ${r.id}${r.lobby && 'debug' in r.lobby ? `: ${r.lobby.debug()}` : ''}`);
     this.room = null;
     if (r.linkPoll) clearInterval(r.linkPoll);
     this.match?.close();
@@ -1869,6 +1872,16 @@ class App {
   /** A phone keeps its screen on while a room match is under way (#193). */
   private syncAwake(): void {
     this.awake.set(!!this.match && !this.endShown && isMobile());
+  }
+
+  /**
+   * The room traffic this page saw (#216), oldest first, with where finding
+   * the host stands now. In the console: `copy(swarm.netLog())`.
+   */
+  netLog(): string {
+    const l = this.room?.lobby;
+    const now = l && 'debug' in l ? `now: ${l.debug()}` : `now: ${this.room ? 'hosting' : 'not in a room'}`;
+    return `${this.mp?.netLog() ?? '(multiplayer never loaded)'}\n${now}`;
   }
 
   /** Dev, or `?debug` (#193): the longest and 95th-percentile gaps between world steps since the last call, ms. */

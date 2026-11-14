@@ -11,5 +11,6 @@ export { NetMatch } from './match';
 export { canResume } from './matchSave';
 export { LOBBY_KINDS, MATCH_KINDS, Router } from './transport';
 export { webrtcTransport } from './webrtc';
+export { netLog, netNote, short } from './netlog';
 export { desyncCard, lobbyScreen, messageCard, multiplayerMenu } from '../ui/lobby';
 export { buildBundle, nudgeWorld } from './desync';

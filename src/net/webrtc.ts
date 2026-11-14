@@ -1,3 +1,4 @@
+import { netMsg, netNote } from './netlog';
 import { PeerGrace, type Transport } from './transport';
 
 /**
@@ -57,7 +58,9 @@ export async function webrtcTransport(o: WebRtcRoom): Promise<Transport> {
   const bye = room.makeAction<string>('b');
   let open = true;
   const sayBye = () => {
-    if (open) bye.send('').catch(() => undefined);
+    if (!open) return;
+    netNote('> bye (to everyone)');
+    bye.send('').catch(() => undefined);
   };
   const t: Transport = {
     self: selfId,
@@ -66,9 +69,10 @@ export async function webrtcTransport(o: WebRtcRoom): Promise<Transport> {
     onLink: null,
     send(peer, bytes) {
       // a dropped link can't take it (Trystero would warn on every message); the protocol resends once it's back
-      if (grace.isHeld(peer)) return;
-      action.send(bytes, { target: peer }).catch(() => {
+      if (grace.isHeld(peer)) return netMsg('x', peer, bytes, 'link held');
+      action.send(bytes, { target: peer }).catch((e: unknown) => {
         /* the peer is gone for now: a reconnect resumes, or its loss is reported */
+        netMsg('x', peer, bytes, `send failed: ${e instanceof Error ? e.message : String(e)}`);
       });
     },
     async linkInfo(peer) {
@@ -98,14 +102,23 @@ export async function webrtcTransport(o: WebRtcRoom): Promise<Transport> {
     if (!e.persisted) sayBye();
   };
   if (typeof window !== 'undefined') window.addEventListener('pagehide', onHide);
-  bye.onMessage = (_d, { peerId }) => grace.bye(peerId);
+  bye.onMessage = (_d, { peerId }) => {
+    netNote(`< ${peerId.slice(0, 6)} bye`);
+    grace.bye(peerId);
+  };
   action.onMessage = (data, { peerId }) => {
     const v = data as ArrayBuffer | ArrayBufferView;
     const bytes = v instanceof Uint8Array ? v : ArrayBuffer.isView(v) ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength) : new Uint8Array(v);
     t.onMessage?.(peerId, bytes);
   };
-  room.onPeerJoin = (peer) => grace.up(peer);
-  room.onPeerLeave = (peer) => grace.down(peer);
+  room.onPeerJoin = (peer) => {
+    netNote(`  ${peer.slice(0, 6)} trystero join`);
+    grace.up(peer);
+  };
+  room.onPeerLeave = (peer) => {
+    netNote(`  ${peer.slice(0, 6)} trystero leave`);
+    grace.down(peer);
+  };
   return t;
 }
 
