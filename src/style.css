@@ -179,6 +179,11 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 .bot { display: flex; gap: 8px; align-items: center; }
 .bot select { flex: 1; min-width: 0; }
 .bot select[hidden] { display: none; }
+/* Stronghold (#222): the crown on the bot that holds the citadel; dim on the others, a button to hand it over. */
+.crown { color: var(--muted); opacity: 0.45; }
+.crown.on { color: #ffd166; opacity: 1; }
+button.crown.on { background: rgba(255, 209, 102, 0.16); }
+.setup .problem { color: var(--warn); font-size: 14px; margin: 4px 0 0; }
 
 /* multiplayer lobby (#162) */
 .chars { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -414,6 +419,35 @@ label small { text-transform: none; letter-spacing: 0; opacity: 0.7; }
   display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 12px; padding: 10px 16px; font-size: 14px;
   border: 1px solid var(--line-strong); border-radius: 12px; background: rgba(10, 13, 28, 0.9);
 }
+/* You are here (#235): a tag on your home nest for the first seconds, and your chip lit with it. */
+.you-tag {
+  position: absolute; left: 0; top: 0; display: none; padding: 2px 8px; border-radius: 6px; pointer-events: none; will-change: transform;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.12em; color: #0a0d1c; background: var(--c); box-shadow: 0 0 12px var(--c);
+}
+.you-tag.on { display: block; }
+.you-tag::after {
+  content: ''; position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%);
+  border: 5px solid transparent; border-bottom: 0; border-top-color: var(--c);
+}
+/* GO (#235): the opening is over, everyone can move. */
+.go-banner {
+  position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); display: none; pointer-events: none;
+  font-size: 72px; font-weight: 800; letter-spacing: 0.14em; color: #fff; text-shadow: 0 0 18px var(--c), 0 0 42px var(--c);
+}
+.go-banner.on { display: block; animation: go-pop 1.2s ease-out forwards; }
+@keyframes go-pop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+  15% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+  30% { transform: translate(-50%, -50%) scale(1); }
+  70% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.25); }
+}
+@media (prefers-reduced-motion: reduce) { .go-banner.on { animation: none; } }
+.you-tag.edge::after { display: none; }
+.you-tag.below::after { bottom: auto; top: -5px; border: 5px solid transparent; border-top: 0; border-bottom-color: var(--c); }
+.chip.me.lit { animation: chip-lit 0.8s ease-in-out infinite alternate; }
+@keyframes chip-lit { to { text-shadow: 0 0 10px var(--c); transform: scale(1.12); } }
+@media (prefers-reduced-motion: reduce) { .chip.me.lit { animation: none; text-shadow: 0 0 10px var(--c); } }
 .team-banner em { font-style: normal; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
 .tg.mine b { color: var(--text); }
 .tm { color: var(--c); white-space: nowrap; }

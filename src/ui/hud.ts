@@ -30,7 +30,7 @@ const TIPS = [
   'Click one of your nests, then right-click somewhere to set its rally point.',
   'Select a nest and press U to feed it dots and level it up.',
   'Surge (Q) makes selected dots faster, stronger and tougher. Nova (E) blasts enemies but costs some of your own dots.',
-  'Hold 70% of the nests (60% on large maps) for 30 seconds to win by domination.',
+  'Hold 70% of the nests (60% on large maps; more in a team match, most for the bigger team) for 30 seconds to win by domination. The mark on the nest bar shows your line.',
   'Your count at the top is army / supply cap. Every nest you hold raises the cap; at the cap your nests stop producing.',
   'Ctrl+5–9 saves a control group, 5–9 recalls it. C centers the camera on your selection, 0 fits the map.',
   'Each nest type you hold unlocks a power: Forge → Fortify (R), Spire → Barrage (F), Den → Blink (G), Bastion → Lockdown (T).',
@@ -76,6 +76,9 @@ export function formatTime(ticks: number): string {
 }
 
 /** DOM heads-up display. Refreshed ~10x/s so it never costs layout every frame. */
+/** How long GO shows (#235), ticks. */
+const GO_TICKS = Math.round(1.2 * TICK_HZ);
+
 export class Hud {
   readonly el: HTMLDivElement;
   private bar: HTMLDivElement;
@@ -85,6 +88,10 @@ export class Hud {
   private chipKey = '';
   /** the start banner and the strip's popover (#74), and the match they were made for */
   private teamBanner: HTMLDivElement;
+  /** "you are here" on your home nest at the start (#235) */
+  private youTag: HTMLDivElement;
+  /** the opening's end (#235): everyone can move */
+  private goBanner: HTMLDivElement;
   private teamPop: HTMLDivElement;
   private teamsGame: GameView | null = null;
   /** the match's teams, fixed at its start, and each faction's group (#74) */
@@ -163,6 +170,8 @@ export class Hud {
         <div class="team-pop"></div>
       </div>
       <div class="team-banner" title="Tap to hide"></div>
+      <div class="you-tag">YOU</div>
+      <div class="go-banner">GO</div>
       <div class="hud-tr">
         <span class="ping" hidden title="How long your orders take to land, round trip included"></span>
         <span class="clock">0:00</span>
@@ -242,6 +251,8 @@ export class Hud {
     this.bar = q('.strength');
     this.chips = q('.chips');
     this.teamBanner = q('.team-banner');
+    this.youTag = q('.you-tag');
+    this.goBanner = q('.go-banner');
     this.teamPop = q('.team-pop');
     // Who's on your team, at any time: tap the strip (#74).
     this.chips.addEventListener('click', (e) => {
@@ -527,8 +538,15 @@ export class Hud {
     const text = `Hold ${formatTime(left)}`;
     if (clock.textContent !== text) clock.textContent = text;
     const lost = this.siege.children[2] as HTMLElement;
-    lost.style.display = sg.lostAt >= 0 ? 'block' : 'none';
-    if (sg.lostAt >= 0) lost.textContent = `Retake your capital: ${formatTime(Math.max(0, SIEGE.retake - (w.tick - sg.lostAt)))}`;
+    // The fallen capital to retake first: yours, else the one closest to gone (co-op, #228).
+    let fallen: (typeof sg.defenders)[number] | undefined;
+    for (const d of sg.defenders) if (d.lostAt >= 0 && (!fallen || (d.f === g.human) > (fallen.f === g.human) || ((d.f === g.human) === (fallen.f === g.human) && d.lostAt < fallen.lostAt))) fallen = d;
+    lost.style.display = fallen ? 'block' : 'none';
+    if (fallen) {
+      const left = SIEGE.retake - (w.tick - fallen.lostAt);
+      const whose = fallen.f === g.human ? 'your capital' : "an ally's capital";
+      lost.textContent = left > 0 ? `Retake ${whose}: ${formatTime(left)}` : `Retake ${whose} before the clock runs out`;
+    }
     // The Bloom's nests in the field: what taking them would save you.
     const held = sg.bloomNests.filter((id) => w.nests[id].owner === NEUTRAL).length;
     const bloom = this.siege.children[3] as HTMLElement;
@@ -575,6 +593,32 @@ export class Hud {
     for (const k of ['surge', 'nova', 'fortify', 'barrage', 'blink', 'lockdown', 'upgrade'] as const) this.btn[k].classList.toggle('pending', g.pending.has(k));
   }
 
+  /**
+   * You are here (#235): YOU on your home nest for the first seconds (by its
+   * edge arrow while it's off screen). Every frame, after the camera moves,
+   * so it keeps up with the map.
+   */
+  placeYou(g: GameView): void {
+    // GO, as the opening ends (#235): not for a match joined after it
+    const w = g.world;
+    const go = w.opening > 0 && w.tick >= w.opening && w.tick < w.opening + GO_TICKS;
+    if (go !== this.goBanner.classList.contains('on')) {
+      this.goBanner.style.setProperty('--c', hex(g.human >= 0 ? g.human : 6));
+      this.goBanner.classList.toggle('on', go);
+    }
+    const you = g.youAt;
+    const t = this.youTag;
+    t.classList.toggle('on', !!you);
+    if (!you) return;
+    const c = hex(g.human);
+    if (t.style.getPropertyValue('--c') !== c) t.style.setProperty('--c', c);
+    t.classList.toggle('below', you.place === 'below');
+    t.classList.toggle('edge', you.place === 'edge');
+    const shift = you.place === 'above' ? '-50%, -100%' : you.place === 'below' ? '-50%, 0' : '-50%, -50%';
+    t.style.transform = `translate(${you.tx}px, ${you.ty}px) translate(${shift})`;
+    t.style.opacity = String(you.level);
+  }
+
   update(g: GameView, dt: number): void {
     this.game = g;
     this.updateSiege(g);
@@ -590,7 +634,8 @@ export class Hud {
 
     const w = g.world;
     const mobile = isMobile();
-    this.clock.textContent = formatTime(w.tick);
+    // the match's time starts at GO (#235)
+    this.clock.textContent = formatTime(Math.max(0, w.tick - w.opening));
     // Out and watching (#183): nothing to command, so no bar of orders
     if (this.bottom.hidden !== g.spectating) {
       this.bottom.hidden = g.spectating;
@@ -647,6 +692,7 @@ export class Hud {
       seg.style.flexGrow = String(w.unitCount[f.id] / total + 0.0001);
       const chip = this.chipEls[k];
       chip.classList.toggle('dead', f.eliminated);
+      chip.classList.toggle('lit', f.id === g.human && !!g.youAt);
       if (f.id === g.human) {
         // Your own chip shows supply: army / cap, red while production is blocked.
         const sp = g.supply();
@@ -667,9 +713,11 @@ export class Hud {
     if (this.nestShare.children.length !== active.length) {
       this.nestShare.innerHTML = active.map((f) => `<i style="background:${hex(f.id)}"></i>`).join('');
     }
-    this.domMark.style.left = `${w.domShare * 100}%`;
+    // Your team's line (#213: in a team match each team has its own).
+    const domShare = w.domShareOf(g.human >= 0 ? w.teamOf[g.human] : -1);
+    this.domMark.style.left = `${domShare * 100}%`;
     // No domination win in this match (a share past 1, #146): no marker.
-    this.domMark.style.display = w.domShare > 1 ? 'none' : '';
+    this.domMark.style.display = domShare > 1 ? 'none' : '';
     active.forEach((f, k) => {
       (this.nestShare.children[k] as HTMLElement).style.width = `${(100 * nestsOf(f.id)) / Math.max(1, w.nests.length)}%`;
     });

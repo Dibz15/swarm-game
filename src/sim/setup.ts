@@ -45,6 +45,8 @@ export interface MatchSetup {
   fill?: MapFill | 'random';
   /** a hand-authored map (tutorial missions); replaces generation from the fields above */
   map?: MapSpec;
+  /** ticks at the start where the world waits, for the opening (#235); default none */
+  opening?: number;
   /** nobody wins by elimination or domination: the mission script ends the match */
   endless?: boolean;
   /** share of nests needed for domination, instead of the map size's default */
@@ -67,15 +69,25 @@ export interface MatchSetup {
 
 /** Most human seats a match can hold: one per player color (#156). */
 export const MAX_HUMANS = NEUTRAL;
+/** Hold the line in co-op (#228): at most this many defenders. */
+export const MAX_DEFENDERS = 4;
 
 /**
  * Reject setups the sim can't run (#156). Several human seats are fine in
- * FFA or teams; a Hold the line siege is built around a single human.
+ * FFA or teams; a Hold the line siege's humans all defend together, and a
+ * stronghold's side is all bots.
  */
 export function validateSetup(setup: MatchSetup): void {
   const humans = setup.players.filter((p) => p.human).length;
   if (humans > MAX_HUMANS) throw new Error(`MatchSetup: ${humans} human seats, at most ${MAX_HUMANS}`);
-  if (setup.siege && humans > 1) throw new Error(`MatchSetup: a siege (Hold the line) takes one human seat, not ${humans}`);
+  // Hold the line in co-op (#228): every human defends, on one team.
+  if (setup.siege && new Set(setup.players.filter((p) => p.human).map((p) => p.team)).size > 1) throw new Error('MatchSetup: a siege (Hold the line) has its humans on one team');
+  if (setup.siege && humans > MAX_DEFENDERS) throw new Error(`MatchSetup: a siege (Hold the line) takes at most ${MAX_DEFENDERS} defenders, not ${humans}`);
+  // A human's side taking the citadel wins (#222): the holder's side is bots only, or it would win at the start.
+  const holder = setup.stronghold ? setup.players[setup.stronghold.player] : undefined;
+  if (setup.stronghold && (!holder || setup.players.some((p) => p.human && p.team === holder.team))) throw new Error('MatchSetup: a stronghold is held by a side of bots');
+  // the opening (#235) is a few seconds, not a stall (a setup can come over the wire)
+  if (setup.opening !== undefined && !(Number.isInteger(setup.opening) && setup.opening >= 0 && setup.opening <= 10 * TICK_HZ)) throw new Error('MatchSetup: an opening is 0 to 10 seconds of ticks');
 }
 
 /** The generator's params for a setup's map (thumbnails use this too, so they match the battle). */
@@ -92,11 +104,33 @@ export function mapParamsOf(setup: MatchSetup): MapParams {
     form: setup.form,
     fill: setup.fill,
     keys: setup.keys,
-    fortress: setup.stronghold?.player ?? (setup.siege ? setup.players.findIndex((p) => p.human) : undefined),
+    fortress: setup.stronghold?.player ?? (setup.siege ? siegeSeats(setup) : undefined),
   };
 }
 
+/** A siege's defenders (#228): every human seat (the first seat if there are none, as in campaign probes). */
+function siegeSeats(setup: MatchSetup): number[] {
+  const seats = setup.players.flatMap((p, i) => (p.human ? [i] : []));
+  return seats.length ? seats : [0];
+}
+
 export const START_UNITS = 10;
+
+/**
+ * Team matches (#213): a team's domination share starts from its slice of the
+ * map (its players over all players), plus DOMINATION.take of the rest. Without
+ * this, the bigger side of a 3v2 starts at about 60% and the 70% bar is nearly
+ * free; in a 2v2, beating one rival is enough. FFA keeps `domShare`.
+ */
+function teamDomShares(w: World, setup: MatchSetup): void {
+  const size = new Map<number, number>();
+  for (const p of setup.players) size.set(p.team, (size.get(p.team) ?? 0) + 1);
+  if (size.size === setup.players.length) return;
+  for (const [team, k] of size) {
+    const fair = k / setup.players.length;
+    w.domShares[team] = fair + DOMINATION.take * (1 - fair);
+  }
+}
 
 export function createWorld(setup: MatchSetup): World {
   validateSetup(setup);
@@ -104,6 +138,7 @@ export function createWorld(setup: MatchSetup): World {
   const w = new World(setup.seed, map.width, map.height, map.terrain);
   w.domShare = setup.domShare ?? DOMINATION.share[setup.size] ?? 0.7;
   w.endless = !!setup.endless;
+  w.opening = Math.max(0, Math.floor(setup.opening ?? 0));
 
   // Inactive factions get unique teams so they never count as allies.
   for (let f = 0; f < NUM_FACTIONS; f++) if (f !== NEUTRAL) w.setTeam(f, 200 + f);
@@ -124,6 +159,8 @@ export function createWorld(setup: MatchSetup): World {
       w.bots.push(new Bot(p.faction, cfg, setup.seed));
     }
   }
+
+  if (setup.domShare === undefined) teamDomShares(w, setup);
 
   map.nests.forEach((s, id) => {
     const owner = s.player >= 0 ? setup.players[s.player].faction : NEUTRAL;
@@ -185,7 +222,7 @@ export function createWorld(setup: MatchSetup): World {
     w.bloomSurge = { warnAt: at - SURGE.warn * TICK_HZ, next: at, every: SURGE.every * TICK_HZ, size: setup.surge.size, grow: SURGE.grow, swarms: SURGE.swarms, wave: 0 };
   }
   if (setup.heart) initHeart(w, setup.heart.strength, setup.heart.rule, setup.heart.wound);
-  if (setup.siege) initSiege(w, setup.siege, setup.players.find((p) => p.human)?.faction ?? setup.players[0].faction);
+  if (setup.siege) initSiege(w, setup.siege, siegeSeats(setup).map((i) => setup.players[i].faction));
 
   for (const p of setup.players) {
     const fs = w.factions[p.faction].stats;

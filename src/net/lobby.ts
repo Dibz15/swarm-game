@@ -1,8 +1,9 @@
 import { playerCharacter } from '../game/character';
-import { personalityPicker, randomMap, randomSeed, seedOf, type SetupPrefs } from '../game/matchSetup';
+import { applyMode, MATCH_MODES, modeProblem, personalityPicker, randomMap, randomSeed, seedOf, WAVE_NAMES, type MatchMode, type SetupPrefs } from '../game/matchSetup';
 import { PERSONALITIES, type Personality } from '../sim/ai/bot';
 import type { CaveLevel, EventLevel, MapLayout, MapSize, TerrainLevel } from '../sim/mapgen';
-import type { MatchSetup } from '../sim/setup';
+import { OPENING_TICKS } from '../sim/constants';
+import { MAX_DEFENDERS, type MatchSetup } from '../sim/setup';
 import { decodeMsg, encodeMsg } from './codec';
 import type { MatchPeer } from './match';
 import { MAX_LOBBY, MAX_SEATS, PROTOCOL_VERSION, type Msg } from './protocol';
@@ -61,6 +62,22 @@ export interface LobbyState {
    * by peer id; absent: Auto, the best-placed player by measured links.
    */
   runner?: string;
+  /** the match type (#222); Hold the line is co-op (#228) */
+  mode: RoomMode;
+  /** Stronghold: the seat (a bot's) that holds the citadel; absent: the first bot */
+  holder?: number;
+  /** Hold the line: the waves' level (an index into WAVE_NAMES); absent: Normal */
+  waves?: number;
+}
+
+/** The match types a room offers (#222): all of them, Hold the line in co-op (#228). */
+export type RoomMode = MatchMode;
+export const ROOM_MODES: readonly RoomMode[] = MATCH_MODES;
+
+/** The seat holding a room's stronghold: the chosen bot's, or the first bot's; -1 if no bot sits. */
+export function holderSeat(s: LobbyState): number {
+  if (s.holder !== undefined && s.rows[s.holder]?.k === 'bot') return s.holder;
+  return s.rows.findIndex((r) => r.k === 'bot');
 }
 
 export type LobbyPhase = 'lobby' | 'starting' | 'playing';
@@ -88,6 +105,24 @@ export const players = (s: LobbyState) => s.rows.filter((r) => r.k === 'human' |
 export const seatOf = (s: LobbyState, peer: string) => s.rows.findIndex((r) => r.k === 'human' && r.peer === peer);
 const nameOf = (r: SeatRow) => (r.k === 'human' ? playerCharacter(r.char).name : null);
 
+/** The holder's index in the match's `players` (the seats before it that play), -1 if no bot sits. */
+function holderIndex(s: LobbyState): number {
+  const seat = holderSeat(s);
+  return seat < 0 ? -1 : s.rows.slice(0, seat).filter((r) => r.k === 'human' || r.k === 'bot').length;
+}
+
+/** Why the room can't start as its match type (#222), or null. */
+export function roomProblem(s: LobbyState): string | null {
+  if (s.mode === 'hold') {
+    if (s.rows.some((r) => r.k === 'bot')) return 'Hold the line has no bots: remove them';
+    return humans(s) > MAX_DEFENDERS ? `Hold the line takes at most ${MAX_DEFENDERS} players` : null;
+  }
+  if (s.mode !== 'stronghold') return null;
+  const holder = holderIndex(s);
+  if (holder < 0) return 'Add a bot to hold the stronghold';
+  return modeProblem(buildNetSetup({ ...s, mode: 'conquest' }), 'stronghold', holder);
+}
+
 /** The match a lobby describes: row i plays faction i; without teams, every seat is its own team. */
 export function buildNetSetup(s: LobbyState): MatchSetup {
   const seed = seedOf(s.seed);
@@ -98,7 +133,7 @@ export function buildNetSetup(s: LobbyState): MatchSetup {
     if (r.k === 'human') players.push({ faction: i, team, human: true });
     else if (r.k === 'bot') players.push({ faction: i, team, human: false, bot: { difficulty: r.difficulty, personality: pick(r.personality) } });
   });
-  return { seed, ...s.map, players };
+  return applyMode({ seed, opening: OPENING_TICKS, ...s.map, players }, s.mode, { holder: holderIndex(s), waves: s.waves });
 }
 
 /** A lobby state from JSON, or null if it isn't one (it came over the wire). */
@@ -125,9 +160,13 @@ export function parseLobby(json: string): LobbyState | null {
       o.rows.every(validRow) &&
       BOT_SECS.includes(o.botSecs) &&
       (o.runner === undefined || (typeof o.runner === 'string' && o.runner.length <= 64)) &&
+      // a state from before match types (#222: a saved room or match) has none: Conquest
+      (o.mode === undefined || ROOM_MODES.includes(o.mode)) &&
+      (o.holder === undefined || (Number.isInteger(o.holder) && o.holder >= 0 && o.holder < MAX_SEATS)) &&
+      (o.waves === undefined || (Number.isInteger(o.waves) && o.waves >= 0 && o.waves < WAVE_NAMES.length)) &&
       uniqueSeals(o.rows);
     if (!ok) return null;
-    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs, ...(o.runner ? { runner: o.runner } : {}) };
+    return { host: o.host, phase: o.phase, locked: o.locked, map: { size: m.size, terrain: m.terrain, caves: m.caves, layout: m.layout, events: m.events }, randomMap: o.randomMap, teams: o.teams, seed: o.seed, rows: o.rows, botSecs: o.botSecs, ...(o.runner ? { runner: o.runner } : {}), mode: o.mode ?? 'conquest', ...(o.holder !== undefined ? { holder: o.holder } : {}), ...(o.waves !== undefined ? { waves: o.waves } : {}) };
   } catch {
     return null;
   }
@@ -320,6 +359,9 @@ export class HostLobby {
       seed: o.seed.slice(0, MAX_SEED_TEXT),
       rows,
       botSecs: 60,
+      mode: ROOM_MODES.includes(p.mode) ? p.mode : 'conquest',
+      // prefs come from storage unchecked: a bad level would make every guest refuse the room
+      ...(Number.isInteger(p.waves) && p.waves >= 0 && p.waves < WAVE_NAMES.length ? { waves: p.waves } : {}),
     };
     if (o.takeOver) {
       // the room as it was, run from here now; its rows carry everyone's seals, so a reload still gets back in (#192)
@@ -327,6 +369,8 @@ export class HostLobby {
       // a room in a match always knows the match, to hand it to a player who comes back (#192)
       if (o.takeOver.state.phase === 'playing' && (o.takeOver.reclaim || !o.takeOver.setup)) throw new Error(o.takeOver.reclaim ? 'lobby: a reload reclaims a room only before a match' : 'lobby: taking over a match needs its setup');
       this.state = { ...structuredClone(o.takeOver.state), host: t.self };
+      // saved before match types (#222): Conquest, as it was played
+      this.state.mode ??= 'conquest';
       if (this.state.phase === 'starting') this.state.phase = 'lobby';
       for (const peer of o.takeOver.connected) this.connected.add(peer);
       for (const tok of o.takeOver.tokens ?? []) this.seenTokens.add(tok);
@@ -375,6 +419,21 @@ export class HostLobby {
 
   setTeams(on: boolean): void {
     this.edit(() => (this.state.teams = on));
+  }
+
+  /** the match type (#222) */
+  setMode(mode: RoomMode): void {
+    if (ROOM_MODES.includes(mode) && this.state.mode !== mode) this.edit(() => (this.state.mode = mode));
+  }
+
+  /** Stronghold: this bot's seat holds the citadel (#222) */
+  setHolder(seat: number): void {
+    if (this.state.rows[seat]?.k === 'bot' && this.state.holder !== seat) this.edit(() => (this.state.holder = seat));
+  }
+
+  /** Hold the line: the waves' level (#228) */
+  setWaves(level: number): void {
+    if (Number.isInteger(level) && level >= 0 && level < WAVE_NAMES.length && this.state.waves !== level) this.edit(() => (this.state.waves = level));
   }
 
   /** how long a dropped player's seat idles before an Easy bot takes it (#164) */
@@ -435,7 +494,7 @@ export class HostLobby {
 
   /** Everyone can play: at least two sides, and a host in a seat. */
   canStart(): boolean {
-    return this.state.phase === 'lobby' && this.mySeat >= 0 && players(this.state) >= 2;
+    return this.state.phase === 'lobby' && this.mySeat >= 0 && players(this.state) >= 2 && !roomProblem(this.state);
   }
 
   /**
@@ -509,7 +568,8 @@ export class HostLobby {
     // before a match, everyone gets the room again now and then: a change lost on the way is made good (#214)
     if (this.state.phase !== 'playing' && this.o.clock() - this.sentAt >= RESEND_MS) this.broadcast();
     if (this.state.phase === 'starting' && this.countdownUntil >= 0 && this.o.clock() >= this.countdownUntil) {
-      if (players(this.state) >= 2 && this.mySeat >= 0) this.launch();
+      // the same checks as Start: a room that changed under the countdown mustn't quietly play another match type (#222)
+      if (players(this.state) >= 2 && this.mySeat >= 0 && !roomProblem(this.state)) this.launch();
       else this.cancelStart();
     }
     const w = this.waiting;

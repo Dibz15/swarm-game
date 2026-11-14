@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { playerCharacter } from '../src/game/character';
 import { loadPrefs, type SetupPrefs } from '../src/game/matchSetup';
-import { ASK_MS, LONE_ASKS, RESEND_MS, buildNetSetup, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
+import { ASK_MS, LONE_ASKS, RESEND_MS, buildNetSetup, roomProblem, COUNTDOWN_MS, GuestLobby, HostLobby, nextHost, parseLobby, rosterChanges, type HostGo, type LobbyState, type StartInfo } from '../src/net/lobby';
 import { NetMatch } from '../src/net/match';
 import { PROTOCOL_VERSION, type Msg } from '../src/net/protocol';
 import { decodeMsg, encodeMsg } from '../src/net/codec';
@@ -134,6 +134,69 @@ describe('lobby (#162)', () => {
     expect(ffa.players[2].bot?.personality).not.toBe('random');
     h.lobby.setTeams(true);
     expect(buildNetSetup(h.lobby.state).players.map((p) => p.team)).toEqual([0, 1, 1]);
+  });
+
+  it('a match type (#222): the guest sees it, and a stronghold needs a bot to hold it', () => {
+    const { host, guest } = room();
+    const h = host();
+    const a = guest('A');
+    h.lobby.setMode('stronghold');
+    expect(a.lobby.state?.mode).toBe('stronghold');
+    // no bot yet: Start waits, and says why
+    expect(roomProblem(h.lobby.state)).toMatch(/bot/);
+    expect(h.lobby.canStart()).toBe(false);
+    h.lobby.setRow(2, { k: 'bot', team: 2, difficulty: 1, personality: 'random' });
+    h.lobby.setRow(4, { k: 'bot', team: 4, difficulty: 1, personality: 'random' });
+    expect(h.lobby.canStart()).toBe(true);
+    expect(buildNetSetup(h.lobby.state).stronghold?.player).toBe(2);
+    // the crown moves to another bot; a player's seat can't take it
+    h.lobby.setHolder(4);
+    h.lobby.setHolder(1);
+    expect(a.lobby.state?.holder).toBe(4);
+    expect(buildNetSetup(h.lobby.state).stronghold?.player).toBe(3);
+    expect(parseLobby(JSON.stringify(h.lobby.state))).toEqual(h.lobby.state);
+    // Hold the line is co-op in a room now (#228), with its waves' level
+    expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'hold', waves: 2 }))).toEqual({ ...h.lobby.state, mode: 'hold', waves: 2 });
+    expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'hold', waves: 3 }))).toBeNull();
+    expect(parseLobby(JSON.stringify({ ...h.lobby.state, mode: 'siege' }))).toBeNull();
+  });
+
+  it('a waves level from stored prefs that is out of range never reaches the room (#228)', () => {
+    const { host, guest } = room();
+    const h = host({ prefs: prefs({ mode: 'hold', waves: 7 }) });
+    const a = guest('A');
+    expect(h.lobby.state.mode).toBe('hold');
+    expect(h.lobby.state.waves).toBeUndefined();
+    expect(a.lobby.state?.mode).toBe('hold');
+    h.lobby.setWaves(2);
+    expect(a.lobby.state?.waves).toBe(2);
+  });
+
+  it('a room saved before match types (#222) reads as Conquest', () => {
+    const { host } = room();
+    const { mode: _, ...old } = host().lobby.state;
+    expect(parseLobby(JSON.stringify(old))?.mode).toBe('conquest');
+  });
+
+  it("a stronghold that can't be played any more when the countdown ends doesn't start as Conquest (#222)", () => {
+    const { host, guest, clock } = room();
+    const h = host();
+    // a guest too: with the bots gone there are still two players, so only the stronghold check can stop it
+    guest('A');
+    h.lobby.setMode('stronghold');
+    h.lobby.setRow(2, { k: 'bot', team: 2, difficulty: 1, personality: 'random' });
+    h.lobby.setRow(3, { k: 'bot', team: 3, difficulty: 1, personality: 'random' });
+    let went = false;
+    h.lobby.onGo = () => (went = true);
+    expect(h.lobby.start()).not.toBeNull();
+    // the holder's seat empties under the countdown, then the other bot's
+    h.lobby.setRow(2, { k: 'open', team: 2 });
+    h.lobby.setRow(3, { k: 'open', team: 3 });
+    clock.now += COUNTDOWN_MS + 10_000;
+    h.lobby.update();
+    expect(roomProblem(h.lobby.state)).toMatch(/bot/);
+    expect(h.lobby.state.phase).toBe('lobby');
+    expect(went).toBe(false);
   });
 });
 

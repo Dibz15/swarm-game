@@ -1,7 +1,8 @@
 import { FACTION_RGB, WHITE, mixRgb, type RGB } from '../content/factions';
 import { bastionRange, keyTarget, DAMAGE_VS, DOMINATION, EVENTS, KEYS, Kind, NEUTRAL, NestType, POWER, TERRAIN, UNIT_FEEDING, UNIT_RETREAT, UNIT_STATS, UPGRADE_COST, VARIANTS } from '../sim/index';
 import { HEART, heartSlot, standingNests } from '../sim/heart';
-import { WILD_HEART, type World } from '../sim/world';
+import { SIEGE } from '../sim/siege';
+import { WILD_HEART, type Drop, type World } from '../sim/world';
 import type { Renderer } from './renderer';
 import type { TraitId } from '../campaign/warlords';
 import { BLOOM_GLOW, BLOOM_RGB, bloomBreath, drawBloomNests, drawHeartBody, type BloomView } from './bloom';
@@ -354,23 +355,9 @@ function crownAt(r: Renderer, x: number, y: number, s: number, c: RGB): void {
 function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
   const ev = w.events;
   if (!ev) return;
-  const R = EVENTS.dropRadius;
-  for (const d of ev.drops) {
-    const left = (d.lands - w.tick - o.alpha) / EVENTS.dropTelegraph;
-    if (left > 0) {
-      // Incoming: a ring closing in, and a column of light.
-      r.shape(true, d.x, d.y, R * (1 + left * 2.5), 0, 1, o.time, 0.03, DROP_RGB, Math.round(90 + 120 * (1 - left)));
-      r.shape(false, d.x, d.y, R, 7, 1, 0, 0, DROP_RGB, Math.round(30 * (1 - left)));
-      r.beam(d.x, d.y - 260 * left - 20, d.x, d.y, DROP_RGB[0], DROP_RGB[1], DROP_RGB[2], Math.round(160 * (1 - left)), 3);
-      continue;
-    }
-    const pulse = 0.5 + 0.5 * Math.sin(o.time * 4);
-    const hc = d.holder >= 0 ? FACTION_RGB[d.holder] : DROP_RGB;
-    r.shape(false, d.x, d.y, 11, 2, 0, o.time * 1.5, 0.5, DROP_RGB, 240);
-    r.shape(false, d.x, d.y, R, 7, 1, 0, 0, DROP_RGB, Math.round(14 + 14 * pulse));
-    r.shape(true, d.x, d.y, R, 0, 1, 0, 0.02, DROP_RGB, Math.round(70 + 60 * pulse));
-    if (d.progress > 0) r.shape(true, d.x, d.y, R + 6, 0, d.progress, 0, 0.07, hc, 235);
-  }
+  for (const d of ev.drops) drawDrop(r, w, o, d, EVENTS.dropTelegraph, DROP_RGB);
+  // Co-op Hold the line (#228): boons dropped outside the walls, in violet.
+  if (w.siege) for (const d of w.siege.drops) drawDrop(r, w, o, d, SIEGE.dropTelegraph, BOON_RGB);
   drawHeart(r, w, o);
   // Holding the line (#67): the Bloom's nests in the field, each feeding the waves
   // (overgrown instead, when the view tracks their growth: #94).
@@ -389,6 +376,28 @@ function drawEvents(r: Renderer, w: World, o: SceneOpts): void {
     r.shape(true, x, y, 30, 0, w.hp[s] / c.maxHp, 0, 0.06, FERAL, 220);
     r.shape(true, x, y, 30, 0, 1, 0, 0.03, FERAL, 50);
   }
+}
+
+/** co-op boon drops (#228) */
+export const BOON_RGB: RGB = [196, 150, 255];
+
+/** A drop: a falling beacon while `telegraph` runs, then its capture ring. */
+function drawDrop(r: Renderer, w: World, o: SceneOpts, d: Drop, telegraph: number, c: RGB): void {
+  const R = EVENTS.dropRadius;
+  const left = (d.lands - w.tick - o.alpha) / telegraph;
+  if (left > 0) {
+    // Incoming: a ring closing in, and a column of light.
+    r.shape(true, d.x, d.y, R * (1 + left * 2.5), 0, 1, o.time, 0.03, c, Math.round(90 + 120 * (1 - left)));
+    r.shape(false, d.x, d.y, R, 7, 1, 0, 0, c, Math.round(30 * (1 - left)));
+    r.beam(d.x, d.y - 260 * left - 20, d.x, d.y, c[0], c[1], c[2], Math.round(160 * (1 - left)), 3);
+    return;
+  }
+  const pulse = 0.5 + 0.5 * Math.sin(o.time * 4);
+  const hc = d.holder >= 0 ? FACTION_RGB[d.holder] : c;
+  r.shape(false, d.x, d.y, 11, 2, 0, o.time * 1.5, 0.5, c, 240);
+  r.shape(false, d.x, d.y, R, 7, 1, 0, 0, c, Math.round(14 + 14 * pulse));
+  r.shape(true, d.x, d.y, R, 0, 1, 0, 0.02, c, Math.round(70 + 60 * pulse));
+  if (d.progress > 0) r.shape(true, d.x, d.y, R + 6, 0, d.progress, 0, 0.07, hc, 235);
 }
 
 /** The Bloom's heart rings and lobs: its body colour (#94). */
