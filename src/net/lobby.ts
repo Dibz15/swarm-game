@@ -6,6 +6,7 @@ import { OPENING_TICKS } from '../sim/constants';
 import { MAX_DEFENDERS, type MatchSetup } from '../sim/setup';
 import { decodeMsg, encodeMsg } from './codec';
 import type { MatchPeer } from './match';
+import { netNote, short } from './netlog';
 import { MAX_LOBBY, MAX_SEATS, PROTOCOL_VERSION, type Msg } from './protocol';
 import { isSeal, seal } from './seal';
 import type { Transport } from './transport';
@@ -554,6 +555,7 @@ export class HostLobby {
    * seed, #184), unless `sameMap` (Restart).
    */
   backToLobby(o: { sameMap?: boolean } = {}): void {
+    netNote(`== back to the lobby${o.sameMap ? ' (same map)' : ''}, bringing everyone`);
     this.waiting = null;
     this.countdownUntil = -1;
     this.edit(() => {
@@ -835,6 +837,8 @@ export class GuestLobby {
   /** the last room taken, as it came, and from whom: a resend of it changes nothing (#214) */
   private heardJson = '';
   private heardFrom = '';
+  /** the last peer whose room we ignored, and whom we followed then, for the net log (#233) */
+  private ignored = '';
 
   constructor(t: Transport, o: GuestLobbyOptions) {
     this.t = t;
@@ -995,7 +999,15 @@ export class GuestLobby {
       if (m.query && this.host && !this.dropped && !this.hostGone && this.mySeat >= 0) this.send(peer, { k: 'host', peer: this.host });
       return;
     }
-    if (this.host && peer !== this.host) return;
+    if (this.host && peer !== this.host) {
+      // a room from a peer we don't follow (#233): two pages think they host. Once per peer and host, not every resend
+      const key = `${peer}>${this.host}`;
+      if (m.k === 'lobby' && this.ignored !== key) {
+        this.ignored = key;
+        netNote(`!! ignored a room from ${short(peer)}: we follow ${short(this.host)}`);
+      }
+      return;
+    }
     switch (m.k) {
       case 'lobby': {
         const s = parseLobby(m.state);

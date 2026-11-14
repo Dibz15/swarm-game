@@ -1285,6 +1285,7 @@ class App {
   private backToRoom(sameMap = false): void {
     const r = this.room;
     if (!r) return this.showMenu();
+    if (!r.host) this.mp?.netNote('== back in the room: the host brought us');
     if (r.host) (r.lobby as HostLobby | null)?.backToLobby({ sameMap });
     this.endGame();
     // nothing runs behind the room (#184): the menu starts the demo again when we leave it
@@ -1704,6 +1705,8 @@ class App {
           if (me) this.becomeRoomHost();
           else if (this.room?.host) this.becomeRoomGuest(peer);
           else (this.room?.lobby as GuestLobby | null)?.follow(peer);
+          // on the end screen (#233): "Back to lobby" goes with hosting
+          if (this.endShown && this.game?.result) this.showEnd();
           // halted by a desync: the card's host buttons (resync, resume) go with hosting
           const halted = this.match?.session.halted ?? -1;
           if (this.desyncView && halted >= 0) this.showDesync(halted);

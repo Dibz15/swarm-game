@@ -8,6 +8,7 @@ import type { HostGo } from './lobby';
 import { NetSession, type NetSessionOptions, type SessionSave } from './netSession';
 import { MAX_TURNS_PER_MSG, type Ctrl, type Msg, type MsgKind } from './protocol';
 import { oddOnes, rebuildState, Sequencer, SEQUENCER_DEFAULTS, type SequencerOptions, type SequencerState } from './sequencer';
+import { netNote, short } from './netlog';
 import { canGzip, chunkSnap, packSnap, settle, SnapAssembler, unpackSnap } from './snapwire';
 import { HOST_SELF, hostSequencer, type Transport } from './transport';
 
@@ -1155,6 +1156,8 @@ export class NetMatch {
     const seq = this.seq_;
     if (!seq) return;
     if (this.owner !== this.mySeat && this.hostLeft(now)) {
+      const host = this.peers.find((p) => p.seat === this.owner)?.peer;
+      netNote(`== taking over as host: seat ${this.owner} (${short(host)}) ${host && this.gone.has(host) ? 'left' : 'went silent'}${this.session.world.over ? ', after the end' : ''}`);
       // ours at once (a halted or paused match closes no turns: someone must be able to resume it); the rest hear it in the log
       seq.addCtrl({ k: 'owner', seat: this.mySeat });
       this.setOwner(this.mySeat);
@@ -1173,6 +1176,8 @@ export class NetMatch {
     if (!host) return true;
     if (host.peer === this.self) return false;
     if (this.gone.has(host.peer)) return now - (this.goneAt.get(host.peer) ?? now) >= BYE_WAIT_MS;
+    // the match is decided (#233): a host on the end screen may go quiet (a throttled page); only leaving counts
+    if (this.session.world.over) return false;
     const b = this.beats.get(host.peer);
     return !b?.hidden && now - (b?.at ?? this.started) >= OWNER_QUIET_MS;
   }
@@ -1231,6 +1236,7 @@ export class NetMatch {
     this.owner = seat;
     this.seq_?.setPausers([seat]);
     const peer = this.peers.find((p) => p.seat === seat)?.peer ?? '';
+    netNote(`== the host is seat ${seat} (${short(peer)}) now${this.session.world.over ? ', after the end' : ''}`);
     this.events.onOwner?.(seat, peer);
   }
 
